@@ -1,0 +1,1 @@
+[Link to the article](https://github.security.telekom.com/2023/08/darkgate-loader.html)

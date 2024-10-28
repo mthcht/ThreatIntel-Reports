@@ -1,0 +1,550 @@
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+1/33
+Operation TunnelSnake
+securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831
+Formerly unknown rootkit used to secretly control networks of regional organizations
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+2/33
+Windows rootkits, especially those operating in kernel space, are pieces of malware infamous for their near absolute power in the
+operating system. Usually deployed as drivers, such implants have high privileges in the system, allowing them to intercept and
+potentially tamper with core I/O operations conducted by the underlying OS, like reading or writing to files or processing incoming and
+outgoing network packets. The capability to blend into the fabric of the operating system itself, much like security products do, is the
+quality that earns rootkits their notoriety for stealth and evasion.
+Having said that, the successful deployment and execution of a rootkit component in Windows has become a difficult task over the
+years. With Microsoft’s introduction of Driver Signature Enforcement, it has become harder (though not impossible) to load and run
+new code in kernel space. Even then, other mechanisms such as Kernel Patch Protection (also known as PatchGuard) make it hard to
+tamper with the system, with every change in a core system structure potentially invoking the infamous Blue Screen of Death.
+Consequently, the number of Windows rootkits in the wild has decreased dramatically, with the bulk of those still active often being
+leveraged in high profile APT attacks. One such example came to our attention during an investigation last year, in which we uncovered
+a formerly unknown Windows rootkit and its underlying cluster of activity. We observed this rootkit and other tools by the threat actor
+behind it being used as part of a campaign we dubbed ‘TunnelSnake’, conducted against several prominent organizations in Asia and
+Africa.
+In this blog post we will focus on the following key findings that came up in our investigation:
+A newly discovered rootkit that we dub ‘Moriya’ is used by an unknown actor to deploy passive backdoors on public facing servers,
+facilitating the creation of a covert C&C communication channel through which they can be silently controlled;
+The rootkit was found on networks of regional diplomatic organizations in Asia and Africa, detected on several instances dating
+back to October 2019 and May 2020, where the infection persisted in the targeted networks for several months after each
+deployment of the malware;
+We observed an additional victim in South Asia, where the threat actor deployed a broad toolset for lateral movement along with
+the rootkit, including a tool that was formerly used by APT1. Based on the detection timestamps of that toolset, we assess that the
+attacker had a foothold in the network from as early as 2018;
+A couple of other tools that have significant code overlaps with Moriya were found as well. These contain a user mode version of
+the malware and another driver-based utility used to defeat AV software.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+3/33
+We provided information about this operation in our threat intelligence portal in August 2020. More details and analysis are available to
+customers of our private APT reporting service. For more details contact: intelreports@kaspersky.com.
+What is the Moriya rootkit and how does it work?
+Our investigation into the TunnelSnake campaign started from a set of alerts from our product on a detection of a unique rootkit within
+the targeted networks. Based on string artefacts within the malware’s binaries, we named this rootkit Moriya. This tool is a passive
+backdoor which allows attackers to inspect all incoming traffic to the infected machine, filter out packets that are marked as designated
+for the malware and respond to them. This forms a covert channel over which attackers are able to issue shell commands and receive
+back their outputs.
+The rootkit has two traits that make it particularly evasive. The packet inspection happens in kernel mode with the use of a Windows
+driver, allowing attackers to drop the packets of interest before they are processed by the network stack, thus ensuring they are not
+detected by security solutions. Secondly, the fact that the rootkit waits for incoming traffic rather than initiating a connection to a server
+itself, avoids the need to incorporate a C&C address in the malware’s binary or to maintain a steady C&C infrastructure. This hinders
+analysis and makes it difficult to trace the attacker’s footprints.
+The figure below illustrates the structure of the rootkit’s components. They consist of a kernel mode driver and a user mode agent that
+deploys and controls it. In the following sections we will break down each of these components and describe how they operate to achieve
+the goal of tapping into the target’s network communication and blending in its traffic.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+4/33
+Fig. 1. The architecture of the Moriya rootkit
+User mode agent analysis
+The user mode component of the Moriya rootkit has two purposes. One is to deploy the kernel mode component of the malware on the
+machine and the other is to leverage the covert communication channel created by it to read shell commands sent from the C&C server
+to the compromised machine and to respond to them. Since Moriya is a passive backdoor intended to be deployed on a server accessible
+from the internet, it contains no hardcoded C&C address and relies solely on the driver to provide it with packets filtered from the
+machine’s overall incoming traffic.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+5/33
+The first order of business for the attacker when using Moriya is to gain persistence on the targeted computer. For this purpose, the user
+mode agent’s DLL contains an export function named Install, which is intended to create a service named ZzNetSvc with the description
+‘Network Services Manager’ and start it. In turn, the path to the user mode agent’s image is set to the registry key
+HKLM\System\CurrentControlSet\Services\ZzNetSvc\Parameters\ServiceDll so that it will be invoked from its ServiceMain export
+each time the service is initiated.
+Next, after the service is started, the agent will attempt to load the rootkit’s driver into the system. Its binary is bundled as two driver
+images within the DLL’s resource section, corresponding to 32- and 64-bit architectures, while in reality only one of them is written to
+disk. In the cases we analyzed, the agent DLLs were compiled for 64-bit systems, dropping a 64-bit driver to the drivers directory in the
+system path, under the name MoriyaStreamWatchmen.sys, hence the rootkit’s name.
+Fig. 2. Code that writes the Moriya driver to disk
+The agent uses a known technique whereby the VirtualBox driver (VBoxDrv.sys) is leveraged to bypass the Driver Signature
+Enforcement mechanism in Windows and load Moriya’s unsigned driver. DSE is an integrity mechanism mandating that drivers are
+properly signed with digital signatures in order for them to be loaded, which was introduced for all versions of Windows starting from
+Vista 64-bit. The technique used to bypass it was seen in use by other threat actors like Turla, Lamberts and Equation.
+Moriya’s user mode agent bypasses this protection with the use of an open-source code  named DSEFIX v1.0. The user agent dumps an
+embedded VBoxDrv.sys image of version 1.6.2 to disk and loads it, which is then used by the aforementioned code to map Moriya’s
+unsigned driver to kernel memory space and execute it from its entry point. These actions are made possible through IOCTLs
+implemented in VBoxDrv.sys that allow writing to kernel address space and executing code from it. Throughout this process, the bypass
+code is used to locate and modify a flag in kernel space named g_CiOptions, which controls the mode of enforcement.
+[1]
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+6/33
+After the unsigned driver is loaded, the agent registers a special keyword that is used as a magic value, which will be sought in the first
+bytes of every incoming packet passed on the covert channel. This allows the rootkit to filter marked packets and block them for any
+application on the system other than the user mode agent. The registration of the value is done through a special IOCTL with the code
+0x222004 sent to the driver, where a typical magic string is pass12.
+Fig. 3. Registration of the packet magic value using a designated IOCTL
+Except for its covert channel communication feature, Moriya is capable of establishing a reverse shell session using an overt channel.
+For this purpose, it waits for a special packet that consists of a message with the structure connect <c2_address> <c2_port>. The
+address and port are parsed and used by the agent to start a new connection to the given server, while creating a new cmd.exe process
+and redirecting its I/O to the connection’s socket. The handles for the newly created process and its main thread are destroyed to avoid
+detection.
+In any other case, the agent attempts to read the incoming TCP payload from the driver, which will be retrieved as soon as a designated
+packet with a magic number and shell command is received. An attempt is made to read the data with a plain ReadFile API function as a
+blocking operation, i.e., reading is accomplished only once the buffer in kernel mode is populated with data from a Moriya-related
+packet.
+Upon an incoming packet event, the agent creates a new cmd.exe process and redirects its I/O using named pipes. One pipe is used to
+read the retrieved shell command from the covert channel and the other is used to write the shell’s output (obtained from the stdout and
+stderr streams) back to it after execution. To write any data back, the agent uses the WriteFile API function with the driver’s handle.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+7/33
+All traffic passed on the channel is encoded with a simple encryption scheme. Every sent byte has its payload, following the magic string,
+XORed with the value 0x05 and then negated. Following the same logic, to decode the incoming traffic’s payload, every byte of it should
+be first negated and then XORed with 0x05.
+Fig. 4. Code used for packet encoding
+Kernel mode driver analysis
+The Moriya rootkit’s driver component makes use of the Windows Filtering Platform (WFP) to facilitate the covert channel between the
+compromised host and the C&C server. WFP provides a kernel space API that allows driver code to intercept packets in transit and
+intervene in their processing by the Windows TCP/IP network stack. This makes it possible to write a driver that can filter out distinct
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+8/33
+packet streams, based on developer-chosen criteria, and designate them for consumption by a specific user mode application, as is the
+case in Moriya.
+The driver fetches the distinct Moriya-related traffic using a filtering engine. This is the kernel mode mechanism used to inspect traffic
+according to rules that can be applied on various fields across several layers of a packet (namely data link, IP and transport), making it
+possible to handle matching packets with unique handlers. Such handlers are referred to as callout functions.
+In the case of Moriya, the filtering engine is configured to intercept TCP packets, sent over IPv4 from a remote address. Each packet
+with these criteria will be inspected by a callout function that checks if its first six bytes correspond to the previously registered magic
+value, and if so, copies the packet contents into a special buffer that can be later read by the user mode agent. The matching packet will
+then be blocked in order to hide its presence from the system, while any other packet is permitted to be processed as intended by the
+network stack.
+To allow the crafting of a response back to the server, the callout function saves a special value in a global variable that identifies the
+received TCP stream. This value is called a flowHandle, and is taken from the packet’s corresponding
+FWPS_INCOMING_METADATA_VALUES0 struct. When the user issues a response to the server via the driver, the latter would craft a
+new packet using the FwpsAllocateNetBufferAndNetBufferList0 function and insert the response data and target server based on the
+saved flowHandle to it, using the function FwpsStreamInjectAsync0.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+9/33
+Fig. 5. Code that creates a new packet, designates it for the flow of the corresponding incoming TCP packet and
+injects data written from user space into it
+As formerly mentioned, the driver registers several functions that are exposed to the user mode agent in order to interact with it:
+IRP_MJ_READ: used to allow the user mode agent to read the body of a Moriya TCP packet from a special buffer to which it is
+copied upon receipt. The function itself waits on an event that gets signaled once such a packet is obtained, thus turning the
+ReadFile function called by the user mode agent into a blocking operation that will wait until the packet is picked up by the driver.
+IRP_MJ_WRITE: injects user-crafted data into a newly created TCP packet that is sent as a response to an incoming Moriya
+packet from the server.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+10/33
+IRP_MJ_DEVICE_CONTROL: used to register the keyword to check the beginning of every incoming TCP packet in order to
+identify Moriya-related traffic. The passed magic is anticipated to be six characters long.
+Fig. 6. Code used for registering the packet magic value from the driver side
+How were targeted servers initially infected?
+Inspecting the systems targeted by the rootkit, we tried to understand how they got infected in the first place. As previously mentioned,
+Moriya was seen deployed mostly on public-facing servers within the victim organizations. In one case, we saw the attacker infect an
+organizational mail server with the China Chopper webshell, using it to map the victim’s
+network and then deploy other tools in it. Moriya’s user mode agent was explicitly installed using a command line executed on the
+targeted server this way. This command and examples of others run on the victim machine via the webshell can be seen below.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+11/33
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+"cmd" /c cd /d C:\inetpub\wwwroot\&ipconfig -all
+"cmd" /c cd /d C:\inetpub\wwwroot\&reg query
+HKLM\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest
+"cmd" /c cd /d C:\inetpub\wwwroot\&$public\acmsetup.exe
+"cmd" /c cd /d C:\inetpub\wwwroot\&query user
+"cmd" /c cd /d C:\inetpub\wwwroot\&ipconfig/all
+"cmd" /c cd /d C:\inetpub\wwwroot\&ping google.com
+"cmd" /c cd /d C:\inetpub\wwwroot\&netstat -anp tcp
+"cmd" /c cd /d C:\inetpub\wwwroot\&tasklist /v
+"cmd" /c cd /d C:\inetpub\wwwroot\&whoami
+"cmd" /c cd /d C:\inetpub\wwwroot\&cd $windir\web\
+"cmd" /c cd /d $windir\Web\&rundll32 MoriyaServiceX64.dll, Install
+"cmd" /c cd /d C:\inetpub\wwwroot\&ipconfig/all
+"cmd" /c cd /d C:\inetpub\wwwroot\&time /t
+...
+In general, we assess that the group’s modus-operandi involves infiltrating organizations
+through vulnerable web servers in their networks. For example, an older variant of Moriya named IISSpy (described below) targets IIS
+web servers. Our telemetry shows that it was likely deployed by exploiting CVE-2017-7269 to let the attackers gain an initial foothold on
+a server prior to running the malware.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+12/33
+Post exploitation toolset
+During our investigation we found a target in South Asia that enabled us to get a glimpse into some of the other tools that we assess were
+in use by the same attacker. The toolset includes programs used to scan hosts in the local network, find new targets, perform lateral
+movement to spread to them and exfiltrate files. While most of the tools seem custom made and tailored for the attackers’ activities, we
+could also observe some open-source malware frequently leveraged by Chinese-speaking actors. Following is an outline of these tools
+based on their purpose in the infection chain.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+13/33
+Network Discovery: custom built programs used to scan the internal network and detect vulnerable services.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+14/33
+HTTP scanner: command-line tool, found under the name ‘8.tmp’, which discovers web servers through banner grabbing.
+This is done by issuing a malformed HTTP packet to a given address, where no headers are included and the request is
+succeeded with multiple null bytes.
+Fig. 7. Malformed packet generated by HTTP scanner
+If the server responds, the output will be displayed in the console, as shown below.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+15/33
+Fig. 8. Console output with a server response displayed upon discovery of a new server in the network
+DCOM Scanner: another command-line utility that attempts to connect to a remote host on TCP port 135 (RPC), and use
+the DCOM IOxidResolver interface to resolve addresses assigned to all network interfaces available on the remote system.
+Fig. 9. Output of the DCOM scanner utility
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+16/33
+Lateral Movement: tools used to spread to other hosts in the targeted networks.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+17/33
+BOUNCER: malware that was first described by Mandiant in their 2013  report on APT1. This tool is another passive
+backdoor that waits for incoming connections on a specific port and provides different features, as outlined below, that can
+be used to control a remote host and facilitate lateral movement from it.
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+0x01: Proxy Init Connection
+                0x02: Proxy Send Packet
+                0x03: Proxy Close Connection
+                0x07: Execute Shellcode
+                0x0A: Kill Bot
+                0x0C: Reverse Shell CMD
+                0x0D: Delete File
+                0x0E: Execute local program
+                0x0F: Enumerate Servers In Domain and save output in gw.dat
+                0x10: Enumerate SQL Servers and save output in sql.dat
+                0x12: Reverse Shell CreateProcess
+                0x16: Upload File - Write Data
+                0x17: Download File - Finish
+                0x1E: Download File - Start
+                0x1F: Upload File - Start
+                0x2D: Enumerate Servers
+                0x2E: Enumerate SQL Server
+[2]
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+18/33
+18
+19
+20
+                0x2F: Enumerate Servers Verbose
+                0x30: Enumerate Users
+                0x32: Do nothing
+The BOUNCER sample that we observed contained a string that indicates which command-line arguments it anticipates:
+1
+usage:%s   IP  port [proxip] [port] [key]
+However, the backdoor is configured to accept only the port number on which it will listen.
+We saw two versions of this backdoor, initiated by two different launchers. The first one is an executable file named nw.tmp
+that decrypts an embedded payload using the RC4 algorithm and injects it into a newly spawned svchost.exe process. The
+injected payload is similar to one described by Mandiant in 2013, which is yet another intermediate loader that decrypts and
+loads an embedded BOUNCER DLL. The last stage is started by invoking the DLL’s dump export with the arguments passed
+via the command line.
+The other version was stored with the name rasauto.dll in the system directory, impersonating the Windows Remote Access
+Auto Connection Manager library. Like the other version, it decrypts an embedded DLL using RC4, but this time uses no
+intermediate stage, instead directly calling the DLL’s dump export without arguments. The decrypted library is a slightly
+modified BOUNCER variant that always listens on the hardcoded port 1437.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+19/33
+Fig. 10. Code from the second BOUNCER variant that uses the hardcoded port 1437 to listen for new
+packets
+Based on compilation timestamps of all BOUNCER-related executables, as shown below, we assess that the attacker reused
+old samples of the malware rather than compiled new versions of it:
+1
+2
+3
+4
+5
+6
+nw.tmp – stage 0 - launcher - 08-03-2017 03:56:24
+                nw.tmp – stage 1 - embedded loader - 26-08-2014 04:49:58
+                nw.tmp – stage 2 - embedded BOUNCER backdoor - 28-05-2012 13:44:37
+                
+                rasauto.dll - stage 0 – loader 26-08-2013 09:37:08
+                rasauto.dll - stage 1 - embedded BOUNCER backdoor - 26-08-2013 09:36:27
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+20/33
+Custom PSExec: the attacker deployed a tool to execute commands remotely on compromised machines. Like the original
+PSExec tool, this one consists of two components – a client named tmp and a service named pv.tmp. In order to use the tool,
+the attacker has to execute it via a command line with the parameters specified below.
+1
+Usage: psexec <hostname >   psserve_path  exefilename  ServerName[option]\n
+The service component is a tiny program that uses the CreateProcessA API to start a program specified as an argument. The
+client component uses the Service Control Manager (SCM) API to create a service on the target machine. If the ServerName
+argument is not specified, the service will be named Server%c%c where %c is a random lower case character. The
+exefilename argument is then passed to the StartServiceA function in order to initiate the command execution.
+Fig. 11. Code used to create and start the service on targeted host
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+21/33
+It is worth noting that the program has some limitations. Compared with the original PSExec, it is not able to copy the
+service binary (i.e., pv.tmp, which has its path specified in the psserve_path argument) to a remote machine, but rather
+assumes it is already present on it. Besides, it cannot handle network credentials, limiting the ability to execute commands as
+other users, nor does it support pipes, which means it does not receive the output of the commands it issues.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+22/33
+Exfiltration: multi-platform utilities commonly used to establish connections with remote hosts and conduct file system
+operations on them, including file upload and download.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+23/33
+Earthworm and Termite: well-known command-line utilities developed to facilitate intrusion into intranet networks.
+These programs are multiplatform and can be deployed on various architectures. Earthworm is used to create tunnels
+between compromised hosts and transfer data.
+Fig. 12. Earthworm help message
+Termite provides additional features to download and upload files
+between the compromised hosts, as well as a way to spawn a remote
+shell to control the targeted machine.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+24/33
+Fig. 13. Termite help message
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+25/33
+TRAN: another tool that we detected under the filename tmp that was used to transfer data between compromised hosts.
+The binary we saw operated as a loader that embodies a tiny web server encrypted with the RC4 algorithm within it. This
+server is later injected into a newly created legitimate schtask.exe process and usually listens on port 49158. It is used for
+managing files uploaded by the attacker into an in-memory virtual file system maintained by the malware.By default the file
+system includes a tiny program named client.exe, which can be downloaded by any host using a standard HTTP GET request
+to the path /client.exe. This file is a command-line utility that can be used to control the virtual file system managed by the
+server, through one of several available commands outlined below.
+Fig. 14. Client.exe help message
+IISSpy: tracing Moriya back to a user-mode rootkit
+IISSpy is an older user-mode version of the Moriya rootkit that we were able to pinpoint in our telemetry. It is used to target IIS servers
+for establishing a backdoor in their underlying websites. It was detected on a machine in 2018, unrelated to any of the attacks in the
+current operation. This suggests the threat actor has been active since at least that year.
+The malware, which comes as a DLL, achieves its goals by enumerating running IIS processes on the server (i.e., those that are executed
+from the image w3wp.exe), and injecting the malware’s DLL into them to alter their behavior. The executed code in the IIS processes
+will then set inline hooks for several functions, most notably CreateFileW.
+The corresponding CreateFileW hook function checks if the filename argument contains the directory ‘\MORIYA\’ or ‘\moriya\’ in its
+path, and if so, infers that the attacker has sent a specially crafted HTTP request to the web server. In this request, the Moriya path in
+the URL is followed by an encoded command. After the command is decoded and processed, it is passed via a mailslot
+(\\.\mailslot\slot) to a separate thread, while signaling an event called Global\CommandEvent.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+26/33
+Fig. 15. Code of the CreateFileW hook function that looks for the ‘MORIYA’ \ ‘moriya’ directory in a request path
+Should the currently handled file contain the Moriya path, the very same hook function will generate a special file on the web server to
+which command execution output will be written. This file’s path is created by finding the position of the ‘\MORIYA\’ or ‘\moriya\’
+strings in the inspected filename argument, and replacing it with the string ‘\IISINFO.HTM’. This will then be appended to the
+command data passed on the mailslot, following a ‘ > ‘ character.
+The other thread waiting on the command event mentioned above is in charge of processing attacker data fetched from the mailslot. Any
+such command will be read and parsed to find the ‘ > ‘ character and the file path that follows it, in this case the one corresponding to
+‘IISINFO.HTML’. After executing the command via cmd.exe, the output will be written to the file in this path, allowing the attacker to
+read it by issuing a corresponding HTTP request where the URL path leads to this file on the server.
+Other functions that are hooked in the IIS process are CreateProcessAsUserW and CreateProcessW. These are used to detect if the
+current process spawns a new server instance, which will in turn be injected with the malware’s DLL. Apart from this, IISSpy will also
+create a monitoring thread that will periodically look for newly created httpd.exe processes, corresponding to the Apache server. If
+detected, the malware will be injected to them as well.
+Although it is evident from both the functionality and use of the Moriya keyword by the malware that IISSpy and the Moriya rootkit are
+related, further evidence in the code substantiates the connection:
+The older variant is capable of creating a reverse shell transmitted through an overt channel in exactly the same way as the more
+recent version of the malware, i.e., it identifies a connect request followed by a C&C server address and port, connects to it and
+redirects the IO of a new exe process to the underlying socket.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+27/33
+Both variants use the same packet encoding and decoding algorithm, whereby each clear-text byte is XORed with 0x5 and negated,
+and vice-versa.
+Fig. 16. Packet decoding loop that follows the same logic as that used in Moriya
+In both cases the developers left a trail of unique debug messages, issued to the
+OutputDebugString API function. An example of such a string used in identical code in the
+two variants is shown below.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+28/33
+Fig. 17. Code used in both variants to spawn a new shell, while printing unique debug messages
+Both implants are deployed by invoking an export function named Install that creates a service that allows persistent execution,
+with the malware’s logic residing in the ServiceMain Moreover, the Install functions are highly similar to one another.
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+29/33
+Fig. 18. Comparison of Install export function CFGs between IISSpy and
+Moriya
+The ProcessKiller rootkit vs. security products
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+30/33
+Another interesting artefact found in our telemetry that could be tied to the developers of Moriya is a malware named ProcessKiller. As
+its name suggests, it is intended to eliminate execution of processes, with the use of a kernel mode driver. Ultimately, this tool is used to
+shut down and block initiation of AV processes from kernel space, thus allowing other attack tools to run without being detected.
+This malware operates through the following stages:
+An attacker calls the malware’s DLL from an export named Kill, passing it a list of process names it would like to shut down and
+block as a command-line argument.
+The malware writes a driver that is embedded as a resource within it, impersonating a Kaspersky driver under the path
+%SYSTEM%\drivers\kavp.sys.
+There is an attempt to load the driver using the Service Control Manager. However, since it is not signed and loading is prone to
+fail on Windows versions above Vista 64-bit, the malware uses the same DSEFix code to bypass Digital Signature Enforcement as
+witnessed in Moriya’s user mode agent.
+The malware parses the process names passed as arguments and creates a vector of ‘blacklisted processes’ out of them.
+For each process in the list, the malware detects its PID and issues it through an IOCTL with code 0x22200C to the driver which is
+in charge of shutting it down from kernel space. The shutdown is carried out by locating the process object with the function
+PsLookupProcessByProcessId and then terminating it with ZwTerminateProcess.
+The list of processes is then passed via another IOCTL with the code 0x222004 to the driver, which inserts each member of it to a
+linked list in kernel space. When the driver is bootstrapped, it registers a callback for newly created processes through the
+PsSetCreateProcessNotifyRoutineEx function, which inspects the image name of the created process and compares it against those
+found in the linked list. If a match is found, the process creation status in the PPS_CREATE_NOTIFY_INFO structure will be set
+to STATUS_UNSUCCESSFUL, signaling the user space API function that process creation failed.
+At this point any other malware can theoretically operate without being detected.
+If the attacker wishes to disable blacklisting, it can be done by issuing an IOCTL with the code 0x222008, which would destroy the
+linked list of blacklisted processes.
+Once again, the connection to Moriya is based on several observations:
+Distinct debug error messages, as the one presented below.
+Fig. 19. Unique debug message that appears in ProcessKiller and Moriya
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+31/33
+Filename of the same structure, i.e., Moriya’s agent is internally named
+‘MoriyaServiceX64.dll’, and ProcessKiller’s DLL is named ‘ProcessKillerX64.dll’
+Usage of the exact same DSEFix code to load an unsigned driver.
+What do we know about the threat actor?
+Unfortunately, we are not able to attribute the attack to any particular known actor, but based on the TTPs used throughout the
+campaign, we suppose it is a Chinese-speaking one. We base this on the fact that the targeted entities were attacked in the past by
+Chinese-speaking actors, and are generally located in countries that are usually targeted by such an actor profile. Moreover, the tools
+leveraged by the attackers, such as China Chopper, BOUNCER, Termite and Earthworm, are an additional indicator supporting our
+hypothesis as they have previously been used in campaigns attributed to well-known Chinese-speaking groups.
+Who were the targets?
+Based on our telemetry the attacks were highly targeted and delivered to less than 10 victims around the world. The most prominent
+victims are two large regional diplomatic organizations in South-East Asia and Africa, while all the others were victims in South Asia.
+Conclusion
+The TunnelSnake campaign demonstrates the activity of a sophisticated actor that invests significant resources in designing an evasive
+toolset and infiltrating networks of high-profile organizations. By leveraging Windows drivers, covert communications channels and
+proprietary malware, the group behind it maintains a considerable level of stealth. That said, some of its TTPs, like the usage of a
+commodity webshell and open-source legacy code for loading unsigned drivers, may get detected and in fact were flagged by our
+product, giving us visibility into the group’s operation.
+Still, with activity dating back to at least 2018, the threat actor behind this campaign has shown that it is able to evolve and tailor its
+toolset to target environments. This indicates the group conducting these attacks may well still be active and retooling for additional
+operations in the area of interest outlined in this publication, as well as other regions. With that in mind, we continue to track this
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+32/33
+attacker and look for signs of its reappearance in the wild. Any findings and updates will be made available to customers of our Threat
+Intelligence Portal.
+For more information about operation TunnelSnake and the underlying threat actor, contact us at: intelreports@kaspersky.com.
+To learn more on reverse engineering and malware analysis from Kaspersky GReAT experts, check out the website
+http://xtraining.kaspersky.com.
+IOCs
+48307C22A930A2215F7601C78240A5EE
+Moriya Agent
+A2C4EE84E3A95C8731CA795F53F900D5
+Moriya 64-bit Driver
+5F0F1B0A033587DBCD955EDB1CDC24A4
+IISSpy
+C1159FE3193E8B5206006B4C9AFBFE62
+ProcessKiller
+DA627AFEE096CDE0B680D39BD5081C41
+ProcessKiller Driver – 32-bit
+07CF58ABD6CE92D96CFC5ABC5F6CBC9A
+ProcessKiller Driver – 64-bit
+9A8F39EBCC580AA56D6DDAF5804EAE61
+pv.tmp (Custom PSExec Server)
+39C361ABB74F9A338EA42A083E6C7DF8
+pc.tmp (Custom PsExec Client)
+DE3FB65461EE8A68A3C7D490CDAC296D
+tran.tmp (Exfiltration tool)
+EAC0E57A22936D4C777AA121F799FEE6
+client.exe (Utility embedded in tran.tmp)
+D745174F5B0EB41D9F764B22A5ECD357
+rasauto.dll (Bouncer Loader)
+595E43CDF0EDCAA31525D7AAD87B7BE4
+8.tmp (HTTP )Scanner
+9D75B50727A8E732DB0ADE7E270A7395
+ep.tmp DCOM Scanner
+5/7/2021
+Operation TunnelSnake | Securelist
+https://securelist.com/operation-tunnelsnake-and-moriya-rootkit/101831/
+33/33
+3A4E1F3F7E1BAAB8B02F3A8EE20F98C9
+nw.tmp Bouncer Loader
+47F2D06713DAD556F535E523B777C682
+Termite
+45A5D9053BC90ED657FA90DE0B775E8F
+Earthworm
+ Today a copy of the original code can be found here: http://www.m5home.com/bbs/thread-8043-1-1.html
+ https://www.fireeye.com/content/dam/fireeye-www/services/pdfs/mandiant-apt1-report.pdf
+Operation TunnelSnake
+Your email address will not be published. Required fields are marked *
+ 
+ 
+[1]
+[2]

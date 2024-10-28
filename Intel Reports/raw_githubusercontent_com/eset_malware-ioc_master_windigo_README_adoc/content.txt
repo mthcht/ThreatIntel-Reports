@@ -1,0 +1,880 @@
+:toc:
+
+= Operation Windigo / Ebury Indicators of Compromise (IoCs)
+
+[NOTE]
+====
+This document was last updated on *2024-05-14*. It contains IoCs for Ebury
+versions up to 1.8.2.
+====
+
+CAUTION: As soon as this information is public the malware authors will most
+         likely update their technique and tools to evade detection and thwart
+         analysis as they have done in the past. Consequently, be aware that
+         any of the advice we give to identify or clean oneself might already
+         be outdated.
+
+These IoCs were released as part of our extensive researches on this large
+server-side malware operation. The full reports are available here:
+
+- 2024-05: https://web-assets.esetstatic.com/wls/en/papers/white-papers/ebury-is-alive-but-unseen.pdf[Ebury
+  is alive but unseen: 400k Linux servers compromised for cryptocurrency theft and financial gain]
+- 2014-03: https://web-assets.esetstatic.com/wls/2014/03/operation_windigo.pdf[Operation
+  Windigo: The vivisection of a large Linux server-side credential stealing malware campaign]
+
+If you find false-positives, have improved IoCs or find samples that do not
+match these IoCs please open an issue, provide a pull-request or contact us
+at: windigo@eset.sk.
+
+You will find the latest IoCs listed first and archived (now obsolete) IoCs after.
+
+Latest IoCs are also available in MISP event format: link:ebury.misp.json[`ebury.misp.json`]
+
+For an automated dection script, see our
+https://github.com/eset/malware-research/tree/master/ebury[malware-research] repository.
+
+== Host-based Indicators
+
+To determine whether a system is compromised by Ebury, make sure you do
+so from a trusted shell. At the time of writing, the following command
+starts a shell free from the Ebury rootkit:
+
+      H=1 LD_DEBUG="" LD_PRELOAD="" "$SHELL"
+
+While only one of the environment variables is enough, using three is
+our attempt to make it more difficult to circumvent in future versions
+of Ebury. Alternatively, systemd can also provide a shell that’s not a
+subprocess of the OpenSSH server using the command:
+
+      systemd-run -S
+
+See the Detection section of the
+https://web-assets.esetstatic.com/wls/en/papers/white-papers/ebury-is-alive-but-unseen.pdf[Ebury is alive but unseen]
+white paper for more details about evading the userland rootkit.
+
+Since Ebury version 1.5, Ebury starts a process to keep state
+information and perform credential exfiltration. An
+https://man7.org/linux/man-pages/man7/unix.7.html[abstract UNIX socket]
+is used to communicate between the compromised SSH client or server and
+this permanently running process.
+
+Abstract UNIX sockets are usually displayed by prefixing them with `@` to
+differentiate them from filesystem pathname-bound sockets. `lsof -U` or
+`/proc/net/unix` can be used to list UNIX sockets. Here are examples of
+the commands with their outputs showing abstract UNIX sockets created by
+Ebury (first line of output, in bold) and a legitimate application
+(second line of output):
+
+[subs="+quotes"]
+----
+# lsof -U | grep @
+*systemd-u 1776 root 3u unix 0xffff9519b9931540 0t0 22471 @/dev/event-E4LgEFWIcy*
+virtiofsd 381 root 4u unix 0xffff9151807a3000 0t0 20524 @9634c
+----
+
+or:
+
+[subs="+quotes"]
+----
+$ grep @ /proc/net/unix
+*ffff9519b9931540: 0000002 00000000 00010000 0001 01 22471 @/dev/event-E4LgEFWIcy*
+ffff9151807a3000: 0000002 00000000 00010000 0001 01 20524 @9634c
+----
+
+Abstract UNIX sockets with the following names are known to be used by
+Ebury:
+
+* `/dev/event-E4LgEFWIcy`
+* `/dev/event/loop0`
+* `/dev/stats-MxPAxNpy3x`
+* `/proc/udevd`
+* `/proc/ulog`
+* `/run/systemd/journal-YAjXO8luqOa`
+* `/run/systemd/journal/dlog`
+* `/run/systemd/log`
+* `/run/systemd/log-90zMvYX7uL`
+* `/run/systemd/log-wuO3nuFBHN`
+* `/tmp/dbus-0m9eDQpdXZ`
+* `/tmp/dbus-9XZXkmdfpN`
+* `/tmp/dbus-VdyGBaqZws`
+* `/tmp/dbus-Xrga2cOewg`
+* `/tmp/dbus-ZP7tFO4xsL`
+* `/tmp/dbus-kZ8VEtJDOJ`
+* `/tmp/dbus-luzG4UqDt8`
+* `/tmp/dbus-n3UUkeqEZG`
+* `/tmp/dbus-vBWUDhHCHp`
+* `event-CRbBwZlvXa`
+* `ACPI-NYlT78Tj`
+* `UDEV-4kAmkRW3`
+
+The permanently running process listening to this UNIX socket is started
+by loading the Ebury payload into a legitimate executable using
+`LD_PRELOAD`. Abused legitimate processes include:
+
+* `/bin/hostname`
+* `/bin/sync`
+* `/sbin/auditd`
+* `/sbin/rsyslogd`
+* `/sbin/udevd`
+* `/usr/lib/systemd/systemd-udevd`
+* `/usr/sbin/acpid`
+* `/usr/sbin/anacron`
+* `/usr/sbin/arpd`
+* `/usr/sbin/atd`
+* `/usr/sbin/crond`
+
+=== Finding Ebury on disk
+
+The Ebury payload size is approximately between 28kB (version 1.2.1)
+and 64kB (version 1.8). It is typically present in a shared library
+containing an initialization function executed when the library is
+loaded.
+
+There are multiple ways that Ebury can be installed on a system.
+
+* Replacing `libkeyutils.so`, a library loaded by OpenSSH, with a
+  trojanized version.
+* Placing a trojanized version of `libkeyutils.so` in `[...]/lib/tls/`. This
+  file will be loaded instead of the legitimate one, if present.
+* Patching `libkeyutils.so` to load `libXXX.so` instead of the `libc.so.6`
+  library. The `libXXX.so` library contains the Ebury payload. `XXX` is a
+  three letter or digit string. Here are some examples of filenames we
+  have seen:
+
+  ** `libns2.so`
+  ** `libns5.so`
+  ** `libpw3.so`
+  ** `libpw5.so`
+  ** `libsbr.so`
+  ** `libslr.so`
+  ** `libstz.so`
+  ** `libtsq.so`
+  ** `libtsr.so`
+
+* Replacing libkeyutils.so with a trojanized version that will
+  dynamically load another shared library file containing the Ebury
+  payload. Here are some examples of filenames we have seen:
+
+  ** `libkeystats.so`
+  ** `libkeyctl.so`
+  ** `librwctl.so`
+
+* On rare occasions, mostly on non-Linux systems, Ebury is part of the
+  OpenSSH executables themselves (ssh, sshd, etc.). In those cases,
+  OpenSSH is patched, and sometimes recompiled on the compromised system.
+
+== Network
+
+Ebury operators are known to connect daily to compromised systems using
+the Ebury backdoor to retrieve stolen credentials and system information
+such as known hosts and users who last connected to the system. They
+have used the following IP addresses to connect to compromised systems:
+
+[options="header"]
+|===
+|IP address |First seen
+|`45.59.120[.]146` |2024-04-24
+|`141.255.166[.]187` |2024-04-18
+|`146.70.124[.]102` |2024-04-24
+|`185.59.103[.]8` |2024-04-24
+|`195.123.225[.]83` |2024-02-14
+|`213.232.235[.]104` |2024-04-24
+|===
+
+=== DNS
+
+Under certain circumstances, Ebury tries to exfiltrate intercepted
+credentials by sending an encrypted UDP packet using port 53
+(conventionally DNS) as the destination port. To find the server to send
+this data to, a DNS request is made for the `TXT` record of a subdomain of
+one of the following domains:
+
+[options="header"]
+|===
+|Domain |Registration date |Details
+|`qimpj6kkofzf[.]biz` |2023-09-01 |First domain of the sixth iteration of
+the DGA.
+|`op3f1libgh[.]biz` |2019-01-30 |First domain of the fifth iteration of
+the DGA.
+|`larfj7g1vaz3y[.]net` |2016-09-19 |First domain of the fourth iteration
+of the DGA.
+|===
+
+The `A` records of these domains are misleading and ignored by Ebury. The
+IP address is decrypted from the `TXT` record. Here are the IP addresses
+used for exfiltration at the time of writing:
+
+[options="header"]
+|===
+|IP address |First seen
+|`185.145.245[.]167` |2023-11-10
+|`135.181.148[.]230` |2022-05-07
+|`141.164.52[.]243` |2021-11-02
+|===
+
+The following domains are used to exfiltrate HTTP POST requests over
+HTTP or HTTPS.
+
+[options="header",]
+|===
+|Domain |Hosting provider |First seen
+|`pbarsec[.]com` |Cloudflare |2020-05-12
+|`checklicence[.]net` |Cloudflare |2020-08-25
+|===
+
+=== In SSH traffic
+
+The Ebury backdoor is activated by including specific information in the
+SSH client identification string. This string consists of the first
+bytes sent by an SSH client. Since it is sent before the SSH handshake
+and key exchange are performed, it is unencrypted. The client
+identification string usually contains the client application name and
+version. Here is an example client identification string from OpenSSH:
+
+      SSH-2.0-OpenSSH 8.6
+
+An SSH connection enabling the Ebury backdoor contains
+hexadecimal-encoded data (for Ebury before version 1.7) or
+base64-encoded data (for Ebury version 1.7 and later, first seen in
+2019). Since version 1.8, spaces are ignored. Here are three examples of
+malicious client identification strings:
+
+* `SSH-2.0-b479ec723a2ba590d6c4a0bf40f4ba`
+* `SSH-2.0-XDbxdCP/G9Dcd1qDCE+t`
+* `SSH-2.0-FcZpUkMuIY 2MfBBDvOJdFBTFUw==`
+
+== YARA rules
+
+- Ebury-related YARA rule: link:ebury.yar[`ebury.yar`]
+- Helimod-related YARA rule: link:helimod.yar[`helimod.yar`]
+
+== Files
+
+There files were anaylised as part of our
+https://web-assets.esetstatic.com/wls/en/papers/white-papers/ebury-is-alive-but-unseen.pdf[Ebury is alive but unseen] research.
+
+Be aware that hashes of Ebury samples are unique for each compromise: bytes in
+the https://man7.org/linux/man-pages/man5/elf.5.html[build id] stored in the
+ELF header are replaced with random values when deployed.
+
+[options="header"]
+|===
+| SHA-1 | Filename | Detection | Description
+| `98FBD545B5C1B1FE185730BA9B1CD4BEBFAE4476` | `libstz.so` | Linux/Ebury.J | Ebury v1.7.0p.
+| `44B04CFC095F93D17B1BD4F8820C16843FCBAC3E` | `libkeyutils.so` | Linux/Ebury.H | Ebury v1.7.3.
+| `013647E5AD347539EEF6C5933B16AD01B1806C3C` | `libkeyutils.so` | Linux/Ebury.N | Ebury v1.8.0.
+| `787A93F86E7F5FCF922E996B577DF532270C7184` | `libllz564` | Linux/Ebury.N | Ebury v1.8.1.
+| `E7DEBD6E453192AD8376DB5BAB03ED0D87566591` | `libllz564` | Linux/Ebury.N| Ebury v1.8.2.
+| `CD9A5B823906CC620B28D69DBDB11BD9FE6B3E03` | `libkeyutils.so` | Linux/Ebury.H| Ebury v1.6.3.
+| `DDAE9417470F832DB550EFB716B5BAEAAAA35372` | `libsbr.so` | Linux/Ebury.I| Ebury v1.6.2fp.
+| `71CA9B7C418264C2C856D47483666D123861D476` | `libkeystats.so` | Linux/Ebury.J| Ebury v1.7.0c.
+| `4A7303DD8E7BBBF063463B3852245ABDD343F5B6` | `libkeystats.so` | Linux/Ebury.J| Ebury v1.7.3c.
+| `DFAECF7EBFC169CDF923AF421EDD537CCE536A64` | `librwctl.so` | Linux/Ebury.L| Ebury v1.7.4c.
+| `3137DCA3F6FBD566F4ED2F49076A63D84869E13C` | `libkeyutils.so` | Linux/Ebury.K| Ebury v1.7.4d.
+| `96FD9B3064F04EE3063B2B103F856BB729B58749` | `ibz.so` | Linux/FrizzySteal.A| FrizzySteal.
+| `53829463A7DE8C4BACE97B1F6925728F3421DF53` | `pmtad` | Linux/HackTool.Proxy.D| Modified 3proxy.
+| `947EEE633E9347F72625FB652F94488A4B2B37F0` | `pmtad` | Linux/HackTool.Proxy.D| Modified 3proxy.
+| `E39667AA137E315BC26EAEF791CCAB52938FD809` | `mod_dir.so`| Linux/HelimodProxy.A | Helimod Apache module.
+| `0B91C3C2627F9948B8F3446822F99FAF88081267` | `mod_dir.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `580E6075C65D867667D507E2B00C8EEF79C907A1` | `mod_auth_basic.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `3988D1A743E83D532130BC8090A7BC7001FE1BB0` | `mod_authn_file.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `429A81BBD18A35C3C4D1DCB8BC76F5A7D9724A79` | `mod_authz_host.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `16EE09926A2109262686D58974079ADC25E31AA1` | `mod_authz_user.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `EC4941BDD9FFB241968FD59A28B70BCE288ED261` | `mod_dir.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `A64D6C7444FC2404A589ED7F8527E698682A3E68` | `mod_env.so`| Linux/HelimodRedirect.A | HelimodRedirect Apache module.
+| `15560B44286122FA0679C6C2368817CE2DC747E6` | `mod_auth_basic.so`| Linux/HelimodSteal.A | HelimodSteal Apache module.
+| `94532111459E024BCB7E2025A6C145876A46F829` | `mod_authn_file.so`| Linux/HelimodSteal.A | HelimodSteal Apache module.
+| `AD350D7DA4BF1F7080026B683F93401CD735E974` | `mod_authz_host.so`| Linux/HelimodSteal.A | HelimodSteal Apache module.
+| `75E8A197B6A9A7903CA43782BDD77CD9611FEFE0` | `mod_authz_user.so`| Linux/HelimodSteal.A | HelimodSteal Apache module.
+| `CFB48909B978E91CFC6FFCAF2E4B04F27F503B34` | `mod_dir.so`| Linux/HelimodSteal.A | HelimodSteal Apache module.
+| `D39959356283DB4B3184BDB15E890E74CF1EA65C` | `mod_env.so`| Linux/HelimodSteal.A | HelimodSteal Apache module.
+| `070F85BF02AD3FB0978785B3272D7B08F5C47A1A` | `iptables-multi-1.4.7`| Linux/IptablesPatch.A | Modified iptables executable.
+| `10F94157365E6A1BBB101B3222EE3C3C675B9829` | `iptables-multi-1.4.7`| Linux/IptablesPatch.A | Modified iptables executable.
+| `12666F2FBEFC55F1DDB4BA86B5D85DB733889162` | `iptables-multi`| Linux/IptablesPatch.A | Modified iptables executable.
+| `22BB2E0D1E1B0B009464E2919A381C4951D7D90D` | `iptables-multi`| Linux/IptablesPatch.A | Modified iptables executable.
+| `2DBF91347FA987E6199DAE5141641D04D0C963FF` | `iptables-multi-1.4.7`| Linux/IptablesPatch.A | Modified iptables executable.
+| `535C5588ED2EF9A4E960882C23E3104E81F2C079` | `iptables-multi-1.4.7`| Linux/IptablesPatch.A | Modified iptables executable.
+| `AA0EC27C26E5484B4EB23D8424B2412221D5C7FC` | `iptables-multi`| Linux/IptablesPatch.A | Modified iptables executable.
+| `4F92498FB8C1BFED97F18CFB7B36AF899F70F582` | `iptables-multi`| Linux/IptablesPatch.A | Modified iptables executable.
+| `12EA4595C6F38E60C23F09B2F08D78BA6EB0C1B3` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `1918E40580291D0299A78DDFB9123923F832CEB3` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `20599D89E4F648CF0F6EB46DEE67DB63984A8C36` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `6FF132E50EFA5ABF534A005CB58C9C5B5FC39BEC` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `9569A8411477305FACA78E1C944D479EFA028DFB` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `BCC3B83CFADBD58256FC41AF9F0BFF50AC1F148B` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `D392022D8B72BCDDB849A94829C87731874E94AC` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `D3D6567862B4B7811BEA76BE117E901B2B6B8399` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `D901D65F7A7A49296A501420F6D32BBF968F5BDE` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `ED5662F3CF80B8108D2172FBCA6119E403205EAA` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `EDD2DE0FAFE84EA51029FFDE38ACBB5918108DF5` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `FD6709AF6A8DC384B101A8E9ED36C1092533C404` | `nf_conntrack6.ko`| Linux/KernelRedirect.A | KernelRedirect Netfilter kernel module.
+| `04FF6202534A394586D826B320645AEC24CE7AA5` | `libcurl.so.4.6.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `32BB38D7D6B03DB4779E7A7183E7FA42DFBAFFC2` | `libcurl.so.4.4.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `59F238DA1FD822AAD6FA7DF78D823854EAF8762E` | `libcurl.so.4.4.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `6369AD38D39562DD9D6D3E2612496A5357FFC09B` | `libcurl.so.4.5.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `67C1905EF4D0422DBDFAC41DC80F9C4D5C69E288` | `libcurl.so.4.5.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `6BEE8F88F3F145170CEF58D9F790DDD99CDFA547` | `libcurl.so.4.6.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `72048DEABE7F37BBECBFDA1570E1AB6B366B72BD` | `libcurl.so.4.4.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `907822012D6A970D676B634903F099587ED9C335` | `libcurl.so.4.6.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `9209D757770AAFCA0B84B9F63B8769DF8CAC3F1A` | `libcurl.so.4.5.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+| `D8647E825EFE74BF1726C0C494E3C2588FFF2262` | `libcurl.so.4.5.0`| Linux/SmallCuteCat.A | libcurl with the SmallCuteCat payload.
+|===
+
+== Obsolete IoCs
+
+=== Host-based
+
+==== Linux/Ebury v1.5 and 1.6
+
+[WARNING]
+====
+As we expected, the malicious group is monitoring our indicators of
+compromise and is evading them in updates to their threats. Ebury v1.5 and
+v1.6 are no longer deployed and most of the indicators below no longer work.
+====
+
+===== Detection techniques
+
+Ebury uses an abstract UNIX socket to communicate with an external process
+that will be responsible for data exfiltration. In most cases, the socket name
+begins with `/tmp/dbus-`. The real dbus can create a socket using the same
+pattern. However, when Ebury does this with processes not related to the
+legitimate dbus. If the following command outputs something, it is suspicious:
+
+----
+$ lsof -U | grep -F @/tmp/dbus- | grep -v ^dbus
+----
+
+Here's a list of the processes we know Ebury uses as an exfiltration agent:
+
+- auditd
+- crond
+- anacron
+- arpd
+- acpid
+- rsyslogd
+- udevd
+- systemd-udevd
+- atd
+- hostname
+- sync
+
+On CentOS/Redhat, having a libkeyutils.so* file in `/lib/tls` or `/lib64/tls` is
+suspicious.
+
+Running `objdump -x libkeyutils.so.1` (or `readelf -d libkeyutils.so.1`) will
+print the dynamic section of the ELF header. Anything NEEDED (type 1) other
+than libc or libdl is suspicious.
+
+----
+$ objdump -x /lib64/libkeyutils.so.1 | grep NEEDED | grep -v -F -e libdl.so -e libc.so
+----
+
+In case your machine is infected with an Ebury version with the userland
+rootkit, there's many ways to detect that it is the case. Since Ebury inject
+itself using the dynamic linker `LD_PRELOAD` environment variable, we can use
+some other environment variable used to trace the dynamic linking process. If
+libkeyutils is loaded in some process where it shouldn't be, it is very likely
+that the system is infected with a rootkit-enabled version of Ebury. If the
+following command raises result, it is very suspicious:
+
+----
+$ LD_DEBUG=symbols /bin/true 2>&1 | grep libkeyutils
+----
+
+===== File hashes
+
+[options="header"]
+|====
+| SHA-1                                      | filename           | version
+| `5c796dc566647dd0db74d5934e768f4dfafec0e5` | libns2.so          | 1.5.0
+| `615c6b022b0fac1ff55c25b0b16eb734aed02734` | <Unknown>          | 1.5.1
+| `d4eeada3d10e76a5755c6913267135a925e195c6` | libns5.so          | 1.5.1c
+| `27ed035556abeeb98bc305930403a977b3cc2909` | libpw3.so          | 1.5.1d
+| `2f382e31f9ef3d418d31653ee124c0831b6c2273` | libpw5.so          | 1.5.1e
+| `7248e6eada8c70e7a468c0b6df2b50cf8c562bc9` | libpw5.so          | 1.5.1f
+| `e8d3c369a231552081b14076cf3eaa8901e6a1cd` | <libkeyutils lib>  | 1.5.5
+| `1d3aafce8cd33cf51b70558f33ec93c431a982ef` | <libkeyutils lib>  | 1.5.5
+| `a559ee8c2662ee8f3c73428eaf07d4359958cae1` | <libkeyutils lib>  | 1.5.5c
+| `17c40a5858a960afd19cc02e07d3a5e47b2ab97a` | libslr.so          | 1.5.6dp
+| `eb352686d1050b4ab289fe8f5b78f39e9c85fb55` | libkeyutils.so.1.5 | 1.5.6d
+| `44b340e90edba5b9f8cf7c2c01cb4d45dd25189e` | libkeyutils.so.1.5 | 1.6.2a
+| `e8d392ae654f62c6d44c00da517f6f4f33fe7fed` | libsbr.so          | 1.6.2gp
+| `b58725399531d38ca11d8651213b4483130c98e2` | libsbr.so          | 1.6.2gp
+|====
+
+==== Linux/Ebury v1.4 and earlier
+
+[WARNING]
+====
+*UPDATE*: As we expected, the malicious group is monitoring our indicators of
+compromise and is evading them in updates to their threats. Ebury v1.4 is no
+longer deployed and most of the indicators below no longer work.
+====
+
+We will provide two means of identifying the presence of the OpenSSH backdoor.
+A quick one that relies on the presence of a feature added by the malware to
+the `ssh` binary and a longer one which requires inspection of the shared memory
+segments used by the malware.
+
+===== To Quickly Identify
+
+NOTE: This technique is ineffective if your distribution applied the patches
+      for http://roumenpetrov.info/openssh/[X.509 certificate support] in
+      OpenSSH. Gentoo with the `X509` USE flag is one such distribution. Use
+      the shared memory inspection technique in that case.
+
+WARNING: This technique only works with OpenSSH 6.7 or earlier. OpenSSH 6.8 adds
+         a https://github.com/openssh/openssh-portable/commit/957fbceb0f3166e41b76fdb54075ab3b9cc84cba[legitimate usage]
+         for the `-G` flag. Use the shared memory inspection technique if you
+         have OpenSSH 6.8 or later.
+
+The command `ssh -G` has a different behavior on a system with Linux/Ebury on
+OpenSSH version 6.7 or earlier. A clean server will print
+
+----
+$ ssh -G
+ssh: illegal option -- G
+usage: ssh [-1246AaCfgKkMNnqsTtVvXxYy] [-b bind_address] [-c cipher_spec]
+           [-D [bind_address:]port] [-E log_file] [-e escape_char]
+           [-F configfile] [-I pkcs11] [-i identity_file]
+           [-L [bind_address:]port:host:hostport] [-l login_name] [-m mac_spec]
+           [-O ctl_cmd] [-o option] [-p port]
+           [-Q cipher | cipher-auth | mac | kex | key]
+           [-R [bind_address:]port:host:hostport] [-S ctl_path] [-W host:port]
+           [-w local_tun[:remote_tun]] [user@]hostname [command]
+----
+
+to `stderr` but an infected server will only print the usage (note the missing
+`ssh: illegal option -- G`):
+
+----
+$ ssh -G
+usage: ssh [-1246AaCfgKkMNnqsTtVvXxYy] [-b bind_address] [-c cipher_spec]
+           [-D [bind_address:]port] [-E log_file] [-e escape_char]
+           [-F configfile] [-I pkcs11] [-i identity_file]
+           [-L [bind_address:]port:host:hostport] [-l login_name] [-m mac_spec]
+           [-O ctl_cmd] [-o option] [-p port]
+           [-Q cipher | cipher-auth | mac | kex | key]
+           [-R [bind_address:]port:host:hostport] [-S ctl_path] [-W host:port]
+           [-w local_tun[:remote_tun]] [user@]hostname [command]
+----
+
+
+One can use the following command to determine if the server he is on is compromised:
+
+[source, bash]
+----
+ssh -G 2>&1 | grep -e illegal -e unknown > /dev/null && echo "System clean" || echo "System infected"
+----
+
+===== Shared Memory Inspection
+
+Linux/Ebury relies on POSIX shared memory segments (SHMs) for interprocess
+communications. Currently, it uses large segments of over 3 megabytes of
+memory.
+
+CAUTION: Other processes could legitimately create shared memory segments.
+         Make sure to validate that `sshd` is the process that created the
+         segment like we show below.
+
+Identify large shared memory segments by running the following as root:
+
+[listing]
+....
+# ipcs -m
+------ Shared Memory Segments --------
+key        shmid      owner     perms      bytes     nattch
+0x00000000 0          root      644        80         2
+0x00000000 32769      root      644        16384      2
+0x00000000 65538      root      644        280        2
+0x000010e0 465272836  root      600        3282312    0
+....
+
+Then to look for the process that created the shared memory segment, use:
+
+[listing]
+....
+# ipcs -m -p
+------ Shared Memory Creator/Last-op PIDs --------
+shmid      owner      cpid       lpid
+0          root       4162       4183
+32769      root       4162       4183
+65538      root       4162       4183
+465272836  root       15029      17377
+....
+
+If the process matches `sshd`:
+
+----
+# ps aux | grep <pid>
+root     11531  0.0  0.0 103284   828 pts/0    S+   16:40   0:00 grep 15029
+root     15029  0.0  0.0  66300  1204 ?        Ss   Jan26   0:00 /usr/sbin/sshd
+----
+
+An `sshd` process using a shared memory segment of around 3 megabytes
+(3282312 bytes in our example) is a strong indicator of compromise.
+
+
+==== Linux/Cdorked
+
+There are a few ways one can use to detect if a server is infected with
+Linux/Cdorked. A simple way is to leverage a specific behavior of the
+backdoor that redirects any requests to `/favicon.iso` to Google.
+
+Running this simple `curl` command:
+
+----
+curl -i http://myserver/favicon.iso | grep "Location:"
+----
+
+Will result in the following output on an infected server:
+
+----
+$ curl -i http://myserver/favicon.iso | grep "Location:"
+Location: http://google.com/
+----
+
+A clean site will return nothing on this particular command or a different
+Location header depending on configuration. Further inspection can be done by
+removing the `grep` portion of the command: `curl -i
+http://myserver/favicon.iso`.
+
+Additionally, one can look at the shared memory segments like for the
+Linux/Ebury case except that the process creator of the shared memory will
+be apache (httpd), nginx or lighttpd. On newer variants of Linux/Cdorked note
+that the permissions are more strict than before (600 instead of the previous
+666).
+
+Be careful when looking for shared memory segments since they could be normal
+depending on your setup. For example we know that `suPHP` uses shared memory.
+
+
+==== Linux/Onimiki
+
+We only found this malware present on systems with a currently active
+https://www.isc.org/downloads/bind/[BIND] server already serving legitimate
+DNS requests.
+
+Little evidence of this malware is left on the system besides the modified
+binary executable.
+
+Using the `windigo-onimiki.yar` http://plusvic.github.io/yara/[Yara] rule on a
+`named` binary with:
+
+----
+yara windigo-onimiki.yar /usr/sbin/named
+----
+
+yields no output if one is not infected and would print a filename if one is.
+
+
+==== Perl/Calfbot
+
+The presence of a `/tmp/...` file reveals if a server is infected and the file
+creation timestamp will accurately reflect the infection time. However if the
+server is rebooted or the C&C server sends a `KILL` command, the file will
+still be present but the malware will not be running anymore. In order to confirm an
+active infection, one must test the presence of a lock on `/tmp/...`
+using the following command:
+
+----
+flock --nb /tmp/... echo "System clean" || echo "System infected"
+----
+
+If one is infected, `lsof` can be used to see what process owns that lock:
+
+----
+lsof /tmp/...
+----
+
+The following can also validate that the targets of the `/proc/$pid/exe`
+symbolic links are the real `crond`:
+
+----
+pgrep -x "crond" | xargs -I '{}' ls -la "/proc/{}/exe"
+----
+
+Anything looking like +"/tmp/&nbsp;"+ (with a space) in the output is very
+suspicious.
+
+`pgrep` requires the `procps` package. If you can't install the package,
+replace:
+
+----
+pgrep -x crond
+----
+
+with
+
+----
+ps -ef | grep crond | grep -v grep | awk '{print $2}'
+----
+
+=== Network-based Indicators
+
+We are providing simple http://snort.org/[snort] rules in order to easily
+pinpoint malicious activity in large networks. The Internet being a wild place
+these have greater chances of triggering false positives. Use wisely.
+
+==== Linux/Ebury
+
+`windigo-ebury.rules`
+
+This first rule matches against the SSH Client Protocol field that the
+backdoor uses to connect to a victim. Any external host trying to connect to
+the backdoor on properly identified SSH ports will trigger the alert.
+
+The second rule matches SSH credentials leaking out of the network. Any
+internal host sending DNS exfiltration packets will trigger the alert.
+
+One can also manually inspect a server for outgoing DNS requests to DGA
+domains by using `tcpdump` but carefully avoiding setting promiscuous mode
+since the malware pays attention to that. This can be done with the following:
+
+----
+tcpdump -p
+----
+
+Below is the list of domains generated by the DGA for each seed by DGA
+generation.
+
+.First generation DGA
+
+[align="right,left", options="header"]
+|============================
+| seed | domain
+|    1 | k2l8z1yeodm.info
+|    2 | o5o8c1berdn.net
+|    3 | mag8u1tejdt.biz
+|    4 | a1t9y1xendd.info
+|    5 | map9u1tejdt.net
+|    6 | o5tac1berdn.biz
+|    7 | k2zbz1yeodm.info
+|    8 | a1hcy1xendd.net
+|    9 | k2rdz1yeodm.biz
+|   10 | o5dec1berdn.info
+|   11 | maefu1tejdt.net
+|   12 | a1z1h2xendd.biz
+|   13 | mae2d2tejdt.info
+|   14 | o5e4l2berdn.net
+|   15 | k2t6i2yeodm.biz
+|   16 | a1k8h2xendd.info
+|   17 | k2qai2yeodm.net
+|   18 | o5lcl2berdn.biz
+|   19 | maved2tejdt.info
+|  ... | ...
+| 5010 | q5ncv0dekcm8a1p.biz
+| 5011 | oaxey7m0lde8s1v.info
+| 5012 | c1b1jfi2pdi8w1f.net
+| 5013 | oap3p6f5lde8s1v.biz
+| 5014 | q5y6vdf7tdm8a1p.info
+| 5015 | m2w9c4qaqdj8x1o.net
+| 5016 | c1jczbhcpdi8w1f.biz
+| 5017 | m2lfk2jfqdj8x1o.info
+| 5018 | q5o2uad1cem8a1p.net
+| 5019 | oah5w1w4uee8s1v.biz
+| 5020 | c1v9l8s6yei8w1f.info
+| 5021 | oafcffg8uee8s1v.net
+| 5022 | q5w0g7cbcem8a1p.biz
+| 5023 | m2d4berdzej8x1o.info
+| 5024 | c1m8k5q0hfi8w1f.net
+| 5025 | m2kcjcj2ifj8x1o.biz
+| 5026 | q5w0f4n5lfm8a1p.info
+| 5027 | oay4vbx7dfe8s1v.net
+| 5028 | c1v9j2pahfi8w1f.biz
+|============================
+
+.Second generation DGA
+
+[align="right,left", options="header"]
+|============================
+| seed | domain
+|    1 | o8rad5ccx9f3r.net
+|    2 | zbqaf5zcv9s3x.biz
+|    3 | c0dbq5vcj9o3e.info
+|    4 | x7sbu5hcg9b3f.net
+|    5 | h0nct5rca9y3f.biz
+|    6 | ubjcl5ucn9g3m.info
+|    7 | f8wda5yck9i3h.net
+|    8 | m7lea5yck9i3l.biz
+|    9 | b8dfs5ecw9p3o.info
+|   10 | abo0u6ach9k3w.net
+|============================
+
+.Ebury v1.6 DGA
+[align="right,left", options="header"]
+|============================
+| seed | domain
+| 1    | larfj7g1vaz3y.net
+| 2    | idkff7m1lac3g.biz
+| 3    | u2s0k8d1ial3r.info
+| 4    | h9g0q8a1hat3s.net
+| 5    | f2y1j8v1saa3t.biz
+| 6    | xdc1h8n1baw3m.info
+| 7    | raj2p8z1aae3b.net
+| 8    | o9f3v8r1oaj3p.biz
+| 9    | tav4h8n1baw3r.info
+| 10   | hdm5o8e1tas3n.net
+| 11   | v2a7q8a1hat3u.biz
+| 12   | z9w8l8k1zaf3g.info
+| 13   | y2fad8b1gak3f.net
+| 14   | odrbz8i1jap3e.biz
+| 15   | uajdm8w1kax3j.info
+| 16   | c9xfb8u1cad3m.net
+| 17   | fas1k9i1jap3u.biz
+| 18   | zdm3u9x1fag3i.info
+| 19   | b2z6m9k1zaf3v.net
+| ...  | ...
+|============================
+
+==== Linux/Cdorked
+
+`windigo-cdorked.rules`
+
+This rule matches the configuration commands that are sent to Linux/Cdorked.
+Any external host contacting properly identified Web servers on HTTP ports
+with Linux/Cdorked's specific cookie and URL will trigger the alert.
+
+Some additional rules for earlier versions of Linux/Cdorked are available from
+https://lists.emergingthreats.net/pipermail/emerging-sigs/2013-April/021825.html[Emerging
+Threats].
+
+
+==== Linux/Onimiki
+
+`windigo-onimiki.rules`
+
+Linux/Onimiki is a DNS server backdoor. These rules will alert on either
+inbound or outbound DNS requests with the specific Linux/Cdorked URL pattern.
+
+
+==== Perl/Calfbot
+
+`windigo-calfbot.rules`
+
+Since Perl/Calfbot uses HTTPS, rules targeting the protocol are not useful.
+Instead these rules will match specific DNS requests.
+
+Any internal host sending DNS requests to properly labeled DNS servers with the
+Perl/Calfbot specific generated domains will trigger the alert.
+
+Also, here is the list of domains and IP addresses that will be contacted by
+Perl/Calfbot in the same order as in the malware itself:
+
+----
+vqvsaergek.info
+pbcgmmympm.info
+jmxkowzoen.info
+tyixfhsfax.info
+77.67.80.31
+qgjhmerjec.info
+85.214.80.4
+njdyqrbioh.info
+btloxcyrok.info
+afwyhvinmw.info
+wyfxanxjeu.info
+qemyxsdigi.info
+94.23.208.20
+----
+
+=== File Hashes
+
+==== Linux/Ebury
+
+Trojanized `sshd`, `ssh`, `ssh-add` and the target of the `libkeyutils.so.1`
+symbolic link.
+
+* `98cdbf1e0d202f5948552cebaa9f0315b7a3731d` - Linux/Ebury - Version 0.4.4 - sshd
+* `4d12f98fd49e58e0635c6adce292cc56a31da2a2` - Linux/Ebury - Version 0.4.4 - sshd
+* `0daa51519797cefedd52864be0da7fa1a93ca30b` - Linux/Ebury - Version 0.8.0 - sshd
+* `7314eadbdf18da424c4d8510afcc9fe5fcb56b39` - Linux/Ebury - Version 0.8.0 - sshd
+* `575bb6e681b5f1e1b774fee0fa5c4fe538308814` - Linux/Ebury - Version 0.8.0 - ssh-add
+* `fa6707c7ef12ce9b0f7152ca300ebb2bc026ce0b` - Linux/Ebury - Version 0.8.0 - ssh
+* `c4c28d0372aee7001c44a1659097c948df91985d` - Linux/Ebury - Version 0.8.0 - ssh
+* `267d010201c9ff53f8dc3fb0a48145dc49f9de1e` - Linux/Ebury - Version 1.1.0 - libkeyutils.so
+* `471ee431030332dd636b8af24a428556ee72df37` - Linux/Ebury - Version 1.2.1 - libkeyutils.so
+* `58f185c3fe9ce0fb7cac9e433fb881effad31421` - Linux/Ebury - Version 1.3.1 - libkeyutils.so
+* `09c8af3be4327c83d4a7124a678bbc81e12a1de4` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `2fc132440bafdbc72f4d4e8dcb2563cc0a6e096b` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `39ec9e03edb25f1c316822605fe4df7a7b1ad94a` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `3c5ec2ab2c34ab57cba69bb2dee70c980f26b1bf` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `74aa801c89d07fa5a9692f8b41cb8dd07e77e407` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `7adb38bf14e6bf0d5b24fa3f3c9abed78c061ad1` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `899b860ef9d23095edb6b941866ea841d64d1b26` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `8daad0a043237c5e3c760133754528b97efad459` - Linux/Ebury - Version 1.3.2a - libkeyutils.so
+* `8f75993437c7983ac35759fe9c5245295d411d35` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `9bb6a2157c6a3df16c8d2ad107f957153cba4236` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `a7b8d06e2c0124e6a0f9021c911b36166a8b62c5` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `adfcd3e591330b8d84ab2ab1f7814d36e7b7e89f` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `b8508fc2090ddee19a19659ea794f60f0c2c23ff` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `bbce62fb1fc8bbed9b40cfb998822c266b95d148` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `bf1466936e3bd882b47210c12bf06cb63f7624c0` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `e14da493d70ea4dd43e772117a61f9dbcff2c41c` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `f1ada064941f77929c49c8d773cbad9c15eba322` - Linux/Ebury - Version 1.3.2 - libkeyutils.so
+* `9e2af0910676ec2d92a1cad1ab89029bc036f599` - Linux/Ebury - Version 1.3.3b - libkeyutils.so
+* `5d3ec6c11c6b5e241df1cc19aa16d50652d6fac0` - Linux/Ebury - Version 1.3.3 - libkeyutils.so
+* `d552cbadee27423772a37c59cb830703b757f35e` - Linux/Ebury - Version 1.3.3 - libkeyutils.so
+* `1a9aff1c382a3b139b33eeccae954c2d65b64b90` - Linux/Ebury - Version 1.3.4b1 - libkeyutils.so
+* `2e571993e30742ee04500fbe4a40ee1b14fa64d7` - Linux/Ebury - Version 1.3.4b2 - libkeyutils.so
+* `e2a204636bda486c43d7929880eba6cb8e9de068` - Linux/Ebury - Version 1.3.5 - libkeyutils.so
+
+=== Linux/Cdorked
+
+Trojanized `httpd` (Apache), `nginx` or `lighttpd`.
+
+* `0004b44d110ad9bc48864da3aea9d80edfceed3f`
+* `03592b8147e2c84233da47f6e957acd192b3796a`
+* `0eb1108a9d2c9fe1af4f031c84e30dcb43610302`
+* `10c6ce8ee3e5a7cb5eccf3dffd8f580e4fb49089`
+* `149cf77d2c6db226e172390a9b80bc949149e1dc`
+* `1972616a731c9e8a3dbda8ece1072bd16c44aa35`
+* `24e3ebc0c5a28ba433dfa69c169a8dd90e05c429`
+* `4f40bb464526964ba49ed3a3b2b2b74491ea89a4`
+* `5b87807b4a1796cfb1843df03b3dca7b17995d20`
+* `62c4b65e0c4f52c744b498b555c20f0e76363147`
+* `78c63e9111a6701a8308ad7db193c6abb17c65c4`
+* `858c612fe020fd5089a05a3ec24a6577cbeaf7eb`
+* `9018377c0190392cc95631170efb7d688c4fd393`
+* `a51b1835abee79959e1f8e9293a9dcd8d8e18977`
+* `a53a30f8cdf116de1b41224763c243dae16417e4`
+* `ac96adbe1b4e73c95c28d87fa46dcf55d4f8eea2`
+* `dd7846b3ec2e88083cae353c02c559e79124a745`
+* `ddb9a74cd91217cfcf8d4ecb77ae2ae11b707cd7`
+* `ee679661829405d4a57dbea7f39efeb526681a7f`
+* `fc39009542c62a93d472c32891b3811a4900628a`
+* `fdf91a8c0ff72c9d02467881b7f3c44a8a3c707a`
+
+==== Linux/Onimiki
+
+Trojanized `named` (BIND).
+
+* `42123cbf9d51fb3dea312290920b57bd5646cefb`
+* `ebc45dd1723178f50b6d6f1abfb0b5a728c01968`
+
+==== Perl/Calfbot
+
+Perl spam bot.
+
+* `5bdf483279a4a816ed4f8a235e799d5068d14f64`
+* `bd867907a5059ab1850918d24b4b9bbe33c16b76`
+* `a0f18b5ee2d347961b7109a22ea06cca962693d2`
+* `74cd5ae9f6bbdf27b4eaf45c4a22c6aae07345a2`
+
+==== Win32/Glupteba.M
+
+Dropped by the exploit kit in non-English speaking countries.
+
+* `5196a8a034611aaa112232767aafd74b8ef71279`
+* `20467521bfd58e9ed388ce83467d73e8fd0293a7`
+* `f634f305a655b06f2647b82b58f7d3920546ac89`
+* `25a819d658d02548b2e5bdb52d2002df2f65b03a`
+* `6180d8c1c6967d15a0abb0895103ccc817e43362`
+* `051a89a7a335062829a8e938b8d4e3e2b532f6ff`
+
+==== Win32/Boaxxe.G
+
+Dropped by the exploit kit in English speaking countries.
+
+* `035327b42f6e910b652bbdde5d9c270cfbaa9669`
+* `1dd7a18125353d426b5314c4ba04d60674ffa837`

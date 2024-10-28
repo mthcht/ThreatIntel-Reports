@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/en_us/research/23/e/blackcat-ransomware-deploys-new-signed-kernel-driver.html)

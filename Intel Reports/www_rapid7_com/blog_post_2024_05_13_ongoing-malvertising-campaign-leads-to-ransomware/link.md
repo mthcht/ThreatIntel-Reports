@@ -1,0 +1,1 @@
+[Link to the article](https://www.rapid7.com/blog/post/2024/05/13/ongoing-malvertising-campaign-leads-to-ransomware/)

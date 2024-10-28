@@ -1,0 +1,1 @@
+[Link to the article](https://blog.qualys.com/vulnerabilities-threat-research/2023/11/23/unveiling-the-deceptive-dance-phobos-ransomware-masquerading-as-vx-underground)

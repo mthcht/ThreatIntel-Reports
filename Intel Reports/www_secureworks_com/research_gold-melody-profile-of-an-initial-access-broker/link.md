@@ -1,0 +1,1 @@
+[Link to the article](https://www.secureworks.com/research/gold-melody-profile-of-an-initial-access-broker)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.gdatasoftware.com/blog/2024/05/37906-gotomeeting-loads-remcos)

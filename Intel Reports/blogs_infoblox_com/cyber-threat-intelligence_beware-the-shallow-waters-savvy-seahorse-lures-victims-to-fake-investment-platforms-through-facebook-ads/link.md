@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.infoblox.com/cyber-threat-intelligence/beware-the-shallow-waters-savvy-seahorse-lures-victims-to-fake-investment-platforms-through-facebook-ads/)

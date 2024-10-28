@@ -1,0 +1,327 @@
+1/16
+www.trendmicro.com
+/en_us/research/23/e/attack-on-security-titans-earth-longzhi-returns-with-new-tricks.html
+Attack on Security Titans: Earth Longzhi Returns With New Tricks
+⋮ 5/2/2023
+After months of dormancy, Earth Longzhi, a subgroup of advanced persistent threat (APT) group APT41, has
+reemerged using new techniques in its infection routine. This blog entry forewarns readers of Earth Longzhi’s
+resilience as a noteworthy threat.
+By: Ted Lee, Hara Hiroaki
+May 02, 2023
+Read time: 9 min (2395 words)
+We discovered a new campaign by Earth Longzhi (a subgroup of APT41) that targets organizations based in Taiwan,
+Thailand, the Philippines, and Fiji. This recent campaign, which follows months of dormancy, abuses a Windows
+Defender executable to perform DLL sideloading while also exploiting a vulnerable driver, zamguard64.sys, to disable
+security products installed on the hosts via a bring-your-own-vulnerable-driver (BYOVD) attack. We also found that
+Earth Longzhi uses a new way to disable security products, a technique we’ve dubbed “stack rumbling” via Image
+File Execution Options (IFEO), which is a new denial-of-service (DoS) technique.
+In addition, we’ve noticed that this campaign installs drivers as kernel-level services by using Microsoft Remote
+Procedure Call (RPC) instead of using general Windows application programming interfaces (APIs). This is a stealthy
+way to evade typical API monitoring. We also found some interesting samples in our investigation that contained
+information not only on Earth Longzhi’s potential targets, but also techniques for possible use in future campaigns.
+This blog entry seeks to forewarn readers that Earth Longzhi remains active and continues to improve its tactics,
+techniques, and procedures (TTPs).
+Attack vectors
+Earth Longzhi’s new campaign samples showed a tendency to exploit public-facing applications, Internet Information
+Services (IIS) servers, and Microsoft Exchange servers to install Behinder, a well-known web shell, rather than send
+pieces of document-based malware through email. As seen in this campaign, Behinder proved to be a powerful web
+shell variant that can support multiple backdoor functions, including file operation, remote command execution (RCE),
+interactive shell, and Socks5 proxy.
+ Malicious actors use this web shell to discover intranet information and deploy other pieces of malware and hacking
+tools on a compromised machine.
+2/16
+Figure 1. Infection routine used by Earth Longzhi
+New tricks for DLL sideloading
+In the group’s new campaign, the malware was launched through legitimate Windows Defender binaries,
+MpDlpCmd.exe and MpCmdRun.exe, instead of using document-based samples. The malware was disguised as a
+legitimate DLL, MpClient.dll and was loaded by Microsoft Defender’s binaries. Our investigation showed two different
+types of malware that were launched through this technique: One is a new variant of Croxloader, and the other is a
+tool that can disable security products, which we dubbed “SPHijacker.”
+Figure 2. Legitimate files used for DLL sideloading
+New Croxloader variant
+Earth Longzhi’s new campaign launched Windows Defender binaries as a system service. The new Croxloader
+variant, disguised as MpClient.dll, was subsequently loaded. Once launched, Croxloader reads the payload named
+3/16
+MpClient.bin and decrypts its content. The new variant is almost identical to the older ones, except that it uses a
+different decryption algorithm. The algorithm used in the original variant is (SUB 0xA) XOR 0xCC, while the algorithm
+for the new variant is (ADD 0x70) XOR 0xDD. The final payload is identified as a Cobalt Strike beacon, which we
+detected as Backdoor.Win64.COBEACON.ZYKB.
+Figure 3. Earth Longzhi’s malware execution chain
+Figure 4. Disguised as “MPClient.dll,” the loaded new Croxloader variant reads the encrypted payload,
+“MpClient.bin,” and decrypts the content.
+Figure 5. Modified XOR algorithm
+SPHijacker
+SPHijacker, a new tool designed to disable security products, adopts two approaches to achieve this purpose. One
+approach terminates the security product process by using a vulnerable driver, zamguard64.sys, published by
+Zemana (vulnerability designated as CVE-2018-5713). Meanwhile, another approach disables process launching by
+4/16
+using a new technique that we named stack rumbling, which we will discuss in detail in succeeding paragraphs.
+Notably, this is the first time we’ve seen such a technique being used in the wild.  
+Technical analysis
+Based on our analysis, the mmmm.sys file (originally named Zamguard64.sys) is decrypted and dropped, after which
+it is registered as a service. It then creates and starts the service through RPC as opposed to calling general
+Windows APIs to set up the service, as shown in Figure 6. We reckon that such a technique enables malicious actors
+to evade API call monitoring.
+Figure 6. Code showing service started via RPC
+Once the service successfully starts running, SPHijacker proceeds to open the handle to the device named
+\\.\ZemanaAntiMalware to access the running driver. It then begins terminating the processes of security products
+based on a predefined list. We detail the workflow of the operation here:
+1. It sends input-and-output control (IOCTL) code 0x80002010 to register the process by its process ID (PID), as
+trusted by the driver, as seen in Figure 7.
+2. It conducts process discovery and collects the PID of targeted processes if they are running.
+3. It sends IOCTL code 0x80002048 to terminate targeted processes by calling ZwOpenProcess and
+ZwTerminateProcess, as seen in Figure 8.
+Figure 7. IOCTL codes sent to register and terminate processes
+5/16
+Figure 8. The handler function of “0x80002048” defined in “zamguard64.sys”
+We listed the targeted processes for termination here. Note that many of these processes are for various security
+products:
+360rp.exe
+360rps.exe
+360Safe.exe
+360sd.exe
+360tray.exe
+360Tray.exe
+Aliyun_assist_service.exe
+AliYunDun.exe
+AliYunDunUpdate.exe
+cyserver.exe
+cytray.exe
+MpcmdRun.exe
+MsMpEng.exe
+NisSrv.exe
+SecurityHealthSystray.exe
+tlaworker.exe
+yunsuo_agent_daemon.exe
+Yunsuo_agent_service.exeZhuDongFangYu.exe
+Once the process termination is completed, SPHijacker disables process execution by forcefully causing the targeted
+applications to crash upon launching, a technique we referred to earlier as stack rumbling. This technique is a type of
+6/16
+DoS attack that abuses undocumented MinimumStackCommitInBytes values in the IFEO registry key via the
+following steps:
+1. Modifying the registry HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution
+Options\{target process name}.
+2. Creating a new value, MinimumStackCommitInBytes, with 0x88888888 as its data. Any value deemed large
+enough is acceptable.
+3. Waiting for the next process launch to take place. It’s important to note that this depends on whether the
+targeted process is antivirus-related. There is usually a need to wait for the operating system to reboot.
+4. Once the targeted process is launched, it will soon crash due to stack overflow.
+Figure 9. An example of how disabling “360Tray.exe” is done by modifying the IFEO registry
+Here’s the full list of targeted processes:
+360rps.exe
+360Safe.exe
+360sd.exe
+360sdrun.exe
+360tray.exe
+360Tray.exe
+aliyun_assist_service.exe
+AliYunDun.exe
+AliYunDunUpdate.exe
+CNTAoSMgr.exe
+cyserver.exe
+cytray.exe
+mcafee-security.exe
+mcafee-security-ft.exe
+MpCmdRun.exe
+MsMpEng.exe
+NisSrv.exe
+NTRTScan.exe
+qmbsrv.exe
+QQPCRTP.exe
+QQPCTray.exe
+SecurityHealthSystray.exe
+tlaworker.exe
+TmCCSF.exe
+tmlisten.exe
+TmListen.exe
+yunsuo_agent_daemon.exe
+yunsuo_agent_service.exe
+ZhuDongFangYu.exe
+As a result of stack rumbling via IFEO, the targeted process failed to start with the exit code 0xC0000017, despite the
+process requiring high privilege. The exit code means “Status No Memory.”
+7/16
+Figure 10. An example of a “notepad.exe” file that failed upon execution
+IFEO registry has been known to contain various options for process creation. While it can be used to attach a
+debugger to an executable file, it can also be used to interrupt the process execution flow, a method known as IFEO
+injection. We couldn't find a complete documentation of MinimumStackCommitInBytes in any online resource. The
+IFEO values will be loaded upon process initialization by ntdll!LdrpInitializeExecutionOptions. Now, let us reverse
+ntdll.dll.
+
+8/16
+Figure 11. Pseudocode of “ntdll!LdrpInitializeExecutionOptions”
+The pseudocode ntdll!LdrpInitializeExecutionOptions updates PEB->MinimumStackCommit with the value of
+MinimumStackCommitInBytes in the IFEO registry. It should be noted that Microsoft also doesn't provide
+documentation on PEB->MinimumStackCommit. Let's debug the target process to identify how this value will be
+used.
+Upon execution of the stack rumbling-affected process, a debugger catches a stack overflow exception in
+ntdll!LdrpTouchThreadStack.
+9/16
+Figure 12. Image shows WinDbg catching a stack overflow exception in a running process
+Upon reversing ntdll!LdrpTouchThreadStack, we found that it receives PEB->MinimumStackCommit as an argument,
+which was updated in ntdll!LdrpInitializeExecutionOptions.
+Figure 13. Image shows “ntdll!LdrpTouchThreadStack” receiving “PEB->MinimumStackCommit”
+The given value will be used to define the size of stack to commit upon initializing the stack of the main thread.
+Therefore, if the value in PEB->MinimumStackCommit is large enough to touch beyond a stack region, the Windows
+operating system triggers stack overflow. But the exception handler catches the exception overflow, which returns
+STATUS_NO_MEMORY (=0xC0000017) as a result of ntdll!LdrpTouchThreadStack.
+
+Figure 14. Disassemble result of “ntdll!LdrpTouchThreadStack”
+10/16
+If ntdll!LdrpTouchThreadStack returns any error, ntdll.dll will invoke ZwTerminateProcess with the given error code,
+which would be STATUS_NO_MEMORY (=0xC0000017) in this case.
+Figure 15. Snippet of pseudocode in “ntdll.dll”
+As a result, we found that the value of MinimumStackCommitInBytes associated with a specific process in the IFEO
+registry key will be used to define the minimum size of stack to commit in initializing the main thread. If the stack size
+is too large, it will trigger a stack overflow exception and terminate the current process. This is how stack rumbling via
+IFEO works.
+Other notable threat-hunting findings
+During threat hunting, we found related samples on a third-party malware scanning service provider and started
+tracking the samples as Roxwrapper. Roxwrapper is disguised as a normal DLL file, srpapi.dll, and works as a
+dropper. We checked Roxwrapper’s embedded content and found Bigpipeloader as one of the embedded
+components used in its previous campaign. Bigpipeloader was previously used in past Earth Longzhi-related
+samples. Roxwrapper’s more complicated encryption suggests that the attackers might still be testing it to see if it can
+better evade security products.
+Table 1 shows all the components dropped by Roxwrapper and their corresponding descriptions:
+Dropped file names 
+Description
+Tambahan TP MENLU-DUBES AS
+revDIR.docx (Tong hop bao cao giao ban
+Khoi.docx)
+Embedded decoy documents
+ap.dll
+The SSP module loader through RPC, which is implemented
+based on the proof of concept
+apssp.dll
+A security service provider (SSP) module for credential
+dumping
+dwm.exe
+A privilege escalation tool based on a proof of concept 
+dllhost.exe
+A type of malware used to collect and upload user data. It is
+also used to download more payloads from remote servers.
+StartMenuExperienceHost.exe
+Bigpipeloader, which we introduced in our previous Earth
+Longzhi report
+Table 1. List of components dropped by Roxwrapper
+11/16
+Although Roxwrapper is not in the DLL file samples used in the actual incidents, this information is nonetheless
+noteworthy because it can be indicative of Earth Longzhi’s potential targets. Also, the information points to a new
+component, dwm.exe, which is a new privilege escalation tool that abuses Task Scheduler.
+Embedded documents
+We found some decoy documents written in Vietnamese and Indonesian, as seen in Figures 16 and 17. Based on
+these decoy documents, it can be inferred that the threat actors were keen on targeting users in Vietnam and
+Indonesia for its next wave of attacks. 
+Figure 16. Snippet of a decoy document written in Vietnamese
+12/16
+Figure 17. Snippet of a decoy document written in Indonesian
+Privilege escalation by abusing task scheduler
+Another notable component that we found in our threat hunting is dwm.exe, a new tool used for privilege escalation. It
+is implemented based on an open-source proof of concept on GitHub. First, dwm.exe replaces the image path name
+and the command-line information with C:\Windows\explorer.exe for defense evasion. Then, the Component Object
+Model (COM) object, IElevatedFactoryServer, is used to bypass the Windows User Account Control (UAC)
+mechanism and register the given payload as a scheduled task with the highest privilege. This approach enables the
+specified binary to be launched with system privileges. This is the first time that we’ve seen Earth Longzhi actors use
+this relatively new technique in its operations. 
+Figure 18. Code for changing image path and command-line information
+13/16
+Figure 19. Command to bypass UAC through COM object, “IElevatedFactoryServer”
+As shown in Figure 20, the created scheduled task was set up with system privileges and disguised as a legitimate
+Google Update scheduled task. The specified payload, dllhost.exe, is a downloader used to retrieve more payload
+from the remote server.
+14/16
+Figure 20. XML file for scheduled task created by “dwm.exe”
+Profile of Earth Longzhi’s recent targets
+A closer look at the samples we’ve gathered reveals that the group’s new campaign is aimed at the Philippines,
+Thailand, Taiwan, and Fiji. Government, healthcare, technology, and manufacturing comprise the affected industries.
+Organizations in the Philippines, Thailand, and Taiwan had already been among Earth Longzhi’s previous targets,
+while the attacks on Fiji-based firms were the first we’ve seen in our monitoring of the group. Based on the document
+embedded in the samples that we saw, Vietnam and Indonesia are possibly the group’s next targeted countries.
+Figure 21. Geographic distribution of Earth Longzhi’s targets in its latest campaign and potential targets
+for future campaigns
+Conclusion
+In the fourth quarter of 2022, we discovered a new subgroup of APT41 that we tracked as Earth Longzhi. In the
+process, we revealed two different campaigns that took place from 2020 to 2022. This follow-up article to our
+previous report aims to flag readers that Earth Longzhi remains in circulation and is expected to improve its TTPs.
+Here, we revealed that the campaign deployed a fake mpclient.dll, launched through signed Windows Defender
+15/16
+binaries, to decrease its risk of exposure. To evade and disable security products, Earth Longzhi adopted the
+following approaches:
+1. It used Microsoft Windows RPC to create a system service instead of standard Windows APIs.
+2. It terminated running security products via a vulnerable driver, zamguard64.sys, which is essentially a BYOVD
+attack.
+3. It modified IFEO registries to restrict the execution of security products.
+We also shared some interesting threat-hunting findings. Although the samples that we’ve collected resemble testing
+files, they can still be useful because they contain information on Earth Longzhi’s potential targets and new
+techniques that it might employ in the future. From the embedded documents that we’ve collected, we can infer that
+Vietnam and Indonesia are the countries that they will likely aim at next. Notably, the group’s possible abuse of Task
+Scheduler to escalate privileges for persistence is a new technique that it might use in future campaigns.
+Another noteworthy insight is that the threat actors showed an inclination for using open-source projects to implement
+their own tools. There is evidence to suggest that the group spruces up its toolset during periods of inactivity. With
+this knowledge in mind, organizations should stay vigilant against the continuous development of new stealthy
+schemes by cybercriminals.
+MITRE
+Tactics
+Techniques
+Credential Access
+T1003.001 - OS Credential Dumping: LSASS Memory
+Execution
+T1569.002 - System Services: Service Execution
+Defense Evasion
+T1574.002 - Hijack Execution Flow: DLL Side-Loading
+T1140 - Deobfuscate/Decode Files or Information
+T1070.004 - Indicator Removal: File Deletion
+T1036.005 - Match Legitimate Name or Location
+Persistence
+T1053.005 - Scheduled Task
+Privelege Escalation
+T1548.002 - Bypass User Account Control
+T1068 - Exploitation for Privilege Escalation
+T1546.012 - Event Triggered Execution: Image File Execution Options Injection
+Indicators of compromise (IOCs)
+SHA256
+Detections
+7910478d53ab5721208647709ef81f503ce123375914cd504b9524577057f0ec Rootkit.Win64.SPHIJACKER.ZYKB
+ebf461be88903ffc19363434944ad31e36ef900b644efa31cde84ff99f3d6aed
+Trojan.Win64.CROXLOADER.ZYJL
+21ffa168a60f0edcbc5190d46a096f0d9708512848b88a50449b7a8eb19a91ed
+Trojan.Win64.CROXLOADER.ZTKC
+942b93529c45f27cdbd9bbcc884a362438624b8ca6b721d51036ddaebc750d8e Trojan.Win64.CROXLOADER.ZTKC
+75a51d1f1dd26501e02907117f0f4dd91469c7dd30d73a715f52785ea3ae93c8
+Backdoor.Win64.COBEACON.ZYKB
+4399c5d9745fa2f83bd1223237bdabbfc84c9c77bacc500beb25f8ba9df30379
+Backdoor.Win64.COBEACON.ZYJL
+8327cd200cf963ada4d2cde942a82bbed158c008e689857853262fcda91d14a4 Backdoor.Win64.COBEACON.SMTH
+9eceba551baafe79b45d412c5347a3d2a07de00cc23923b7dee1616dee087905 Trojan.Win32.ROXWRAPPER.ZYJL
+630bb985d2df8e539e35f2da696096e431b3274428f80bb6601bbf4b1d45f71e
+Trojan.Win32.ROXWRAPPER.ZYJL
+ef8e658cd71c3af7c77ab21d2347c7d41764a68141551938b885da41971dd733 HackTool.Win64.TaskSchUAC.ZYJL
+e654ecc10ce3df9f33d1e7c86c704cfdc9cf6c6f49aa11af2826cbc4b659e97c
+Trojan.MSIL.DULLDOWN.ZTKA
+16887b36f87a08a12fe3b72d0bf6594c3ad5e6914d26bff5e32c9b44acfec040
+HackTool.Win64.MIMIKATZ.ZYKA
+39de0389d3186234e544b449e20e48bd9043995ebf54f8c6b33ef3a4791b6537 HackTool.Win64.MIMIKATZ.ZYKA
+Domain/IP
+Description
+194.31.53[.]128
+C&C
+198.13.47[.]158
+C&C
+172.67.139[.]61
+C&C
+207.148.115[.]125
+C&C
+64.227.164[.]34
+C&C
+evnpowerspeedtest[.]com
+C&C
+www.updateforhours[.]com
+C&C
+16/16
+dns.eudnslog[.]com
+C&C
+asis.downloadwindowsupdate[.]co
+C&C
+194.31.53[.]128
+Download site
+198.13.47[.]158
+Download site

@@ -1,0 +1,1 @@
+[Link to the article](https://symantec-enterprise-blogs.security.com/threat-intelligence/black-basta-ransomware-zero-day)

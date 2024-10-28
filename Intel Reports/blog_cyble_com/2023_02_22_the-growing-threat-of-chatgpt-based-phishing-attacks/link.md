@@ -1,0 +1,1 @@
+[Link to the article](https://blog.cyble.com/2023/02/22/the-growing-threat-of-chatgpt-based-phishing-attacks/)

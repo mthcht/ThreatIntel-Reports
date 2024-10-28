@@ -1,0 +1,1 @@
+[Link to the article](https://thedfirreport.com/2023/08/28/html-smuggling-leads-to-domain-wide-ransomware/)

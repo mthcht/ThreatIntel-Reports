@@ -1,0 +1,305 @@
+Sebdraven
+Follow
+OSINT, Python,Malware Analysis, Botnet Tracker, SIEM and IPS/IDS and Threats Expert /
+co-organizer #BotConf / co-creator of #FastIR
+Jul 31 · 9 min read
+Malicious document targets
+Vietnamese officials
+After our investigation of APT SideWinder, we’ve done a yara rule for
+hunting RTF document exploiting the CVE-2017–11882.
+We found a document written in Vietnamese dealing with a summary about
+differents projects in the district Hải Châu of Đà Nẵng.
+Homepage
+Become a member
+Sign in
+Get started
+PDF generated automatically by the PDFmyURL HTML to PDF API
+In this article, we’ll detail the infection chains and the infrastructures of the
+attackers and the TTPs of this campaign.
+The infrastructures and TTPs during this campaign seem to the Chinese
+hacking group 1937CN.
+Infection chains
+Joe sandbox has a good representation of the behaviour of the infection.
+RTF document
+PDF generated automatically by the PDFmyURL HTML to PDF API
+This rtf document is really malicious and it exploits the equation
+vulnerability to write two files in the system:
+A dll named RasTls.dll
+A executable file named dascgosrky.exe
+This document is interesting to analyze so let’go !
+RTF analysis
+With rtfobj, we found three ole objects in the document:
+1.
+2.
+PDF generated automatically by the PDFmyURL HTML to PDF API
+two non well formed ole object and a third named package ole object.
+The package ole object is used to write a file in the disk when the document
+is opened at the destination described by the ole object.
+That’s why, there is a path and a name in the ole object.
+PDF generated automatically by the PDFmyURL HTML to PDF API
+This technique is used to execute code like sct file to download an
+executable on the operating system. McAfee labs has detailed all this stuff
+with sct file: https://securingtomorrow.mcafee.com/mcafee-
+labs/dropping-files-temp-folder-raises-security-concerns/
+Many attackers use it in the wild because it’ very easy to use and it’
+supported by the office software with RTF files.
+Package OLE Object
+PDF generated automatically by the PDFmyURL HTML to PDF API
+So, in our case, a file named 8.t is dropped on %TMP% folder.
+If we check it, it’s clearly encrypted.
+PDF generated automatically by the PDFmyURL HTML to PDF API
+The others object ole seem to the exploit of CVE-2017–11882.
+8.t encrypted
+PDF generated automatically by the PDFmyURL HTML to PDF API
+At the end of the object ole, we have differents API functions to make a
+runPE.
+Equation Ole Object
+PDF generated automatically by the PDFmyURL HTML to PDF API
+runPE.
+Another interesting thing is this string at the begin of the object:
+7e079a2524fa63a55fbcfe
+We have the same string used by APT SideWinder in the equation object
+ole.
+It’s the same toolset to create the malicious document.
+So now, we have to debug the malicious document to find how the file 8.t is
+used and find this runPE.
+Debugging of the shellcode
+At the start of the analysis, we think the process EQNEDT32.exe is created
+by Winword.exe using the function CreateProcess. So we decided to set a
+breakpoint at the call of his function.
+But EQNEDT32.exe is invoked by Winword.exe using COM Object. It’s not
+String found in many exploits of CVE-2017–11882
+PDF generated automatically by the PDFmyURL HTML to PDF API
+CreateProcess that used and Winword.exe is not the parent process of
+EQNEDT32.exe. So we have to attach the debugger when EQNEDT32.exe
+is launched.
+For that, we used a technique named Image File Execution Options that
+was documented by Microsoft.
+https://blogs.msdn.microsoft.com/mithuns/2010/03/24/image-file-
+execution-options-ifeo/
+We create a key EQNEDT32.exe.
+And we set a value string for launching the debugger when EQNEDT32.exe
+is executed and attaching the debugger to the process .
+Registry HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File
+Execution Options
+PDF generated automatically by the PDFmyURL HTML to PDF API
+When we open the rtf document, Winword is launched and EQNEDT32.exe
+also.
+And the debugger is attached at the entrypoint of EQNEDT32.exe.
+We check if it’s 8.t is correctly created in the %TMP% folder.
+Value to set the debuuger when EQNEDT32.exe is executed
+Winword process
+EQNEDT32.exe process attached by the debugger
+PDF generated automatically by the PDFmyURL HTML to PDF API
+Now we set a breakpoint at the createFile to check if the shellcode of the
+exploit reads the file 8.t.
+CreateFile is called at call eqnedt32.41E5EE.
+The param of the path of file is pushed on the stack push dword ptr ss:[ebp-
+4].
+The shellcode uses CreateFile to the 8.t in the %TMP% folder
+So now, we can return of the user code at the calling function.
+8.t dropped on disk
+PDF generated automatically by the PDFmyURL HTML to PDF API
+After a step into, we enter in the shellcode, the address space has changed:
+After CreateFile, GetFileSize is called to have the size of the file
+Shellcode of the exploit
+Get the size of the file
+PDF generated automatically by the PDFmyURL HTML to PDF API
+After is Virtualloc, and it create a memory page at 1FD0000 (eax value)
+ReadFile is called:
+VirtualAlloc memory page to load 8.t
+After virtualAlloc, the memory page is pointed by EAX
+The page allocated
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And 8.t is loaded at 1FD0000:
+And the shellcode decrypts the 8.t file in memory at 0066C82A.
+The loop of decryption is a xoring with different manipulations on the
+decryption key.
+At the start of the decryption the key is set to 7BF48E63.
+Readfile 8.t
+8.t in memory
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And the xor is made after key manipulation.
+If we check the destination of the result of the xoring (here edx + ebx), we
+find 01FD0000 where 8.t is loaded.
+After two step of the loop, we can see the magic number MZ set at the begin
+of memory section.
+Decryption loop
+Set the decryption key in EAX
+PDF generated automatically by the PDFmyURL HTML to PDF API
+At the end of the decryption loop, we have a PE in memory at 01FD0000.
+the file 8.t has been decrypted.
+Then, the shellcode uses the VirtualAlloc and create a memory page at
+02070000.
+MZ magic number
+8.t fully decrypted
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And the new PE at 01FD0000 is copied at this address.
+After GetModuleFileNameA is called to have the path of EQNEDT32.exe
+And EQNEDT32.exe is forked in suspend status by a CreateProcess and the
+shellcode overwrite it by the PE at the address 02070000
+the PE decrypted is copied in the new memory page
+Fork of EQNEDT32.exe
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And the shellcode does a ResumeThread to launch the new PE.
+So, We’ve found all API Calls in the object ole at the beginning and we have
+a runPE to launch the new EQNEDT32.exe overwritten.
+Analysing the fork of EQNEDT32.exe
+We know that this process has to create on disk two files following the Joe
+SandBox Analysis:
+A dll named RasTls.dll
+A executable file named dascgosrky.exe
+If we dump EQNEDT32.exe and we put in IDA, we found quickly the
+•
+•
+Overwritting of EQNEDT32.exe
+Stack used by NTWriteVirtualMemory
+PDF generated automatically by the PDFmyURL HTML to PDF API
+If we dump EQNEDT32.exe and we put in IDA, we found quickly the
+function that drops the files on disk (sub_00401150) renamed dropFiles.
+And at the start of this functions, we have a loop with a xor.
+DropFiles Fucntion
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And just after we have a call of the decompression function.
+The function dropFiles is called twice by the sub_4012D0.
+Second loop of decryption
+Decompression function used zlib
+PDF generated automatically by the PDFmyURL HTML to PDF API
+If we check the call graph, DropFiles is called only by the function
+sub_4012D0.
+Drop the dll and the executable
+PDF generated automatically by the PDFmyURL HTML to PDF API
+So we set a breakpoint on CreateFile because at each execution,
+EQNEDT32.exe starts by CreateFile onstaticcache.dat.
+And we return at the user code to set a new breakpoint to check the static
+analysis.
+So we set a breakpoint at 0040159A when DropFiles is called.
+Functions using DropFiles function
+Breakpoint to createfile
+PDF generated automatically by the PDFmyURL HTML to PDF API
+So we set a breakpoint at 0040159A when DropFiles is called.
+And now we can analyse the second loop of decryption.
+The first step is the initialization of the decryption function.
+And after we find the xor and store the result in esi+eax.
+Breakpoint to the first call of DropFiles
+Set for the second loop encryption
+PDF generated automatically by the PDFmyURL HTML to PDF API
+In the first step of the decryption loop, the result is written to 411BC0 in the
+address space of EQNEDT32.exe.
+After tree loops, we obtains the header of zlib compressed object.
+And at the memory page 021E0000, a PE is decompressed.
+Decryption loop
+Before the decryption
+After the decryption
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And after the file is created with the following path:
+L”C:\\Users\\IEUser\\AppData\\Roaming\\Microsoft\\Windows\\Netw
+Page memory allocated to store the dll
+After decompression
+PDF generated automatically by the PDFmyURL HTML to PDF API
+ork Shortcuts\\RasTls.dll”
+Stored by ebx.
+DropFiles is called a twice to decrypt and decompress the executable file.
+The offset where store the file is 00434EF8 and the pe decompressed is
+stored at 025D0020
+PDF generated automatically by the PDFmyURL HTML to PDF API
+And the path of the new file is : ebx=005DA228
+L”C:\\Users\\IEUser\\AppData\\Roaming\\Microsoft\\Windows\\Netw
+ork Shortcuts\\dascgosrky.exe”
+So we have two files in networks shortcuts of Windows.
+dll hijacking
+Decryption of the executable dascgosrky.exe
+Files drops on disk
+PDF generated automatically by the PDFmyURL HTML to PDF API
+dll hijacking
+Dascgosrky.exe is a legit and trusted software develop by Symantec.
+To load the library RasTls.dll, the executable calls LoadLibrary and
+GetProcaddress in sub_401940 to execute the malicious functions
+PDF generated automatically by the PDFmyURL HTML to PDF API
+PDF generated automatically by the PDFmyURL HTML to PDF API
+Dascgosrky.exe loading the malicious
+PDF generated automatically by the PDFmyURL HTML to PDF API
+If we check the exports in IDA, we just have a dllentrypoint. The dll is
+executed like this.
+We’ll analyse the RAT in the second Part.
+Infrastructure of Attackers
+The domain contacted is wouderfulu.impresstravel.ga and this domain
+resolved on 192.99.181.14.
+The original file
+PDF generated automatically by the PDFmyURL HTML to PDF API
+This IP has differents domains found with PassiveTotal and theses domains
+is recorded in the IP 176.223.165.122.
+Many domain names is used for Vietnameses people.
+Domain wouderfulu.impresstravel.ga
+PDF generated automatically by the PDFmyURL HTML to PDF API
+There are two domains really interesting:
+Halong.dulichculao.com is already used in the campaign targeting
+Vietnameses organizations.
+https://www.fortinet.com/blog/threat-research/rehashed-rat-used-in-apt-
+campaign-against-vietnamese-organizations.html
+For Fortinet is the Chinese hacking group 1937CN.
+If we compare the TTPs, it’s really similar. They used RTFs to make the
+intrusion and dll hijacking to load the real payload.
+And the name for domains are really similar between the campaings.
+The second one is:
+Cat.toonganuh.com is a subdomain of tooganuh.com recorded by
+florence1972@scryptmail.com
+Expansion of domains
+PDF generated automatically by the PDFmyURL HTML to PDF API
+Conclusion
+The Chinese hacking group 1937CN continues to target Vietnam officials
+with the same TTPs with a refreshing on the tools used. The toolset used by
+this group to create RTF malicious document has the same properpy of the
+SideWinder.
+I want to thank my buddies on “Zone de Confort”. It’s with this dreamteam,
+I can finalize correctly this analyses.
+In the second part, we analyze the RAT using in this campaign. Or if
+another reverse can make that, I’ll paid a beer ;)
+IOCs:
+domains:
+dn.dulichbiendao.org
+gateway.vietbaotinmoi.com
+fis.malware-sinkhole.net
+hn.dulichbiendao.org
+halong.dulichculao.com
+news.malware-sinkhole.net
+PDF generated automatically by the PDFmyURL HTML to PDF API
+news.malware-sinkhole.net
+cat.toonganuh.com
+new.sggpnews.com
+dulichculao.com
+coco.sodexoa.com.
+thoitiet.malware-sinkhole.net
+wouderfulu.impresstravel.ga
+toonganuh.com
+coco.sodexoa.com
+IPs:
+192.99.181.14
+176.223.165.122
+RTFs:
+42162c495e835cdf28670661a53d47d12255d9c791c1c5653673b25fb587ffe
+d
+8.t:
+2c60d4312e4416745e56048ee35e694a79e1bc77e7e4d0b5811e64c84a72d2
+d7
+PDF generated automatically by the PDFmyURL HTML to PDF API
+PE:
+f9ebf6aeb3f0fb0c29bd8f3d652476cd1fe8bd9a0c11cb15c43de33bbce0bf6
+8 (exe)
+9f5da7524817736cd85d87dae93fdbe478385baac1c0aa3102b6ad50d7e5e3
+68 (dll)
+Security
+Malware Analysis
+Threat Intelligence
+Like what you read? Give Sebdraven a round of applause.
+From a quick cheer to a standing ovation, clap to show how much you enjoyed this story.
+1
+Follow
+Sebdraven
+OSINT, Python,Malware Analysis, Botnet Tracker, SIEM and IPS/IDS and
+Threats Expert / co-organizer #BotConf / co-creator of #FastIR
+6
+Never miss a story from Sebdraven, when you sign up for
+Medium. Learn more
+GET UPDATES
+PDF generated automatically by the PDFmyURL HTML to PDF API

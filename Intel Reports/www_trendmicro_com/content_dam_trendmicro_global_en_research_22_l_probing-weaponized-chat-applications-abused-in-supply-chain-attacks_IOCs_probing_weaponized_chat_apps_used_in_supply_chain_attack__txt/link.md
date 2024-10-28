@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/22/l/probing-weaponized-chat-applications-abused-in-supply-chain-attacks/IOCs_probing_weaponized_chat_apps_used_in_supply_chain_attack_.txt)

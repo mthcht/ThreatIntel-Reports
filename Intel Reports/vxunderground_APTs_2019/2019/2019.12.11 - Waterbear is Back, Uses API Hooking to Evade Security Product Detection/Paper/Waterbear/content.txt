@@ -1,0 +1,362 @@
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+1/9
+Trend Micro
+About TrendLabs Security Intelligence Blog
+Search:
+ 
+Go to…
+Home
+Categories
+Home   »   Malware   »   Waterbear is Back, Uses API Hooking to Evade Security Product Detection
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection
+Posted on:December 11, 2019 at 5:04 am
+Posted in:Malware
+Author:
+Trend Micro
+0
+By Vickie Su, Anita Hsieh, and Dove Chiu
+Waterbear, which has been around for several years, is a campaign that uses modular malware capable of including additional functions remotely. It is associated with
+the cyberespionage group BlackTech, which mainly targets technology companies and government agencies in East Asia (speciﬁcally Taiwan, and in some instances,
+Japan and Hong Kong) and is responsible for some infamous campaigns such as PLEAD and Shrouded Crossbow. In previous campaigns, we’ve seen Waterbear
+primarily being used for lateral movement, decrypting and triggering payloads with its loader component. In most cases, the payloads are backdoors that are able to
+receive and load additional modules. However, in one of its recent campaigns, we’ve discovered a piece of Waterbear payload with a brand-new purpose: hiding its
+network behaviors from a speciﬁc security product by API hooking techniques. In our analysis, we have discovered that the security vendor is APAC-based, which is
+consistent with BlackTech’s targeted countries.
+Knowing which speciﬁc APIs to hook might mean that the attackers are familiar with how certain security products gather information on their clients’ endpoints and
+networks. And since the API hooking shellcode adopts a generic approach, a similar code snippet might be used to target other products in the future and make
+Waterbear harder to detect.
+A closer look at Waterbear
+Waterbear employs a modular approach to its malware. It utilizes a DLL loader to decrypt and execute an RC4-encrypted payload. Typically, the payload is the ﬁrst-
+stage backdoor which receives and loads other executables from external attackers. These ﬁrst-stage backdoors can be divided into two types: First, to connect to a
+command-and-control (C&C) server, and second, to listen in on a speciﬁc port. Sometimes, the hardcoded ﬁle paths of the encrypted payloads are not under Windows
+native directories (e.g., under security products or third-party libraries’ directories), which may indicate that the attackers might have prior knowledge of their targets’
+environments. It is also possible that the attackers use Waterbear as a secondary payload to help maintain presence after gaining some levels of access to the targets’
+systems. The evidence is that Waterbear frequently uses internal IPs as its own C&C servers (for
+instance, b9f3a3b9452a396c3ba0ce4a644dd2b7f494905e820e7b1c6dca2fdcce069361 uses an internal IP address of 10[.]0[.]0[.]211 as its C&C server).
+The typical Waterbear infection chain
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+2/9
+Figure 1. A typical Waterbear infection chain
+A Waterbear infection starts from a malicious DLL loader, as shown in Figure 1. We have seen two  techniques of DLL loader triggering. One is modifying a
+legitimate server application to import and load the malicious DLL loader, while the second technique is performing phantom DLL hijacking and DLL side loading.
+Some Windows services try to load external DLLs with hardcoded DLL names or paths during boot-up. However, if the DLL is a legacy DLL (i.e., one that is no
+longer supported by Windows) or a third-party DLL (i.e., one that is not part of the original Windows system DLLs), attackers can give their malicious DLL a
+hardcoded DLL name and place it under one of the searched directories during the DLL loading process. After the malicious DLL is loaded, it will gain the same
+permission level as the service that loads it.
+During our recent Waterbear investigation, we discovered that the DLL loader loaded two payloads. The payloads performed functionalities we have never seen in
+other Waterbear campaigns. The ﬁrst payload injects code into a speciﬁc security product to hide the campaign’s backdoor. The second payload is a typical Waterbear
+ﬁrst-stage backdoor, which we will attempt to dissect ﬁrst based on a speciﬁc case we observed during our analysis.
+Waterbear’s ﬁrst-stage backdoor
+We saw a Waterbear loader named “ociw32.dll” inside one of the folders in the %PATH% environmental variable. This DLL name is hardcoded inside
+“mtxoci.dll” which is loaded by the MSDTC service during boot-up. “mtxoci.dll” ﬁrst tries to query the registry key
+“HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\MSDTC\MTxOCI” to see if the value “OracleOciLib” exists. If so, it retrieves the data inside it and
+loads the corresponding library. If the value doesn’t exist, “mtxoci.dll” tries to load “ociw32.dll” instead. During our investigation, we noticed that the value
+“OracleOciLib” was deleted from the victim’s machine, as shown in Figure 2. Hence, the malicious loader “ociw32.dll” was loaded and successfully executed on
+the host.
+Figure 2. The deleted value “OracleOciLib” on the victim’s host
+Note: The image on the left  shows how  the DLL on a normal machine normally looks. The image on the right showcases how the DLL on a victim’s machine
+appears. Because there is no “OracleOciLib” value, it loads the hardcoded DLL “ociw32.dll” instead, which triggers the malicious Waterbear DLL loader.
+After the Waterbear DLL loader is executed, it searches for a hardcoded path and tries to decrypt the corresponding payload, which is a piece of encrypted shellcode.
+The decryption algorithm is RC4, which takes the hardcoded path to form the decryption key. If the decrypted payload is valid, it picks a speciﬁc existing Windows
+Service — LanmanServer, which is run by svchost.exe — and injects the decrypted shellcode into the legitimate service. In most cases, the payload is a ﬁrst-stage
+backdoor, and its main purpose is to retrieve second-stage payloads — either by connecting to a C&C server or opening a port to wait for external connections and
+load incoming executables.
+Conﬁguration of the ﬁrst-stage backdoor
+Waterbear’s ﬁrst-stage backdoor conﬁguration contains the information required for the proper execution of and communication with external entities.
+Offset 0x00, Size 0x10: Encryption / decryption key for the functions
+Offset 0x10, Size 0x04: 0x0BB8 (reserved)
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+3/9
+Offset 0x14, Size 0x10: Version (e.g., 0.13, 0.14, 0.16, and so on)
+Offset 0x24, Size 0x10: Mutex or reserved bytes
+Offset 0x34, Size 0x78: C&C server address which is XOR-encrypted by key 0xFF. If the backdoor is intended to listen in on a speciﬁc port, this section will
+be ﬁlled with 0x00.
+Offset 0xAC, Size 0x02: Port
+Offset 0xAE, Size 0x5A: Reserved bytes
+Table: The function address table of the payload. The block is initially ﬁlled with 0x00 and will be propagated during runtime.
+Table: The sizes of functions
+Table: The API address table. The block is initially ﬁlled with 0x00 and will be ﬁlled with loaded API addresses during runtime.
+Table: The API hashes for dynamic API loading
+A list of DLL names and the number of APIs to be loaded
+Figure 3. The ﬁrst-stage backdoor’s conﬁguration structure
+Anti-memory scanning of shellcode payload
+In order to avoid in-memory scanning during runtime, the payload encrypts all of the function blocks before executing the actual malicious routine. Afterwards,
+whenever it needs to use a function, it will decrypt the function, execute it, and encrypt the function back again, as can be seen in Figure 4. If a function will not be
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+4/9
+used on the rest of the execution, it will be scrambled by another mess-up function, as illustrated in Figure 6. The mess-up function muddles up the bytes with
+random values and makes the input blocks unrecoverable. The purpose of this is to further avoid being detected by a certain cybersecurity solution.
+Figure 4. The decryption-execution-encryption ﬂow in the shellcode execution routine
+Figure 5. The function for the function block encryption and decryption
+Figure 6. The payload’s mess-up function
+Same Waterbear, different story
+During our investigation, we found a peculiar incident that stands out from most of the Waterbear infections we’ve previously seen. This time, the DLL loader loaded
+two payloads – the ﬁrst payload performed functionalities we have not seen before: It injected codes into a speciﬁc security product to do API hooking in order to
+hide the backdoor from the product. Meanwhile, the second payload is a typical Waterbear ﬁrst-stage backdoor.
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+5/9
+Figure 7. An unusual Waterbear infection chain
+Both payloads were encrypted and stored on the victim’s disk and were injected into the same service, which was, in this case, LanmanServer. We have observed that
+the loader tried to read the payloads from the ﬁles, decrypted them, and performed thread injections with the following conditions:
+1. If the ﬁrst payload could not be found on the disk, the loader would be terminated without loading the second one.
+2. If the ﬁrst payload was successfully decrypted and injected into the service, the second piece would also be loaded and injected regardless of what happened to
+the ﬁrst thread.
+3. In the ﬁrst injected thread, if the necessary executable from the security product was not found, the thread would be terminated without performing other
+malicious routines. Note that only the thread would be terminated, but the service would still be running.
+Regardless if the API hooking was performed or otherwise, the second backdoor would still be executed after having been successfully loaded.
+API hooking to evade detection
+In order to hide the behaviors of the ﬁrst-stage backdoor (which is the second payload), the ﬁrst payload uses API hooking techniques to avoid being detected by a
+speciﬁc security product and to make an interference in the result of the function execution. It hooks two different APIs, namely “ZwOpenProcess” and
+“GetExtendedTcpTable”, to hide its speciﬁc processes. The payload only modiﬁes the functions in the memory of the security product process, hence the original
+system DLL ﬁles remain unchanged.
+The payload is composed of a two-stage shellcode. The ﬁrst-stage shellcode ﬁnds a speciﬁc security product’s process with a hardcoded name and injects the second-
+stage shellcode into  that process. The second-stage shellcode then performs API hooking inside the targeted process.
+Hiding process identiﬁers (PIDs)
+The process identiﬁers or PIDs to be hidden are stored in the shared memory “Global\<computer_name>.” If the shared memory doesn’t exist, it takes the PID
+embedded by the ﬁrst-stage shellcode. In this case, the intention of the malicious code is to hide Waterbear’s  backdoor activities from the security product.
+Therefore, the ﬁrst-stage shellcode takes the PID of the Windows Service — which the ﬁrst-stage shellcode and the succeeding backdoor both inject into — hides the
+target process, and embeds that PID into the second-stage shellcode.
+ 
+Figure 8. Code that injects current PID into the second-stage shellcode
+Hooking “ZwOpenProcess” in ntdll.dll
+The purpose of hooking “ZwOpenProcess” is to protect the speciﬁc process from being accessed by the security product. Whenever “ZwOpenProcess” is called,
+the injected code will ﬁrst check if the opened process hits any PIDs in the protected process ID list. If yes, it modiﬁes the process ID, which should open on another
+Windows Service PID.
+First, it builds the hooked function and writes the function at the end of “ntdll.dll”. This function includes two parts, as shown in Figure 9:
+1. The PID checking procedure. It recursively checks if the PID to be opened by “ZwOpenProcess” is in the list of the protected process IDs. If yes, it replaces
+the PID to be opened with another Windows Service PID that has been written by the Waterbear loader in the beginning.
+2. After the PID checking procedure, it executes the original “ZwOpenProcess” and returns the result.
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+6/9
+Figure 9. The function hook of “ZwOpenProcess” to check and modify the output of the function
+Secondly, it writes “push <ADDRESS> ret” at the beginning of the original “ZwOpenProcess” address. Hence, when “ZwOpenProcess” is called, the modiﬁed
+version of “ZwOpenProcess” will be executed.
+Figure 10. “ZwOpenProcess” after modiﬁcation
+The API hooking on “ZwOpenProcess” will only be triggered if “%temp%\KERNELBASE.dll” exists on the host. It is possible that this check is designed
+according to the nature of the security product it targets.
+“GetExtendedTcpTable” and “GetRTTAndHopCount” hooks in iphlpapi.dll
+The second part of API hooking hooks on “GetExtendedTcpTable.” “GetExtendedTcpTable” is used for retrieving a table that contains a list of TCP endpoints
+available to the application, and it is frequently used in some network-related commands, such as netstat. The purpose of the hook is to remove TCP endpoint records
+of certain PIDs. In order to achieve that, it modiﬁes two functions: “GetExtendedTcpTable” and “GetRTTAndHopCount.” The second function,
+“GetRTTAndHopCount,” acts as the place to put the injected hooking code.
+“GetExtendedTcpTable” only writes a jump to “GetRTTAndHopCount” in the beginning of the function. Only the ﬁrst 5 bytes of the code of the API
+“GetExtendedTcpTable” are changed, as shown in Figure 11.
+Figure 11. Only 5 bytes changed in the “GetExtendedTcpTable”
+The rest of the routine is all placed in “GetRTTAndHopCount.” In the ﬁrst part of the code, it pushes [“GetRTTAndHopCount”+0x3E] as the return address and
+then executes the ﬁrst four instructions of the original “GetExtendedTcpTable” function (which has already been replaced by the jump instruction in Figure 11).
+After that, it jumps to “GetExtendedTcpTable” to execute the function normally and to catch its return values. The code is shown in Figure 12.
+Figure 12. The ﬁrst part of injected code in “GetRTTAndHopCount,” which executes “GetExtendedTcpTable” and returns back to the next instruction
+After “GetExtendedTcpTable” is executed and the process returns back to the second part of the code, it iteratively checks every record in the returned Tcp table. If
+any record contains the PID Waterbear wants to hide, it will remove the corresponding record, modify the record number inside the table, and continue to check the
+succeeding records. In the end, it returns the modiﬁed table.
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+7/9
+Figure 13. The ﬁrst part of injected code in “GetRTTAndHopCount,” which executes “GetExtendedTcpTable” and returns back to the next instruction
+Rather than directly disabling these two functions, this method of using API hooking makes noticing malicious behaviors more difﬁcult, especially since both
+functions still work and return results normally. Although in this case, the affected process is speciﬁed in the ﬁrst-stage shellcode, the API hooking logic is quite
+generic that the same piece of shellcode can be used to hook other vendors’ products.
+Conclusion
+This is the ﬁrst time we’ve seen Waterbear attempting to hide its backdoor activities. By the hardcoded product name, we infer that the attackers are knowledgeable
+of the victims’ environment and which security product(s) they use. The attackers might also be familiar with how security products gather information on their
+clients’ endpoints and networks, so that they know which APIs to hook. Since the API hooking shellcode adopts a generic approach, the similar code snippet might
+be used to target other products in the future and make the activities of Waterbear harder to detect.
+Tactic
+Technique
+ID
+Description
+Execution
+Execution through Module Load
+T1129
+ 
+Dynamically loads the DLLs
+through the shellcode
+Execution through API
+T1106
+ 
+Dynamically loads the APIs
+through the shellcode
+Persistence
+ 
+Hooking
+T1179
+ 
+Hooks security product’s
+commonly used APIs
+Privilege
+Escalation
+ 
+Process Injection
+T1055
+Injects the decrypts payload
+into svchost.exe process
+Hooking
+T1179
+ 
+Hooks security products’
+commonly used APIs
+Defense
+Evasion
+Binary Padding
+T1009
+Adds junk data to evade anti-
+virus scan
+Disabling Security Tools
+T1089
+Targets a speciﬁc security
+product’s process for injection
+purposes
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+8/9
+Deobfuscate/Decode Files or
+Information
+T1140
+Uses TROJ_WATERBEAR to
+decrypt encrypted payload
+Execution Guardrails
+T1480
+Targets speciﬁc software in the
+victim’s environment
+DLL Side-Loading
+T1073
+ 
+Uses modiﬁed legitimate DLL
+to load the malicious DLL
+Process Injection
+T1055
+Injects the decrypted payload
+into svchost.exe process
+Exﬁltration
+Exﬁltration Over Command and
+Control Channel
+T1041
+Possibly sends collected data to
+attackers via C&C channel
+Indicators of Compromise (IoCs)
+SHA256
+Detection Name
+649675baef92381ffcdfa42e8959015e83c1ab1c7bbfd64635ce5f6f65efd651
+BKDR_WATERBEAR.ZTGF
+3909e837f3a96736947e387a84bb57e57974db9b77fb1d8fa5d808a89f9a401b
+TROJ_WATERBEAR.ZTGD
+fcfdd079b5861c0192e559c80e8f393b16ba419186066a21aab0294327ea9e58
+TROJ_WATERBEAR.ZTGJ
+3f26a971e393d7f6ce7bf4416abdbfa1def843a0cf74d8b7bb841ca90f5c9ed9
+TROJ_WATERBEAR.ZTGH
+abb91dfd95d11a232375d6b5cdf94b0f7afb9683fb7af3e50bcecdb2bd6cb035
+TROJ_WATERBEAR.ZTGH
+bda6812c3bbba3c885584d234be353b0a2d1b1cbd29161deab0ef8814ac1e8e1 TROJ_WATERBEAR.ZTGI
+53402b662679f0bfd08de3abb064930af40ff6c9ec95469ce8489f65796e36c3
+TROJ_WATERBEAR.ZTGH
+f9f6bc637f59ef843bc939cb6be5000da5b9277b972904bf84586ea0a17a6000
+TROJ_WATERBEAR.ZTGI
+3442c076c8824d5da065616063a6520ee1d9385d327779b5465292ac978dec26 BKDR_WATERBEAR.ZTGD
+7858171120792e5c98cfa75ccde7cba49e62a2aeb32ed62322aae0a80a50f1ea
+TROJ64_WATERBEAR.ZTGI
+acb2abc7fb44c2fdea0b65706d1e8b4c0bfb20e4bd4dcee5b95b346a60c6bd31
+BKDR_WATERBEARENC.ZTGF
+b9f3a3b9452a396c3ba0ce4a644dd2b7f494905e820e7b1c6dca2fdcce069361
+BKDR64_WATERBEAR.ZTGD
+7c0d2782a33debb65b488893705e71a001ea06c4eb4fe88571639ed71ac85cdd BKDR_WATERBEARENC.ZTGH
+c7c7b2270767aaa2d66018894a7425ba6192730b4fe2130d290cd46af5cc0b7b BKDR_WATERBEARENC.ZTGI
+7532fe7a16ba1db4d5e8d47de04b292d94882920cb672e89a48d07e77ddd0138 BKDR_WATERBEARENC.ZTGI
+dea5c564c9d961ccf2ed535139fbfca4f1727373504f2972ac92acfaf21da831
+BKDR_WATERBEARENC.ZTGI
+05d0ab2fbeb7e0ba7547afb013d307d32588704daac9c12002a690e5c1cde3a4
+BKDR64_WATERBEARENC.ZTGJ
+39668008deb49a9b9a033fd01e0ea7c5243ad958afd82f79c1665fb73c7cfadf
+BKDR_WATERBEARENC.ZTGD
+ 
+ 
+ 
+Learn how to protect Enterprises, Small Businesses, and Home Users from ransomware:
+ENTERPRISE
+SMALL BUSINESS
+HOME
+Tags: API HookingBlackTechWaterbear
+Featured Stories
+0 Comments
+TrendLabs
+Login
+
+1
+t Tweet
+f Share
+Sort by Best
+LOG IN WITH
+OR SIGN UP WITH DISQUS 
+Name
+Start the discussion…
+?
+Be the ﬁrst to comment.
+Subscribe
+✉
+Add Disqus to your siteAdd DisqusAdd
+d
+ Recommend
+
+»
+»
+»
+12/12/2019
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection - TrendLabs Security Intelligence Blog
+https://blog.trendmicro.com/trendlabs-security-intelligence/waterbear-is-back-uses-api-hooking-to-evade-security-product-detection/
+9/9
+systemd Vulnerability Leads to Denial of Service on Linux
+qkG Filecoder: Self-Replicating, Document-Encrypting Ransomware
+Mitigating CVE-2017-5689, an Intel Management Engine Vulnerability
+A Closer Look at North Korea’s Internet
+From Cybercrime to Cyberpropaganda
+Security Predictions for 2019
+Our security predictions for 2019 are based on our experts’ analysis of the progress of current and emerging technologies, user behavior, and market trends, and
+their impact on the threat landscape. We have categorized them according to the main areas that are likely to be affected, given the sprawling nature of the
+technological and sociopolitical changes under consideration.
+Read our security predictions for 2019.
+Business Process Compromise
+Attackers are starting to invest in long-term operations that target speciﬁc processes enterprises rely on. They scout for vulnerable practices, susceptible
+systems and operational loopholes that they can leverage or abuse. To learn more, read our Security 101: Business Process Compromise.
+Recent Posts
+Waterbear is Back, Uses API Hooking to Evade Security Product Detection
+December Patch Tuesday: Vulnerabilities in Windows components, RDP, and PowerPoint Get Fixes
+Obfuscation Tools Found in the Capesand Exploit Kit Possibly Used in “KurdishCoder” Campaign
+Mobile Cyberespionage Campaign Distributed Through CallerSpy Mounts Initial Phase of a Targeted Attack
+Operation ENDTRADE: Finding Multi-Stage Backdoors that TICK
+Popular Posts
+Mac Backdoor Linked to Lazarus Targets Korean Users
+New Magecart Attack Delivered Through Compromised Advertising Supply Chain
+September Patch Tuesday Bears More Remote Desktop Vulnerability Fixes and Two Zero-Days
+Microsoft November 2019 Patch Tuesday Reveals 74 Patches Before Major Windows Update
+Banking Trojan DRIDEX Uses Macros for Infection
+Stay Updated
+Email Subscription
+Your email here
+Subscribe
+Home and Home Ofﬁce
+|
+For Business
+|
+Security Intelligence
+|
+About Trend Micro
+Asia Paciﬁc Region (APAC): Australia / New Zealand, 中国, ⽇本, 대한민국, 台灣
+Latin America Region (LAR): Brasil, México
+North America Region (NABU): United States, Canada 
+Europe, Middle East, & Africa Region (EMEA): France, Deutschland / Österreich / Schweiz, Italia, Россия, España, United Kingdom / Ireland
+Privacy Statement
+Legal Policies
+Copyright © 2019 Trend Micro Incorporated. All rights reserved.

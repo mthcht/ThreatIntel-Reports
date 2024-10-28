@@ -1,0 +1,1 @@
+[Link to the article](https://www.sentinelone.com/blog/dark-angels-esxi-ransomware-borrows-code-victimology-from-ragnarlocker/)

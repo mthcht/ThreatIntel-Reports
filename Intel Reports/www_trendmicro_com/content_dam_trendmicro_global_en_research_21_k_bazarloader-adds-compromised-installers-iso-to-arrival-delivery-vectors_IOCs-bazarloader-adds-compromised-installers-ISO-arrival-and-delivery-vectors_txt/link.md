@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/21/k/bazarloader-adds-compromised-installers-iso-to-arrival-delivery-vectors/IOCs-bazarloader-adds-compromised-installers-ISO-arrival-and-delivery-vectors.txt)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/esxi-ransomware-detection-falcon-next-gen-siem/ - CrowdStrike Falcon Next-Gen SIEM Unveils Advanced Detection of Ransomware Targeting VMware ESXi Environments)

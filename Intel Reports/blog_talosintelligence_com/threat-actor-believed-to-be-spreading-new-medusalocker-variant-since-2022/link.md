@@ -1,0 +1,1 @@
+[Link to the article](https://blog.talosintelligence.com/threat-actor-believed-to-be-spreading-new-medusalocker-variant-since-2022/)

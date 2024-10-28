@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/i/redline-vidar-first-abuses-ev-certificates-then-shifts-to-ransomware-/IOCs-RedLineVidar-Abuses-EV%20Certificates-Shifts-to-Ransomware.txt)

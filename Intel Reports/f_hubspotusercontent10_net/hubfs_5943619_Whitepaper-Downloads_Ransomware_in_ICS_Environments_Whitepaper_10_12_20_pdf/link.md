@@ -1,0 +1,1 @@
+[Link to the article](https://f.hubspotusercontent10.net/hubfs/5943619/Whitepaper-Downloads/Ransomware_in_ICS_Environments_Whitepaper_10_12_20.pdf?utm_referrer=https%3A%2F%2Fwww.dragos.com%2Fresource%2Fransomware-in-ics-environments%2F)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/detecting-microsoft-entra-id-primary-refresh-token-abuse-next-gen-siem/ - Detecting Microsoft Entra ID Primary Refresh Token Abuse with Falcon Next-Gen SIEM)

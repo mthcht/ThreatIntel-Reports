@@ -1,0 +1,1 @@
+[Link to the article](https://www.cadosecurity.com/updates-to-legion-a-cloud-credential-harvester-and-smtp-hijacker/)

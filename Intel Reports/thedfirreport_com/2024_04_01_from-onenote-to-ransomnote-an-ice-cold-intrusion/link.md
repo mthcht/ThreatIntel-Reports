@@ -1,0 +1,1 @@
+[Link to the article](https://thedfirreport.com/2024/04/01/from-onenote-to-ransomnote-an-ice-cold-intrusion/)

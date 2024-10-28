@@ -1,0 +1,1 @@
+[Link to the article](https://securityaffairs.com/157914/cyber-crime/my-slice-aitalian-adaptive-phishing-campaign.html)

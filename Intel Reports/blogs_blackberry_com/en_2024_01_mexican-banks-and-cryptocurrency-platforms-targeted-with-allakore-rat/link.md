@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.blackberry.com/en/2024/01/mexican-banks-and-cryptocurrency-platforms-targeted-with-allakore-rat)

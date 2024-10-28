@@ -1,0 +1,1 @@
+[Link to the article](https://blog.sucuri.net/2024/06/hundreds-sites-targeted-by-fake-chrome-update-pop-ups.html)

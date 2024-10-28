@@ -1,0 +1,1 @@
+[Link to the article](https://www.reversinglabs.com/blog/a-lurking-npm-package-makes-the-case-for-open-source-health-checks)

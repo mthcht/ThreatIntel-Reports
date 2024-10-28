@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>The worst of both worlds: Combining NTLM Relaying and Kerberos delegation - dirkjanm.io</title>
+<meta name="description" content="After my in-depth post last month about unconstrained delegation, this post will discuss a different type of Kerberos delegation: resource-based constrained delegation. The content in this post is based on Elad Shamir’s Kerberos research and combined with my own NTLM research to present an attack that can get code execution as SYSTEM on any Windows computer in Active Directory without any credentials, if you are in the same network segment. This is another example of insecure Active Directory default abuse, and not any kind of new exploit.">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="dirkjanm.io">
+<meta property="og:title" content="The worst of both worlds: Combining NTLM Relaying and Kerberos delegation">
+<meta property="og:url" content="https://dirkjanm.io/worst-of-both-worlds-ntlm-relaying-and-kerberos-delegation/">
+
+
+  <meta property="og:description" content="After my in-depth post last month about unconstrained delegation, this post will discuss a different type of Kerberos delegation: resource-based constrained delegation. The content in this post is based on Elad Shamir’s Kerberos research and combined with my own NTLM research to present an attack that can get code execution as SYSTEM on any Windows computer in Active Directory without any credentials, if you are in the same network segment. This is another example of insecure Active Directory default abuse, and not any kind of new exploit.">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2019-03-04T18:08:57+00:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://dirkjanm.io/worst-of-both-worlds-ntlm-relaying-and-kerberos-delegation/">
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="dirkjanm.io Feed">
+
+<!-- http://t.co/dKP3o1e -->
+<meta name="HandheldFriendly" content="True">
+<meta name="MobileOptimized" content="320">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if lte IE 9]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+    
+  </head>
+
+  <body class="layout--single wide">
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    <div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        <a class="site-title" href="/">dirkjanm.io</a>
+        <ul class="visible-links"><li class="masthead__menu-item">
+              <a href="/" >Posts</a>
+            </li><li class="masthead__menu-item">
+              <a href="/talks/" >Presentations</a>
+            </li></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle Menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+  <div class="sidebar sticky">
+  
+
+
+<div itemscope itemtype="http://schema.org/Person">
+
+  
+    <div class="author__avatar">
+      
+
+      
+        <img src="/assets/img/thisisapicture.png" alt="Dirk-jan Mollema" itemprop="image">
+      
+    </div>
+  
+
+  <div class="author__content">
+    
+      <h3 class="author__name" itemprop="name">Dirk-jan Mollema</h3>
+    
+    
+      <p class="author__bio" itemprop="description">
+        Hacker, red teamer, researcher. Likes to write infosec-focussed Python tools. This is my personal blog containing research on topics I find interesting, such as (Azure) Active Directory internals, protocols and vulnerabilities.<br /><br />Looking for a security test or training? Business contact via <a href="https://outsidersecurity.nl">outsidersecurity.nl</a>
+
+      </p>
+    
+  </div>
+
+  <div class="author__urls-wrapper">
+    <button class="btn btn--inverse">Follow</button>
+    <ul class="author__urls social-icons">
+      
+        <li itemprop="homeLocation" itemscope itemtype="http://schema.org/Place">
+          <i class="fas fa-fw fa-map-marker-alt" aria-hidden="true"></i> <span itemprop="name">Both sides of a security boundary</span>
+        </li>
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+        <li>
+          <a href="https://twitter.com/_dirkjan" itemprop="sameAs">
+            <i class="fab fa-fw fa-twitter-square" aria-hidden="true"></i> Twitter
+          </a>
+        </li>
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+        <li>
+          <a href="https://github.com/dirkjanm" itemprop="sameAs">
+            <i class="fab fa-fw fa-github" aria-hidden="true"></i> GitHub
+          </a>
+        </li>
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+        
+          <li>
+            <a href="https://www.youtube.com/c/dirkjanm" itemprop="sameAs">
+              <i class="fab fa-fw fa-youtube" aria-hidden="true"></i> YouTube
+            </a>
+          </li>
+        
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+    </ul>
+  </div>
+</div>
+
+  
+  </div>
+
+
+  <article class="page" itemscope itemtype="http://schema.org/CreativeWork">
+    <meta itemprop="headline" content="The worst of both worlds: Combining NTLM Relaying and Kerberos delegation">
+    <meta itemprop="description" content="After my in-depth post last month about unconstrained delegation, this post will discuss a different type of Kerberos delegation: resource-based constrained delegation. The content in this post is based on Elad Shamir’s Kerberos research and combined with my own NTLM research to present an attack that can get code execution as SYSTEM on any Windows computer in Active Directory without any credentials, if you are in the same network segment. This is another example of insecure Active Directory default abuse, and not any kind of new exploit.">
+    <meta itemprop="datePublished" content="March 04, 2019">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">The worst of both worlds: Combining NTLM Relaying and Kerberos delegation
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  5 minute read
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+        <p>After my in-depth post last month about <a href="https://dirkjanm.io/krbrelayx-unconstrained-delegation-abuse-toolkit/">unconstrained delegation</a>, this post will discuss a different type of Kerberos delegation: resource-based constrained delegation. The content in this post is based on <a href="https://shenaniganslabs.io/2019/01/28/Wagging-the-Dog.html">Elad Shamir’s Kerberos research</a> and combined with my own NTLM research to present an attack that can get <strong>code execution as SYSTEM</strong> on any Windows computer in Active Directory <strong>without any credentials</strong>, if you are in the same network segment. This is another example of insecure Active Directory default abuse, and not any kind of new exploit.</p>
+
+<h1 id="attack-tldr">Attack TL;DR</h1>
+<p>If an attacker is on the local network, either physically (via a drop device) or via an infected workstation, it is possible to perform a DNS takeover using <a href="https://github.com/fox-it/mitm6">mitm6</a>, provided IPv6 is not already in use in the network. When this attack is performed, it is also possible to make computer accounts and users authenticate to us over HTTP by spoofing the <code class="language-plaintext highlighter-rouge">WPAD</code> location and requesting authentication to use our rogue proxy. This attack is described in detail in <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/">my blog post on this subject</a> from last year.</p>
+
+<p>We can relay this NTLM authentication to LDAP (unless mitigations are applied) with ntlmrelayx and authenticate as the victim computer account. Computer accounts can modify some of their own properties via LDAP, which includes the <code class="language-plaintext highlighter-rouge">msDS-AllowedToActOnBehalfOfOtherIdentity</code> attribute. This attribute controls which users can authenticate to the computer <strong>as almost any account in AD</strong> via impersonation using Kerberos. This concept is called Resource-Based constrained delegation, and is described in detail by <a href="https://shenaniganslabs.io/2019/01/28/Wagging-the-Dog.html">Elad Shamir</a> and <a href="https://posts.specterops.io/another-word-on-delegation-10bdbe3cd94a">harmj0y</a>. Because of this, when we relay the computer account, we can modify the account in Active Directory and give ourselves permission to impersonate users on that computer. We can then connect to the computer with a high-privilege user and execute code, dump hashes, etc.
+The beauty of this attack is that it works by default and does not require any AD credentials to perform.</p>
+
+<h1 id="no-credentials-no-problem">No credentials, no problem</h1>
+<p>If you’ve already read the blog of Elad, you may have noticed that control over a computer account (or any other account with a Service Principal Name) is required to perform the S4U2Proxy attack. By default, any user in Active Directory can create up to 10 computer accounts. Interesting enough, this is not limited to user accounts, but can be done by existing computer accounts as well! If we can get any user or computer to connect to our NTLM relay, we can create a computer account with ntlmrelayx:</p>
+
+<p><img src="/assets/img/kerberos/computer-create.png" alt="create computer account" class="align-center" /></p>
+
+<p>It is required here to relay to LDAP over TLS because creating accounts is not allowed over an unencrypted connection.
+These computer account credentials can be used for all kinds of things in AD, such as querying domain information or even running BloodHound:</p>
+
+<p><img src="/assets/img/kerberos/computer-bloodhound.png" alt="running bloodhound" class="align-center" /></p>
+
+<h1 id="relaying-and-configuring-delegation">Relaying and configuring delegation</h1>
+<p>Let’s run the full attack. First we start <code class="language-plaintext highlighter-rouge">mitm6</code> to take over the DNS on our target, in this case <code class="language-plaintext highlighter-rouge">ICORP-W10</code> (a fully patched default Windows 10 installation), I’m limiting the attack to just this host here:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sudo mitm6 -hw icorp-w10 -d internal.corp --ignore-nofqnd
+</code></pre></div></div>
+<p>Now it might take a while before the host requests an IPv6 address via DHCPv6, or starts requesting a <code class="language-plaintext highlighter-rouge">WPAD</code> configuration. Your best chances are when the victim reboots or re-plugs their network cable, so if you’re on a long term assignment, early mornings are probably the best time to perform this attack. In either case you’ll have to be patient (or just attack more hosts, but that’s also less quiet). 
+In the meantime, we also start ntlmrelayx using the <code class="language-plaintext highlighter-rouge">--delegate-access</code> argument to enable the delegation attack and with the <code class="language-plaintext highlighter-rouge">-wh attacker-wpad</code> argument to enable <code class="language-plaintext highlighter-rouge">WPAD</code> spoofing and authentication requests:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ntlmrelayx.py -t ldaps://icorp-dc.internal.corp -wh attacker-wpad --delegate-access
+</code></pre></div></div>
+<p>After a while <code class="language-plaintext highlighter-rouge">mitm6</code> should show our victim connecting to us as DNS server for the WPAD host we set:</p>
+
+<p><img src="/assets/img/kerberos/mitm6-wpad.png" alt="wpad and mitm6" class="align-center" /></p>
+
+<p>And we see ntlmrelayx receiving the connection, creating a new computer account and granting it delegation rights to the victim computer:</p>
+
+<p><img src="/assets/img/kerberos/ntlmrelayx-delegation.png" alt="ntlmrelayx adding delegation" class="align-center" /></p>
+
+<p>Next we can use <code class="language-plaintext highlighter-rouge">getST.py</code> from <a href="https://github.com/SecureAuthCorp/impacket/blob/master/examples/getST.py">impacket</a>, which will do all the S4U2Self an S4U2Proxy magic for us. You will need the latest version of <a href="https://github.com/SecureAuthCorp/impacket">impacket from git</a> to include resource based delegation support. In this example we will be impersonating the user <code class="language-plaintext highlighter-rouge">admin</code>, which is a member of the <code class="language-plaintext highlighter-rouge">Domain Admins</code> group and thus has administrative access on <code class="language-plaintext highlighter-rouge">ICORP-W10</code>:</p>
+
+<p><img src="/assets/img/kerberos/admin-st.png" alt="getting a service ticket for the admin user" class="align-center" /></p>
+
+<p>We obtained a Kerberos Service Ticket now for the user <code class="language-plaintext highlighter-rouge">admin</code>, which is valid for <code class="language-plaintext highlighter-rouge">cifs/icorp-w10.internal.corp</code>. This only lets us impersonate this user to this specific host, not to other hosts in the network. With this ticket we can do whatever we want on the target host, for example dumping hashes with secretsdump:</p>
+
+<p><img src="/assets/img/kerberos/secretsdump-kerberos.png" alt="dumping hashes with secretsdump" class="align-center" /></p>
+
+<p>The attacker now has full control over the victim workstation.</p>
+
+<h1 id="other-abuse-avenues">Other abuse avenues</h1>
+<p>This blog highlights the use of mitm6 and WPAD to perform the relay attack entirely without credentials. Any connection over HTTP to a host that is considered part of the <code class="language-plaintext highlighter-rouge">Intranet Zone</code> by Windows can be used in an identical matter (provided automatic intranet detection is enabled). Elad’s original blog described using WebDAV to exploit this on hosts. Another attack avenue is (again) <a href="https://dirkjanm.io/abusing-exchange-one-api-call-away-from-domain-admin/">PrivExchange</a>, which makes Exchange authenticate as SYSTEM unless the latest patches are installed.</p>
+
+<h1 id="tools">Tools</h1>
+<p>The updated version of ntlmrelayx is available in a branch on <a href="https://github.com/dirkjanm/impacket/tree/rbdelrelay">my fork of impacket</a>. I’ll update the post once this branch gets merged into the main repository.</p>
+
+<h1 id="mitigations">Mitigations</h1>
+<p>As this attack consists of several components, there are several mitigations that apply to it.</p>
+<h3 id="mitigating-mitm6">Mitigating mitm6</h3>
+<p>mitm6 abuses the fact that Windows queries for an IPv6 address even in IPv4-only environments. If you don’t use IPv6 internally, the safest way to prevent mitm6 is to block DHCPv6 traffic and incoming router advertisements in Windows Firewall via Group Policy. Disabling IPv6 entirely may have unwanted side effects. Setting the following predefined rules to Block instead of Allow prevents the attack from working:</p>
+<ul>
+  <li><em>(Inbound) Core Networking - Dynamic Host Configuration Protocol for IPv6(DHCPV6-In)</em></li>
+  <li><em>(Inbound) Core Networking - Router Advertisement (ICMPv6-In)</em></li>
+  <li><em>(Outbound) Core Networking - Dynamic Host Configuration Protocol for IPv6(DHCPV6-Out)</em></li>
+</ul>
+
+<h3 id="mitigating-wpad-abuse">Mitigating WPAD abuse</h3>
+<p>If WPAD is not in use internally, disable it via Group Policy and by disabling the <code class="language-plaintext highlighter-rouge">WinHttpAutoProxySvc</code> service. Further mitigation and detection measures are discussed <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/">in the original mitm6 blog</a>.</p>
+
+<h3 id="mitigating-relaying-to-ldap">Mitigating relaying to LDAP</h3>
+<p>Relaying to LDAP and LDAPS can only be mitigated by enabling both LDAP signing and <a href="https://support.microsoft.com/en-us/help/4034879/how-to-add-the-ldapenforcechannelbinding-registry-entry">LDAP channel binding</a>.</p>
+
+<h3 id="mitigating-resource-based-delegation-abuse">Mitigating resource based delegation abuse</h3>
+<p>This is hard to mitigate as it is a legitimate Kerberos concept. The attack surface can be reduced by adding Administrative users to the <code class="language-plaintext highlighter-rouge">Protected Users</code> group or marking them as <code class="language-plaintext highlighter-rouge">Account is sensitive and cannot be delegated</code>, which will prevent any impersonation of that user via delegation. Further mitigations and detection methods are <a href="https://shenaniganslabs.io/2019/01/28/Wagging-the-Dog.html">available here</a>.</p>
+
+<h2 id="credits">Credits</h2>
+<ul>
+  <li><a href="https://twitter.com/elad_shamir">@Elad_Shamir</a> and <a href="https://twitter.com/3xocyte">@3xocyte</a> for the original research and relay POC</li>
+  <li><a href="https://twitter.com/agsolino/">@agsolino</a> for building and maintaining impacket and implementing all the cool Kerberos stuff</li>
+  <li><a href="https://twitter.com/gentilkiwi">@gentilkiwi</a> for Kekeo and <a href="https://twitter.com/harmj0y">@harmj0y</a> for Rubeus and their Kerberos research</li>
+</ul>
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2019-03-04T18:08:57+00:00">March 04, 2019</time></p>
+        
+      </footer>
+
+      <section class="page__share">
+  
+
+  <a href="https://twitter.com/intent/tweet?text=The+worst+of+both+worlds%3A+Combining+NTLM+Relaying+and+Kerberos+delegation%20https%3A%2F%2Fdirkjanm.io%2Fworst-of-both-worlds-ntlm-relaying-and-kerberos-delegation%2F" class="btn btn--twitter" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on Twitter"><i class="fab fa-fw fa-twitter" aria-hidden="true"></i><span> Twitter</span></a>
+
+  <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fdirkjanm.io%2Fworst-of-both-worlds-ntlm-relaying-and-kerberos-delegation%2F" class="btn btn--facebook" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on Facebook"><i class="fab fa-fw fa-facebook" aria-hidden="true"></i><span> Facebook</span></a>
+
+  <a href="https://plus.google.com/share?url=https%3A%2F%2Fdirkjanm.io%2Fworst-of-both-worlds-ntlm-relaying-and-kerberos-delegation%2F" class="btn btn--google-plus" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on Google Plus"><i class="fab fa-fw fa-google-plus" aria-hidden="true"></i><span> Google+</span></a>
+
+  <a href="https://www.linkedin.com/shareArticle?mini=true&url=https%3A%2F%2Fdirkjanm.io%2Fworst-of-both-worlds-ntlm-relaying-and-kerberos-delegation%2F" class="btn btn--linkedin" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on LinkedIn"><i class="fab fa-fw fa-linkedin" aria-hidden="true"></i><span> LinkedIn</span></a>
+</section>
+
+
+      
+  <nav class="pagination">
+    
+      <a href="/krbrelayx-unconstrained-delegation-abuse-toolkit/" class="pagination--pager" title="“Relaying” Kerberos - Having fun with unconstrained delegation
+">Previous</a>
+    
+    
+      <a href="/getting-in-the-zone-dumping-active-directory-dns-with-adidnsdump/" class="pagination--pager" title="Getting in the Zone: dumping Active Directory DNS using adidnsdump
+">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+    </div>
+
+    
+
+    <div class="page__footer">
+      <footer>
+        
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+    
+    
+    
+      <li><a href="https://github.com/dirkjanm"><i class="fab fa-fw fa-github" aria-hidden="true"></i> GitHub</a></li>
+    
+    
+    
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+    <li><a rel="license" href="http://creativecommons.org/licenses/by/4.0/"><img alt="Creative Commons License" style="border-width:0" src="/assets/img/cc-by.png" /></a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">All blog content is available under the <a rel="license" href="http://creativecommons.org/licenses/by/4.0/">Creative Commons BY 4.0 License</a> unless stated otherwise.
+  <br />Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> and a modified version of the "Minimal Mistakes" theme</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  <script src="/assets/js/main.min.js"></script>
+  <script src="https://use.fontawesome.com/releases/v5.2.0/js/all.js"></script>
+
+
+
+
+
+
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-G3JYRDGZVR"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-G3JYRDGZVR', { 'anonymize_ip': false});
+</script>
+
+
+
+
+
+
+
+  </body>
+</html>

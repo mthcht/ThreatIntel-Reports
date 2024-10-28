@@ -1,0 +1,1 @@
+[Link to the article](https://securelist.com/crimeware-report-fakesg-akira-amos/111483/)

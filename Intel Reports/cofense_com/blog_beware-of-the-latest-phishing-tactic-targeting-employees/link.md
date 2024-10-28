@@ -1,0 +1,1 @@
+[Link to the article](https://cofense.com/blog/beware-of-the-latest-phishing-tactic-targeting-employees/)

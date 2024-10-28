@@ -1,0 +1,1 @@
+[Link to the article](https://unit42.paloaltonetworks.com/blackcat-ransomware-releases-new-utility-munchkin/#post-130681-_v8176g40kstn)

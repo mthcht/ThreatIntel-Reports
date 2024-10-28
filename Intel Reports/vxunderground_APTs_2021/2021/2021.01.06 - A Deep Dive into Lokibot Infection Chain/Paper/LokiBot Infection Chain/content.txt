@@ -1,0 +1,254 @@
+1/17
+A Deep Dive into Lokibot Infection Chain
+blog.talosintelligence.com/2021/01/a-deep-dive-into-lokibot-infection-chain.html
+By Irshad Muhammad, with contributions from Holger Unterbrink.
+ 
+News summary
+ 
+Lokibot is one of the most well-known information stealers on the malware landscape. In
+this post, we'll provide a technical breakdown of one of the latest Lokibot campaigns.
+Talos also has a new script to unpack the dropper's third stage.
+The actors behind Lokibot usually have the ability to steal multiple types of credentials
+and other sensitive information. This new campaign utilizes a complex, multi-stage,
+multi-layered dropper to execute Lokibot on the victim machine.
+ 
+What's new?
+This sample is using the known technique of blurring images in documents to encourage users
+to enable macros. While quite simple this is fairly common and effective against users. This
+write up is intended to be a deep dive for reverse engineers into the latest tricks Lokibot is
+using to infect user machines.
+How did it work?
+The attack starts with a malicious XLS attachment, sent in a phishing email, containing an
+obfuscated macro that downloads a heavily packed second-stage downloader. The second stage
+fetches the encrypted third-stage, which includes three layered encrypted Lokibot. After a
+privilege escalation, the third stage deploys Lokibot. The Image below shows the infection
+chain.
+ 
+2/17
+So what?
+Defenders need to be constantly vigilant and monitor the behavior of systems within their
+network. This blog provides a detailed overview of how complex the infection chain is for
+Lokibot and which tricks the adversaries are using to bypass common security features and
+tools of modern operating systems.
+ 
+First-stage analysis
+When the user opens the phishing email, it presents a Spanish social engineering message
+("Payment: Find scheduled payment dates attached"). The figure below shows a screenshot of
+one of the emails we looked at.
+ 
+The Excel sheet uses another common social engineering technique by showing a blurred-out
+image of a table with the text "Changing the size of this document, please wait," in Spanish. If
+the victim clicks the "Enable Content" button, thinking it will make the image visible, a
+malicious macro is executed.
+ 
+3/17
+The macro is mainly obfuscated by using long hexadecimal variable names. The screenshot
+below shows a portion of the `Workbook_Open` function of this macro.
+ 
+The deobfuscated macro is shown below.
+4/17
+ 
+It decrypts the URL for the second-stage from hardcoded bytes, saves it to the "Templates"
+folder, and executes it. The traffic generated from the macro is shown below.
+ 
+Second-stage analysis
+The second-stage executable is packed with a Delphi-based packer. 
+Packer analysis
+The packer contains a timer `xvv` timer under `Form_main`, which unpacks the payload. The
+timer and its handler code are shown below.
+ 
+5/17
+ 
+The unpacking function performs the following steps:
+1. Loads the image resource with name `T__6541957882` into memory.
+2. Finds the anchor `WWEX` and copies data following to the new buffer.
+3. Adds `0xEE` to the bytes to decode the DLL.
+4. Reflectively loads decoded DLL into memory and executes it.
+The figure below shows the resource image that contains the encoded executable.
+ 
+The following image shows the location of the embedded executable following anchor
+`WWEX`.
+6/17
+ 
+The following code shows the code and decoded DLL.
+Unpacked DLL analysis
+The unpacked DLL is also written in Delphi. It fetches the third payload from the hardcoded
+URL.
+ 
+The DLL sets a timer, as shown below, which will execute the downloader function periodically.
+ 
+7/17
+The `Download3rdStage` will first decode `https://discord.com` and try to connect to it. Then,
+it performs a time-based anti-debug check, as shown in the code below. If any of these checks
+fail, the DLL will not download the third stage.
+Once the checks have passed, DLL will decrypt the hardcoded third-stage URL, as shown in the
+code below, and send the HTTP request.
+8/17
+In response to the request, the server sends a ~618KB long hex string, as shown below. 
+The DLL decodes the hex string using the following steps:
+1. Reverse the hex string.
+2. Convert hexadecimal digits to bytes (unhexlify).
+3. XOR decode with hardcoded key "ZKkz8PH0".
+We have written a small Python script to decrypt the third stage. The same decryption method
+was also used to decrypt the hardcoded command and control (C2).The resulting file is also a
+DLL, which the second stage reflectively loads.
+9/17
+ 
+Third-stage analysis
+The third stage is also written in Delphi. At the start, it loads a sizable binary resource named
+`DVCLAL` into memory. It then generates the key `7x21zoom8675309` from hard coded
+bytes. The key is then used to decrypt the resource data using a custom encryption algorithm.
+The malware then recovers the configuration structure from decrypted resource data. The
+structure fields are delimited by string `*()%@5YT!@#G__T@#$%^&*()__#@$#57$#!@`.
+The decryption algorithm is shown below.
+10/17
+ 
+The hex dump below shows a structure field highlighted separated by delimiters.
+The configuration structure layout is shown below.
+11/17
+ 
+Injecting malicious DLL to Notepad.exe
+Then, the malware will check if `InjectDLLToNotepadFlag` is set and `reverse_str(FileName)
++ ".url"` (mheX.url) file doesn't exist in C:\Users\<username>\AppData\Local\`. If yes, it will
+inject malicious DLL into Notepad.exe using the following steps:
+ 
+1. Launch a Notepad.exe in the suspended state (dwCreationFlag =
+CREATE_SUSPENDED).
+2. Get the imported DLL name from the malicious DLL's import table (the first one is
+"kernel32.dll") and write to the suspended process.
+3. Write the following 12-byte structure containing addresses of kernel32: LoadLibrary,
+kernel32.sleep, and DLL string.
+4. Write a 210-bytes shellcode to Notepad.exe.
+12/17
+5. Execute this shellcode in Notepad.exe using `CreateRemoteThread` and pass the pointer
+to the 12-byte structure shown above. This shellcode loads the DLL ("kernel32.dll") and
+then goes into an infinite sleep loop.
+6. Write DLL ("kernel32.dll") string again to notepad.exe.
+7. Write the 20-byte structure to Notepad.exe containing pointers to important APIs and
+two strings: imported DLL name and imported API name.
+8.  
+Write 144 bytes of shellcode to Notepad.exe.
+9. Execute this shellcode in Notepad.exe using `CreateRemoteThread` and pass the pointer
+to the 20-byte structure from step 7 as param. This shellcode will resolve the import
+pointed by the last variable of the structure in step 7, and then exits using
+`RtlExistUserThread`.
+10. Repeat Steps 2 - 9 for all of the imported DLLs and imported functions in the malicious
+DLL's import table.
+11. Write malicious DLL to Notepad.exe.
+13/17
+12. Write an eight-byte structure to Notepad.exe containing Malicious DLL base address and
+entry point.
+13. Write 122 bytes of shellcode to notepad.exe.
+14. Execute the shellcode in Notepad.exe using `CreateRemoteThread` by passing the
+pointer to structure from step 12 as param. The shellcode calls the entry-point point of
+the malicious DLL.
+Injected DLL analysis (UAC bypass using two techniques)
+ 
+It checks if `C:\Windows\Finex` exists. If not, it will drop the following file at path
+`C:\Users\Public\cde.bat`:
+ 
+Then, it drops C:\Users\Public\x.bat containing the following content.
+ 
+14/17
+Then, it drops C:\Users\Public\x.vbs.
+ 
+Then it drops, C:\Users\Public\Natso.bat.
+ 
+Then, it executes `Natso.bat`, which is a "fileless" UAC bypass found by James Forshaw. More
+details here.
+If C:\Windows\Finex still doesn't exist (which means the UAC bypass failed), it will update the
+Nasto.bat and execute it using the code shown below.
+ 
+This is another UAC bypass technique based on fodhelper.exe. More details here. On our test
+machine, the last bypass was successful, and `C:\Windows\Finex` was successfully created.
+After that, the DLL deletes the dropped file and exits.
+Decrypting and executing Lokibot
+ 
+After attempting to bypass the UAC, the third-stage DLL will check if `AutoRunKeyFlag` is set.
+For this DLL, it is not set. It will then jump to code that decrypts the Lokibot executable using
+decryption keys from the configuration structure. The first two layers are decrypted using
+`DecryptionKeyA` and `DecryptionKeyB`, and reverses all the data. After that, the final layer
+is decrypted using the same decryption method used to decrypt resource data at the start of the
+third stage.
+15/17
+The DLL contains multiple ways to execute a PE file. The execution method is decided based on
+the values of ExecutionFlag A, B, C. Their values will lead to the following code for the current
+configuration, which will decrypt the shellcode from the configuration using DecryptionKeyB,
+pass it three parameters: pointer to decrypted Lokibot .exe, a pointer to an array of string and a
+pointer to current command line.
+ 
+The shellcode will create a suspended process using the third parameter as a command line
+command and injects Lokibot into it using process hollowing.
+Conclusion
+ 
+Threat actors are getting more sophisticated when it comes to hiding their final payload. This
+dropper uses three stages and three layers of encryption to hide its final payload. The dropper
+also injects code into a suspended process to bypass UAC and uses process hollowing to execute
+its final payload. The majority of malware is getting more and more sophisticated. They are
+constantly improving their social engineering techniques to trick the user into opening
+malicious attachments and running malicious code. The malware code and its infection
+techniques is also improving constantly like we have described in this blog. The adversaries
+combine clever techniques to make detection harder. More than ever it is important to have a
+multi layered security architecture in place to detect these kinds of attacks. It isn't unlikely that
+the adversaries will manage to bypass one or the other security measures, but it is much harder
+for them to bypass all of them. These campaigns and the refinement of the TTPs being used will
+likely continue for the foreseeable future.
+Coverage
+16/17
+Ways our customers can detect and block this
+threat are listed below.
+ 
+Advanced Malware Protection (AMP) is
+ideally suited to prevent the execution of the
+malware detailed in this post. Below is a
+screenshot showing how AMP can protect
+customers from this threat. Try AMP for free
+here.
+Cisco Cloud Web Security (CWS) or Web
+Security Appliance (WSA) web scanning
+prevents access to malicious websites and
+detects malware used in these attacks.
+Network Security appliances such as Next-
+Generation Firewall (NGFW), Next-
+Generation Intrusion Prevention System
+(NGIPS), and Meraki MX can detect malicious activity associated with this threat.
+ 
+Threat Grid helps identify malicious binaries and build protection into all Cisco Security
+products.
+Umbrella, our secure internet gateway (SIG), blocks users from connecting to malicious
+domains, IPs, and URLs, whether users are on or off the corporate network.
+Additional protections with context to your specific environment and threat data are available
+from the Firepower Management Center.
+Open Source Snort Subscriber Rule Set customers can stay up to date by downloading the latest
+rule pack available for purchase on Snort.org.The following SIDs have been released to detect
+this threat: 56578 and 56577.
+IOC
+ 
+Hashes
+d5a68a111c359a22965206e7ac7d602d92789dd1aa3f0e0c8d89412fc84e24a5 (First stage XLS
+file)
+ 
+6b53ba14172f0094a00edfef96887aab01e8b1c49bdc6b1f34d7f2e32f88d172 (2nd stage packed
+downloader)
+ 
+b36d914ae8e43c6001483dfc206b08dd1b0fbc5299082ea2fba154df35e7d649 (2nd stage
+unpacked DLL)
+ 
+93ec3c23149c3d5245adf5d8a38c85e32cda24e23f8c4df2e19e1423739908b7 (3rd Stage DLL)
+ 
+21e23350b05a4b84cdf5c93044d780558e6baf81b2148fdda4583930ab7cb836 (DLL used to
+bypass UAC)
+ 
+c9038e31f798119d9e93e7eafbdd3e0f215e24ee2200fcd2a3ba460d549894ab ( Lokibot )
+ 
+17/17
+URL
+hxxp://millsmiltinon[.]com/ojHYhkfkmofwendkfptktnbjgmfkgtdeitobregvdgetyhsk/Xehmigm.exe
+ 
+Domains
+millsmiltinon.com (Hosts 2nd and 3rd Stage)
+ 
+IP
+104.223.143[.]132 (Lokibot C2)
+ 
+ 

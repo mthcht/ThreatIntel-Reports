@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Persistent Credential Theft with Authorization Plugins &mdash; &raquo; Xor&#39;d</title>
+	<meta name="description" content="Random Infosec Ramblings"><meta name="keywords" content="">
+	<link href="https://www.xorrior.com/persistent-credential-theft/" rel="canonical" /><!-- Twitter Cards --><meta name="twitter:card" content="summary" /><meta name="twitter:title" content="Persistent Credential Theft with Authorization Plugins" /><meta name="twitter:description" content="Random Infosec Ramblings" /><meta name="twitter:image" content="https://www.xorrior.com" /><!-- Google plus --><meta name="author" content="">
+	<link href="" rel="author" /><!-- Open Graph --><meta property="og:locale" content=""><meta property="og:type" content="article"><meta property="og:title" content="Persistent Credential Theft with Authorization Plugins"><meta property="og:description" content="Random Infosec Ramblings"><meta property="og:url" content="https://www.xorrior.com/persistent-credential-theft/"><meta property="og:site_name" content="Xor'd">
+	<link href="https://fonts.googleapis.com/css?family=Inconsolata:400,700" rel="stylesheet" type="text/css" />
+	<link href="/assets/vendor/normalize-css/normalize.css" rel="stylesheet" />
+	<link href="/css/main.css" rel="stylesheet" />
+	<link href="/assets/vendor/highlight/styles/solarized_dark.css" rel="stylesheet" />
+	<link href="/assets/vendor/font-awesome/css/font-awesome.css" rel="stylesheet" />
+</head>
+<body>
+<div class="wrapper">
+<header class="header">
+<div class="navigation"><a class="logo" href="/">Xor&#39;d</a>
+<ul class="menu">
+	<li class="menu__entry"><a href="/about">About</a></li>
+	<li class="menu__entry"><a href="/">Blog</a></li>
+</ul>
+</div>
+
+<ul class="social-links">
+</ul>
+</header>
+
+<h1 class="page-title post-title"></h1>
+
+<div class="page-title__text post-title__text">Persistent Credential Theft with Authorization Plugins</div>
+
+<div class="page-title__subtitle post-title__subtitle"></div>
+
+<div class="content">
+<p>Credential theft is often one of the first tactics leveraged by attackers once they&rsquo;ve escalated privileges on a victim&rsquo;s machine. Credential theft on OSX has become more difficult with the introduction of System Integrity Protection (<a href="https://support.apple.com/en-us/HT204899">SIP</a>). Attackers can no longer use methods such as extracting the master keys from the <em>securityd</em> process and decrypting the victim&rsquo;s login keychain. An example of this can be seen <a href="http://juusosalonen.com/post/30923743427/breaking-into-the-os-x-keychain">here</a>. SIP prevents any user (even root) from modifying system files, directories, and processes. This might lead an attacker to use other methods for credential theft including keylogging, prompting the user for credentials, or triaging the local file system for plaintext credentials. However, there is another alternative called <a href="https://developer.apple.com/documentation/security/authorization_plug-ins">authorization plugins</a>.</p>
+
+<p>Authorization plugins are used to extend the <a href="https://developer.apple.com/documentation/security/authorization_services">authorization services API</a> and implement mechanisms that are not natively supported by the OS. A legitimate use case would be implementing multi-factor authentication with 3rd party software such as <a href="https://duo.com/docs/macos">Duo</a>. Each plugin can have several mechanisms, or functions contained within the plugin that implement custom logic to perform authorization. These mechanisms are also present in the <a href="https://developer.apple.com/library/archive/documentation/Security/Conceptual/authorization_concepts/02authconcepts/authconcepts.html#//apple_ref/doc/uid/TP30000995-CH205-TPXREF19">policy database</a>. This database contains definitions for various authorization rights. The definition for a particular authorization right can reference several mechanisms, each paired with their corresponding authorization plugin. Apple briefly describes how this works during the logon process <a href="https://developer.apple.com/library/archive/technotes/tn2228/_index.html#//apple_ref/doc/uid/DTS40007991-CH1-SUBSECTION4">here</a>. Essentially, the <em>loginwindow</em> process tries to obtain the system.login.console right. The definition in the policy database lists several mechanisms that are executed when this happens. A custom plugin, along with its mechanism, can be inserted into this list. The position of the entry in this list will determine when it will be executed and should be determined based on how the plugin will interact with the OS during the logon process. Additionally, a plugin can be configured to run in a privileged or un-privileged context. This is indicated by the entry string within the policy database. For privileged execution, &ldquo;,privileged&rdquo; will need to be appended to the mechanism entry. An author may choose to use an unprivileged plugin if they wish to access the UI and present a prompt to the user. Additional information on plugin context issues can be found <a href="https://developer.apple.com/library/archive/technotes/tn2228/_index.html#//apple_ref/doc/uid/DTS40007991-CH1-SUBSECTION4">here</a>.</p>
+
+<p>An interesting (especially for attackers) feature of authorization plugins is the ability to pass <a href="https://developer.apple.com/library/archive/technotes/tn2228/_index.html#//apple_ref/doc/uid/DTS40007991-CH1-SUBSECTION4">context</a> values between plugins. These values contain important details about the user, including, the home directory, uid, and even the password in clear-text. This feature exists so that developers who wish to utilize both a privileged and un-privileged plugin, can share data between the two in a relatively easy way. Authorization plugins are an ideal credential theft and persistence mechanism for attackers. Persistent credential theft with the ability to execute code at any point during the login process is invaluable. Installing an authorization plugin is a relatively easy process, which we&rsquo;ll cover in the next section.</p>
+
+<h3 id="installation">Installation</h3>
+
+<p>Authorization plugins are comprised of two components; the bundle file that contains all of the plugins code, on disk, and an entry into the authorization database. The authorization database is used by the security server to authorize specific rights for a given user, based on rules/policies contained within the database. Applications may change the rules at any given time using the <em><a href="https://developer.apple.com/documentation/security/1399311-authorizationrightset?language=objc">AuthorizationRightSet</a></em>, <em><a href="https://developer.apple.com/documentation/security/1397961-authorizationrightget?language=objc">AuthorizationRightGet</a></em>, and <em><a href="https://developer.apple.com/documentation/security/1393681-authorizationrightremove?language=objc">AuthorizationRightRemove</a></em> API calls. When adding an entry to the database, the <em>AuthorizationRightSet</em> function should be called with a reference to a NSDictionary containing keys and values for each authentication mechanism. An example is shown in the Apple documentation <a href="https://developer.apple.com/documentation/security/authorization_plug-ins/using_authorization_plug-ins?language=objc">here</a>. Alternatively, the <em>AuthorizationRightGet</em> function can be used to obtain the NSDictionary value for an existing right. Then modify the dictionary and add an entry for the custom authorization plugin using the <em>AuthorizationRightSet</em> function. A python example of this can be seen <a href="https://gist.github.com/xorrior/656c2f0cdf0891926e99796625674877">here</a>.</p>
+
+<p>The authorization database can also be modified via the security command line tool. If an attacker wanted to add a malicious plugin to the <em>system.login.console</em> policy, they would need to first read the policy from the authorization database into a plist file:</p>
+
+<div class="highlighter-rouge">
+<div class="highlight">
+<pre class="highlight">
+<code>security authorizationdb read system.login.console &gt;&gt; system.login.console.plist
+</code></pre>
+</div>
+</div>
+
+<p>Then insert their bundle as one of the mechanisms in the following format:</p>
+
+<div class="highlighter-rouge">
+<div class="highlight">
+<pre class="highlight">
+<code>&lt;string&gt;[Plugin Name]:auth,privileged&lt;/string&gt;
+</code></pre>
+</div>
+</div>
+
+<p>PlistBuddy can also do this with the following command:</p>
+
+<div class="highlighter-rouge">
+<div class="highlight">
+<pre class="highlight">
+<code>/usr/libexec/PlistBuddy -c &ldquo;add :mechanisms:[HomeDir Offset] string [bundlename]:login,privileged&rdquo; &lt;Plist filename&gt;
+</code></pre>
+</div>
+</div>
+
+<p>Once the plist file has been updated, sync this change to the database with the following command:</p>
+
+<div class="highlighter-rouge">
+<div class="highlight">
+<pre class="highlight">
+<code>security authorizationdb write system.login.console &lt; /path/to/plist/file
+</code></pre>
+</div>
+</div>
+
+<h3 id="weaponization">Weaponization</h3>
+
+<p>Let&rsquo;s walk through creating a plugin with Xcode and then add in logic for payload execution. In this example we&rsquo;ll use a shell command to launch an <a href="https://github.com/its-a-feature/Apfell">Apfell</a> payload, but a python empire payload will work as well.</p>
+
+<ol>
+	<li>First open Xcode and choose the &ldquo;create a new xcode project option&rdquo;.</li>
+	<li>
+	<p>Under macOS, select the bundle template. Give the project a name and then click next. <img alt="Xcode Bundle Project Template" src="https://lh3.googleusercontent.com/xcQ7aSj6iIX6_3XoNuWPbcsun7smrE3fXZm5SeiCYdji9yzAGX5WzizDiqaACkoR2M4zYnjYpAg=s500" title="Xcode Templates" /></p>
+	</li>
+	<li>
+	<p>Next, download and save all three files listed <a href="https://gist.github.com/xorrior/a5abd783399332fb9d5b25032d41d442">here</a> in the project folder. Add all three files to the project by right-clicking the project folder in the navigation pane and then select add files to &ldquo;[your project name]&rdquo;. <img alt="Adding files to the project" src="https://lh3.googleusercontent.com/s1f5v80a1MZoX6uTqwn0iuZpDdAhDeEJ1xzM3zvvI6niIm7hvBjg_TmfjHmSE4PTfrJqjaA7Thw" /></p>
+	</li>
+	<li>
+	<p>Then, setup Apfell and generate a JXA payload. Refer to <a href="https://its-a-feature.github.io/posts/2018/07/bare-bones-apfell-server-code-release/">this</a> blog post by <a href="https://twitter.com/its_a_feature_">@its_a_feature_</a> for setup and payload creation instructions.</p>
+	</li>
+	<li>
+	<p>Copy the JXA one-liner that begins with <em>osascript -l JavaScript</em> and drop it into the appropriate location. <img alt="Adding the JXA payload to the project" src="https://lh3.googleusercontent.com/_iJLJAzxnKKSi_PF5nzTqkMMuR3o4JlhoVnBsYXZq4NanoHO_RyR0QUlnqWyEXJuhyjy0VzCSfk=s600" /></p>
+	</li>
+	<li>Select product from the top menu bar and then select build. The resulting bundle will be shown under the product directory on the left navigation pane. Right-click on the bundle file and then select show in finder. Copy the file to an accessible location of your choosing. <img alt="Building the project" src="https://lh3.googleusercontent.com/xQVFv6r6758W1ncw1EGZNwX6pj0mTu5F4-FQslbpJjvyIv05vYQ4_aZ9ppakMerdtQwN8gEHefw" /></li>
+</ol>
+
+<p><img alt="Show the bundle's location in finder" src="https://lh3.googleusercontent.com/POLCmZFGCcE07h8I-r138qzcC6UgPtwpJEc24LKSbBybTah--aNSaTxV9RyI5X9Vihg2bmjmvx4" /></p>
+
+<p>Now the plugin should be ready for installation. Use the command line tool or the Authorization APIs described in the installation section to accomplish this.</p>
+
+<p>Once the plugin is installed, either restart or complete a logon/logoff cycle to trigger execution. Note that the plugin will be loaded into the authorizationhost process located here:</p>
+
+<div class="highlighter-rouge">
+<div class="highlight">
+<pre class="highlight">
+<code>/System/Library/Frameworks/Security.framework/Versions/A/MachServices/authorizationhost.bundle/Contents/MacOS/authorizationhost
+</code></pre>
+</div>
+</div>
+
+<p>Now for a quick demo of installing and executing an authorization plugin. You can find the Xcode project used for this demo <a href="https://github.com/xorrior/OSX/tree/master/evilAuthPlugin">here</a>.</p>
+<iframe allowfullscreen="" frameborder="0" height="281" mozallowfullscreen="" src="https://player.vimeo.com/video/293999447" webkitallowfullscreen="" width="500"></iframe>
+
+<h3 id="detection">Detection</h3>
+
+<p>For detection considerations, a solid starting point would be to create rules based on file creation in the /Library/Security/SecurityAgentPlugins directory. Authorization plugins can only be installed in that directory. An example osquery rule for file creation events should look like this:</p>
+
+<div class="highlighter-rouge">
+<div class="highlight">
+<pre class="highlight">
+<code>SELECT * FROM file_events WHERE target_path LIKE &#39;/Library/Security/SecurityAgentPlugins/%&#39; AND action = &#39;added&#39;;
+</code></pre>
+</div>
+</div>
+
+<p>Command line signatures based on usage of the security binary to modify the authorization database should be moderately effective for detection. Additionally, for non-enterprise user&rsquo;s, I would highly recommend installing some of the security software offered by <a href="https://objective-see.com/products.html">Objective-See</a>. <em>KnockKnock</em>, the persistence scanner, has had detection rules for authorization plugins since 2015!</p>
+
+<p><img alt="KnockKnock Changelog" src="https://lh3.googleusercontent.com/7nBCJPrTHTyvkxzUe1UcKZkh2zDzuzVjEwn8wZskTFvl0rTcs-NVrZDfbike2v4UJJcUVJAye98" /></p>
+
+<p>Authorization plugins are a high risk/reward method of persistence and credential theft. If something goes a wry with the the plugins&rsquo; installation, the victim user will almost certainly be suspicious and may alert defenders to your presence. On the flipside, they provide an effective method for credential theft and code execution. Attackers can continually harvest credentials even in the event that the end-user changes their password. Similarly, you can accomplish this on windows with mimikatz and it&rsquo;s <a href="https://adsecurity.org/?p=1760">Security Support Provider</a>.</p>
+</div>
+
+<div class="about">
+<div class="about__devider">*****</div>
+
+<div class="about__text">Written by <strong> Chris Ross </strong> on <strong>17 October 2018</strong></div>
+</div>
+</div>
+<script src="/assets/vendor/highlight/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script><script>
+  (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+  (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+  m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+  })(window,document,'script','https://www.google-analytics.com/analytics.js','ga');
+
+  ga('create', 'UA-55902745-2', 'auto');
+  ga('send', 'pageview');
+
+</script></body>
+</html>

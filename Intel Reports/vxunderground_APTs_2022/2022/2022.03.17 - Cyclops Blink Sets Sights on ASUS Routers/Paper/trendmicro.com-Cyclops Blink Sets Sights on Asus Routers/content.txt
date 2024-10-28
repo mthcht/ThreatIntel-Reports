@@ -1,0 +1,283 @@
+1/9
+www.trendmicro.com /en_us/research/22/c/cyclops-blink-sets-sights-on-asus-routers--.html
+Cyclops Blink Sets Sights on Asus Routers
+⋮ Feike Hacquebord, ⋮ Stephen Hilt, ⋮ Fernando Merces | 3/17/2022
+Figure 1. The function that initializes the modules
+With additional insights from Philippe Z Lin
+Note: This article has been updated on March 17, 2022, 2:00 a.m. ET to include Asus’ security bulletin.
+Cyclops Blink, an advanced modular botnet that is reportedly linked to the Sandworm or Voodoo Bear advanced
+persistent threat (APT) group, has recently been used to target WatchGuard Firebox devices according to an analysis
+performed by the UK’s National Cyber Security Centre (NCSC). We acquired a variant of the Cyclops Blink malware
+family that targets Asus routers. This report discusses the technical capabilities of this Cyclops Blink malware variant
+and includes a list of more than 150 current and historical command-and-control (C&C) servers of the Cyclops Blink
+botnet. This list aims to aid cybersecurity defenders in searching for affected devices in their networks and starting
+the remediation process.  We have reached out to Asus regarding our investigation, and they have created a security
+bulletin that includes a security checklist to help prevent Cyclops Blink attacks, as well as a list of affected Asus
+products.
+Our data also shows that although Cyclops Blink is a state-sponsored botnet, its C&C servers and bots affect
+WatchGuard Firebox and Asus devices that do not belong to critical organizations, or those that have an evident
+value on economic, political, or military espionage. Hence, we believe that it is possible that the Cyclops Blink
+botnet’s main purpose is to build an infrastructure for further attacks on high-value targets. Cyclops Blink has been
+around since at least June 2019, and a considerable number of its C&C servers and bots are active for up to about
+three years.  
+The Sandworm APT group has been attributed as creating both Cyclops Blink and the VPNFilter internet of things
+(IoT) botnet. VPNFilter, first discovered in 2018, targeted router and storage devices. It was also reported to have
+infected hundreds of thousands of devices. In 2021, Trend Micro published a technical analysis of VPNFilter, which
+includes a discussion of how the botnet continues to affect infected systems two years after its discovery. Sandworm
+was also responsible for many high-profile attacks, including the 2015 and 2016 attacks on the Ukrainian electrical
+grid, the 2017 NotPetya attack, the 2017 French presidential campaign, the 2018 Olympic Destroyer attack on the
+Winter Olympic Games, and a 2018 operation against the Organization for the Prohibition of Chemical Weapons
+(OPCW). 
+Cyclops Blink malware analysis 
+Cyclops Blink is a modular malware written in the C language. In its core component, the first thing that the malware
+does is to check if its executable file name starts with "[k". If it does not, it performs the following routine: 
+1. It redirects both stdout and stderr file descriptors to /dev/null. 
+2. It sets the default handlers for SIGTERM, SIGINT, SIGBUS, SIGPIPE, and SIGIO signals. 
+3. It reloads itself with a new "[ktest]" process name. 
+It then waits for 37 seconds before it sets up its hard-coded parameters. These include the hard-coded C&C servers
+and the interval that should be used to communicate with the C&C servers. 
+It also creates a pipe for inter-process communication (IPC) by calling the pipe() function for getting two file
+descriptors for reading and writing data. It also enables non-blocking I/O for the writing file descriptor by using ioctl(). 
+After this, a new data packet will be created in memory, which will then be sent to a C&C server. The details of this
+communication are covered later in this analysis. 
+2/9
+For every hard-coded TCP port used to communicate with the C&C servers, the malware creates a rule in Netfilter
+— the Linux kernel firewall — using the iptc_insert_entry() function from libiptc1 to allow output communication to it.
+The rules have the following parameters: 
+Protocol: TCP
+Chain: filter
+Table: OUTPUT
+Action: ACCEPT
+Destination ports: 636, 994, and 995
+For an unknown reason, the malware deletes the aforementioned rules and creates them again, this time using the
+iptables command via the system() function. The commands are as follows: 
+iptables -D OUTPUT -p tcp --dport %d -j ACCEPT 
+iptables -I OUTPUT -p tcp --dport %d -j ACCEPT 
+The OpenSSL library is then initialized, and the core component proceeds to initialize the hard-coded modules. 
+Modules initialization 
+During this part, the core component initializes the modules. Communication with the modules is performed via pipes.
+For each hard-coded module, the malware creates two pipes before executing them in their own child processes. 
+In Figure 1, we inferred the following mod_t structure:
+Figure 2. Inferred mod_t
+structure; the last member is
+unknown.
+Parameters
+The parameters are then initialized. They consist of a 592-byte structure containing essential information sent to the
+modules via pipes. This information includes:
+A “<p: ” string header
+The pipe of the core component
+All C&C IP addresses and ports
+The local IP address
+An interval for C&C server communication
+When the next packet to be sent to a C&C server is
+The main process PID
+A hard-coded ID (we saw 0xA08F078B, 0xBD0A5B36, and 0xA244E5E2)
+The parameters are pushed to the modules, which are initialized at this point.
+C&C communication
+After obtaining data from the modules, the core component starts the encryption routines that will cipher the data
+before sending it to the C&C server.
+Encryption
+Cyclops Blink encrypts data using OpenSSL functions that should be available in the infected device as they are
+dynamically loaded. 
+The data is encrypted using AES-256 in cipher block chaining (CBC) mode with a randomly generated 256-bit key
+and 128-bit initialization vector (IV). It is then encrypted using a hard-coded RSA-2560 (320-bit) public key unique to
+each sample.
+The malware authors decided to use the EVP_SealInit() function. This function performs all of the aforementioned
+encryption steps, including the random AES key and IV generation.
+3/9
+The C&C server must have the corresponding RSA private key to decrypt the data.
+After encryption, if the total packet length is greater than 98,303 bytes, the packet is sent.
+Data transferring
+To send data to the C&C server, the core component performs a TLS handshake with a randomly chosen C&C server
+at a random TCP port, both of which are from a hard-coded list.
+After choosing an IP address and a TCP port pair, the core component creates a child process to perform the
+communication. The child process will connect to the C&C server and write four bytes to the SSL socket. These four
+bytes are the packet size that it wants to send.
+Figure 3. The child process writes four bytes to the SSL socket.
+The server must reply with an exact four-byte answer, which is the victim's IPv4 address.
+10 bytes are then written to the core component pipe. The data follows a specific format. For example: 
+Packet length Target module Command Data (victim's IPv4 address)
+00 00 00 0a
+00
+07
+c0 a8 00 01
+The core component then receives more data from the C&C server. This time, it expects an encrypted packet to be
+decrypted using the hard-coded RSA-2560 public key. 
+The malware expects a response where the first four bytes are the size of the packet followed by the encrypted data. 
+Figure 4. Core component code that receives and decrypts data from the C&C server
+If something is received, it is decrypted and written to the main pipe. For decryption, the malware uses the
+RSA_public_decrypt() function, which decrypts data encrypted with a corresponding private key, leveraging the
+“reversibility” of the RSA encryption algorithm.
+Finally, a variable containg the next time a packet should be sent is updated and all of the parameters are sent to the
+modules again. This is because the core component can receive new parameters from the C&C servers.
+Commands
+The data received from the C&C servers comprises either commands to the core component itself or to one of its
+modules.
+First, the core component sends the supported commands to the C&C server and then enters in a loop where it
+expects one of the commands.
+4/9
+If a command targets the core component, it can be one of the following: 
+Command ID Action
+0
+Terminates the program
+1
+Bypasses the data-sending interval and sends data to C&C servers immediately
+2
+Adds a new C&C server to the list in memory
+3
+Sets time to send the next packet to the C&C server
+4
+Sets time to send the next packet to the C&C server
+5
+Adds a new module (an ELF file should be received following the command)
+6
+Reloads the malware
+7
+Sets the local IP address parameter
+8
+Sets a new worker ID
+9
+Sets an unknown byte value
+10
+Resends configuration to all running modules
+Modules
+Asus (0x38) 
+This module can read and write from the devices' flash memory. The flash memory is used by these devices to store
+the operating system, configuration, and all files from the file system. Our research was carried out on the RT-AC68U,
+but other Asus routers such as RT-AC56U might be affected as well. It’s important to note, however, that since the
+malware is modular in nature, it can be easily recompiled to target any other device. The samples we’ve obtained
+work in the conditions mentioned in this report, but the malware actors seem ready to target any other router model or
+brand. In fact, this is what they have done with WatchGuard — it’s the same code, but it has been recompiled for the
+brand. 
+First, the module examines the content /proc/mtd file, which provides general information about the devices’ Memory
+Technology Device (MTD) subsystem. The MTD provides an abstraction layer to access the device's flash memory.
+The malware looks for the strings “linux” and “rootfs” and reads it using a printf()-like format:
+Figure 5. The module looks for “linux” and “rootfs” strings
+The inferred mdt_data_t structure is as follows:
+5/9
+Figure 6. The mtd_data_t
+structure
+The data is read to this structure. The content of /proc/mtd for an Asus RT-AC68U device is as follows:
+Figure 7. Typical /proc/mtd from an Asus RT-AC68U router
+Therefore, for the case here, the malware would open /dev/mtd2, which is the partition where the Linux kernel image
+is stored. Why the malware authors decided to read either “linux” or “rootfs” partition is unclear. Based on our
+knowledge, they have quite different purposes. While the first holds the operating system, the second stores
+programs’ critical files, such as executables, data, and libraries.
+Cyclops Blink reads 80 bytes from the flash memory, writes it to the main pipe, and enters a loop to wait for a
+command to replace the partition content:
+Figure 8. Asus module main loop
+If the data coming from the core component starts with “<p:”, it means that it is a parameter for this module and 80
+bytes will be written to the flash memory, effectively replacing its content. 
+6/9
+The writing is done by the j_save_data() function. It does this by correctly erasing the NAND eraseblocks first via
+ioctl() calls, and then writing the new content to them, as the following image shows:
+Figure 9. Cyclops Blink Asus module code for writing to raw flash memory
+As the flash memory content is permanent, this module can be used to establish persistence and survive factory
+resets. 
+Although it cannot be used as proof of attribution, the preceding code reminded us of a routine from the third-stage
+code of VPNFilter’s process called “dstr” that was intended to “brick” the infected device. Apart from deleting many
+important files and even trying to delete the whole root file system, this particular VPNFilter stage also writes many
+0xff bytes to the raw flash memory: 
+Figure 10. VPNFilter “dstr” third-stage code for writing to raw flash memory
+System reconnaissance (0x08)
+This module is responsible for sending information from the infected device to the C&C server. The following data is
+obtained from an infected device:
+The Linux version, which the module gets by calling the uname() function and /etc/issue file
+Information about the device’s memory consumption, which it gets by calling the sysinfo() function
+The SSD storage information, which it gets by calling the statvfs() function
+The content of the following files:
+7/9
+/etc/passwd
+/etc/group
+ /proc/mounts
+ /proc/partitions
+Information about the network interfaces, which it gets by calling the if_nameindex() and iotctl() functions with
+the SIOCGIFHWADDR and SIOCGIFADDR commands.
+File download (0x0f)
+This module can download files from the internet. The DNS resolution is performed using DNS over HTTPS (DoH).
+The malware sends an HTTP POST request to a Google DNS Server (8.8.8.8) using the following headers:
+Figure 11. HTTP POST request over SSL for DNS resolution
+This module seems to be an earlier version of the same module (0x0f) that is used by the Cyclops Blink variant
+reported by NCSC. The main differences between the modules are as follows:
+This module does not have an upload feature.
+The 0x1 bit in the control flags is used in this module to specify if the download should be done via HTTPS.
+Infrastructure
+We have been able to determine that the botnet of Cyclops Blink infected routers from both compromised
+WatchGuard devices and Asus routers. These compromised devices periodically connect to C&C servers that are
+themselves hosted on compromised WatchGuard devices. We have evidence that the routers of at least one vendor
+other than Asus and WatchGuard are connecting to Cyclops Blink C&Cs as well, but so far we have been unable to
+collect malware samples for this router brand.  
+The botnet of Cyclops Blink has been around for some time. Using historical data of internet-wide scans and SSL
+certificate data, it is likely that Cyclops Blink dates back to at least June 2019. Since June 2019, the actor has issued
+more than 50 SSL certificates that were used on WatchGuard C&Cs on various TCP ports (as far as we are aware,
+the following TCP ports were used: 636, 989, 990, 994, 995, 3269, and 8443). 
+In Appendix A, we have listed both the live and inactive C&Cs used by Cyclops Blink for the benefit of network
+defenders. We have observed that some of the WatchGuard and Asus bots were never cleaned up because these
+routers still try to connect periodically to old C&Cs that were secured or taken offline.  
+8/9
+Figure 12. The timeline of several SSL certificates that were issued for Cyclops Blink C&Cs
+Our investigation shows that there are more than 200 Cyclops Blink victims around the world. Typical countries of
+infected WatchGuard devices and Asus routers are the United States, India, Italy, Canada, and a long list of other
+countries, including Russia. It should be noted that these victims do not appear to be evidently valuable targets for
+either economic, military, or political espionage. For example, some of the live C&Cs are hosted on WatchGuard
+devices used by a law firm in Europe, a medium-sized company producing medical equipment for dentists in
+Southern Europe and a plumber in the United States. This is in line with the increasing number of brute-force attacks
+performed by other APT groups such as Pawn Storm, a group that has compromised numerous assets like email
+addresses and email servers of targets that are typically not aligned with Pawn Storm’s objectives. Just like Pawn
+Storm, Sandworm is fishing with a wide net or looking to compromise assets on a larger scale. 
+Figure 13. The number of months that Cyclops Blink C&Cs have been live; it is important to note that live C&Cs during the time of repo
+Conclusion and security recommendations
+Over the past few years, IoT attacks have been escalating globally and internet routers have been one of the primary
+targets. There are several reasons that these devices are favored by an attacker — the infrequency of patching, the
+lack of security software, and the limited visibility of defenders. Combined, these allow for the possibility of what we
+refer to as "eternal botnets." Once an IoT device is infected with malware, an attacker can have unrestricted internet
+9/9
+access for downloading and deploying more stages of malware for reconnaissance, espionage, proxying, or anything
+else that the attacker wants to do. The underlying operating systems for the majority of IoT devices is Linux, which is
+also used by many powerful systems tools. This can allow attackers to add anything else that they might need to
+complete their attacks. In the case of Cyclops Blink, we have seen devices that were compromised for over 30
+months (about two and a half years) in a row and were being set up as stable C&C servers for other bots. 
+The NCSC report covered malware targeting a specific vendor, namely WatchGuard. Based on our previous analysis
+of VPNFilter, we assumed that there were more vendors being attacked by this group. The vendors that were
+targeted by VPNFilter were Asus, D-Link, Huawei, Linksys, MikroTik, Netgear, QNAP, TP-Link, Ubiquiti, UPVEL, and
+ZDE. In the case of Cyclops Blink, we received samples targeting Asus routers that were not previously reported on.
+The Asus version of the Cyclops Blink malware that we have analyzed showed some differences compared to the
+WatchGuard versions that have been previously discussed. The samples that we have analyzed are compiled for
+ARM and are dynamically linked against uClibc. They also contain a module that specifically targets Asus routers.
+Asus is likely only one of the vendors that is currently being targeted by Cyclops Blink. We have evidence that other
+routers are affected too, but as of reporting, we were not able to collect Cyclops Blink malware samples for routers
+other than WatchGuard and Asus. Looking into the malware and the infrastructure being used by Cyclops Blinks
+actors gives us some clues about the other vendors that might be affected and how widespread this malware is. By
+sharing this additional technical observation, we aim to help network defenders, as well as those likely to be targeted
+by APT groups (such as Sandworm), gain a more complete picture of the Cyclops Blink campaign. 
+Based on our observation, we strongly believe that there are more targeted devices from other vendors. This
+malware is modular in nature and it is likely that each vendor has different modules and architectures that were
+thought out well by the Cyclops Blink actors. Moreover, the purpose of this botnet is still unclear: Whether it is
+intended to be used for distributed denial-of-service (DDoS) attacks, espionage, or proxy networks remains to be
+seen. But what is evident is that Cyclops Blink is an advanced piece of malware that focuses on persistence and the
+ability to survive domain sinkhole attempts and the takedown of its infrastructure. The APT group behind this malware
+has learned from its VPNFilter campaigns and continues to attack IoT devices such as routers. 
+In the age of work-from-home (WFH) during the pandemic, it’s possible that espionage is part of the reason that IoT
+devices are still major targets for advanced attackers. The more routers are compromised, the more sources of
+powerful data collection — and avenues for further attacks — become available to attackers. Having a distributed
+infrastructure also makes it more difficult for cybersecurity teams to take down the whole attack. This is also why,
+after more than two years, there are still live VPNFilter hosts out there.  
+Organizations can protect themselves from Cyclops Blink attacks by using strong passwords and re-examining their
+security measures. It is also important to ensure that only the services that absolutely need to be exposed to the
+internet are exposed. Access to these services should be limited, which can be achieved by configuring a virtual
+private network (VPN) that can access those services remotely. It’s also important to set reminders to check if devices
+such as routers, cameras, network-attached storage (NAS) devices, and other IoT devices have been patched or
+otherwise.  
+If it is suspected that an organization’s devices have been infected with Cyclops Blink, it is best to get a new router.
+Performing a factory reset might blank out an organization’s configuration, but not the underlying operating system
+that the attackers have modified. If a particular vendor has firmware updates that can address a Cyclops Blink attack
+or any other weakness in the system, organizations should apply these as soon as possible. However, in some
+cases, a device might be an end-of-life product and will no longer receive updates from its vendor. In such cases, an
+average user would not have the ability to fix a Cyclops Blink infection.
+While the Cyclops Blink malware variant that we analyzed in this report is complicated in nature, one thing proves to
+be unmistakable when it comes to the Sandworm group that created it: Sandworm is a persistent and sophisticated
+group whose motives are clearly at odds with those that would be expected from groups that are primarily financially
+motivated. Sandworm’s previous high-profile victims and their attacks’ substantial impact on these organizations are
+particularly worrying — even more so for a group that quickly learns from past errors, comes back stronger time and
+time again, and for whom international repercussions seem minimal at best.
+The indicators of compromise (IOCs) can be found in this appendix.

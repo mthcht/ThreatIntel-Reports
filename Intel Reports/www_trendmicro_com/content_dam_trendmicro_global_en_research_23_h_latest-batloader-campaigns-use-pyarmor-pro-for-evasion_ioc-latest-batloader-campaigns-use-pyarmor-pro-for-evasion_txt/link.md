@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/h/latest-batloader-campaigns-use-pyarmor-pro-for-evasion/ioc-latest-batloader-campaigns-use-pyarmor-pro-for-evasion.txt)

@@ -1,0 +1,1 @@
+[Link to the article](https://cybersecurity.att.com/blogs/labs-research/hijacked-how-cybercriminals-are-turning-anti-virus-software-against-you)

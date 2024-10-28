@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/24/d/cybercriminals-and-nation-states-sharing-compromised-networks/ioc-router-roulette-cybercriminals-and-nation-states-sharing-compromised-networks.txt)

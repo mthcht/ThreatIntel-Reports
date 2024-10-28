@@ -1,0 +1,153 @@
+New Campaign delivers orcus rat
+blog.morphisec.com/new-campaign-delivering-orcus-rat
+This post was authored by Michael Gorelik, Alon Groisman and Bruno Braga.
+A new, highly sophisticated campaign that delivers the Orcus Remote Access Trojan is
+hitting victims in ongoing, targeted attacks. Morphisec identified the campaign after
+receiving notifications from its advanced prevention solution at several deployment sites.
+(Morphisec’s Moving Target Defense technology immediately stopped the threat.) The
+attack uses multiple advanced evasive techniques to bypass security tools. In a successful
+attack, the Orcus RAT can steal browser cookies and passwords, launch server stress tests
+(DDoS attacks), disable the webcam activity light, record microphone input, spoof file
+extensions, log keystrokes and more. (More about Orcus RAT below.)
+The forensic data captured by Morphisec from the attack showed a high correlation to
+additional samples in the wild, indicating a single threat actor is behind multiple
+campaigns, including this one.
+This threat actor specifically focuses on information stealing and .NET evasion. Based on
+unique strings in the malware, we have dubbed the actor PUSIKURAC. Before executing the
+attacks, PUSIKURAC registers domains through FreeDns services. It also utilizes legitimate
+free text storage services like paste, signs its executables, heavily missuses commercial
+.NET packers and embeds payloads within video files and images.
+In this blog we choose to focus and demystify one specific attack chain executed by the
+attacker. We will show the full attack chain, analyzing one of the more interesting malware
+downloaders that we have investigated over the past year, including its delivered payload -
+the Orcus RAT.
+Technical explanation
+1/13
+Based on the initial attack data, we could see that the attack flow proceeds as follows: A
+persistent VBscript executes a PowerShell script that downloads a .NET executable
+obfuscated and encrypted by ConfuserEx. The downloaded executable performs known
+UAC bypass through event viewer registry hijacking to get the highest privileges.
+The running process with the highest privileges downloads a legitimate Ramadan-themed
+Coca-Cola advertising video, which contains an embedded .NET Orcus RAT.
+Each stage of the attack includes additional obfuscation and custom encryption steps, as
+described below.
+Downloader
+One of the more interesting stages of the attack is the downloader -
+System32Batch94ver1.exe (B4136B21B9E95FD1FA9C52BD897F4D2F). The .NET
+downloader is signed by a non-valid Notepad++ certificate.
+2/13
+The downloader is encrypted by a known obfuscation framework (ConfuserEx) and further
+obfuscated by a custom algorithm that can transform strings representing binary number
+patterns to readable strings and byte arrays. The malware also has the functionality of
+downloading additional stages from paste.ee & bit.ly under certain conditions.
+ConfuserEx encrypted binary:
+Most of the ConfuserEx unpackers didn’t fully work on this sample out of the box; we
+needed to modify one of the unpackers. Following a successful control flow repair,
+decryption of constants, strings and the de-obfuscation of the names we identified a
+3/13
+readable .NET library.
+As noted previous, we needed to apply some of the decoding algorithms implemented
+within the binary in order to deobfuscate the next stage binary patterns (similar patterns
+are downloaded from hxxps://paste[.]ee/r/O53RV). The identified strings revealed the
+persistency methods of the binary, privilege escalation techniques used to bypass UAC,
+and next stage artifacts embedded. Some of these strings are included in Table 1 below:
+4/13
+Although the original string table includes much more information, we will focus on the
+strings included in the table above.
+The eventvwr.exe, mmc and mscfile registry hijack clearly indicate a known UAC bypass
+technique utilized by malware over the last 2 years – hijacking the mscfile registry key will
+cause the event viewer to execute the given process with highest privileges. The vmtoolsd
+and the Sandboxie strings indicate known anti-VM techniques. The VBScript code
+templates, which are compiled by the .NET binary and the task schedule procedures, are
+indicators for persistency and disconnection of the attack chain (as in the scenario we are
+analyzing).
+The last string was the only one that is not self-explainable and looked unique. This
+prompted us  to use it as the name for the threat actor.
+While hunting for additional strings, we identified an interesting method that is responsible
+for the AES decryption of one of the encrypted resources:
+5/13
+The function iterates over its four resources until it finds a resource stream that starts with
+the leet cookie (1337). It then extracts the key and the initialization vector for a successful
+AES decryption of the resource.
+Decryption of the “QFwMhceaY.Resources” resource reveals an additional set of URLs,
+filename extensions and .NET target version:
+6/13
+Again, the actual string table contains more information and we have included only the
+most relevant.
+The first string is the URL path for the bit.ly (one of the leading URL shorteners). This path
+hosts a redirector to the next stage malware (Orcus RAT embedded inside mp4 video file).
+The second string is an executable name, which is later concatenated with the .exe
+extension and used to replace the Name.exe template within the VB script shown in Table
+1.
+hxxps://paste[.]ee/r/bOZW3 contains another encrypted Assembly executable that is later
+fetched from the internet (exhibits the same binary patterns as seen inside downloader
+binary). This is  described below.
+The binary pattern is decrypted into a byte array (same way as previous strings), then it is
+XOR’d with multiple embedded characters and transformed into a new embedded
+assembly. Under certain conditions our downloader will execute this Assembly by invoking
+its Method.
+7/13
+The decrypted assembly is minimally obfuscated; its long constant and function names
+can be easily de-obfuscated using a basic de4dot. Looking deeper inside the assembly, we
+identified process hollowing functionality that is used to hide additional executable code
+within new process.
+8/13
+AES is applied here as well on internal byte array and the C.resources artifacts to be used
+as parameters to the hollowing process (hollowing cmd).
+Orcus RAT
+As stated previously, the downloader downloads a legitimate 18 MB Ramadam-themed
+Coca-Cola commerical (09751bf69d496aaa3c92df5ed446785b).
+Although the video looks harmless, it is appended with a .NET executable which represents
+the Orcus RAT.
+9/13
+The attached Orcus executable is delivered with AES encrypted settings (the SIGNATURE
+string is the key). To properly decrypt the settings we needed to decompress the embedded
+Fody-Costura DLLs (deflate the streams) that relate to the AES encryption
+(Orcus.Shared.dll) and extract the initialization vector byte array.
+With all the decryption keys and the encrypted setting in hand, we easily extracted the full
+xml settings for the RAT.
+10/13
+It was interesting to discover that someone else identified the same C2 server and decided
+11/13
+to hack back the attacker’s servers
+https://twitter.com/GuyFoqs/status/1085803756644528129 .
+more on Orcus RAT
+The Orcus RAT masquerades as a legitimate remote administration tool, although it is clear
+from its features and functionality that it is not and was never intended to be. (Brian Krebs
+published an interesting expose on the man behind the supposed administration tool.) Until
+two weeks ago, it was publicly sold and licensed by a company calling itself Orcus
+Technologies. The project is now closed, according to this “press release” issued, and a
+license-free version available for download, as well as software development tools and
+documentation. Interestingly, the author also claims there is a “kill switch” available for
+download by security researchers to remotely shut down and lock out any Orcus control
+server that they find are being used for malicious purposes.
+Conclusions
+Given that Orcus RAT was recently made freely available, we expect to see more attacks
+delivering new Orcus RAT variants as a payload.
+As this latest attack demonstrates, organizations may improve their defenses but
+ attackers find new ways to get around them. Morphisec customers are protected from this
+campaign as well as future Orcus RAT variants with its Moving Target Defense solution
+that is architected specifically to handle unknown evasive attacks.
+Artifacts:
+12/13
+URLs
+hxxps://syswow32batch[.]su/WOW/
+hxxps://salesgroup[.]top/Micro18/
+hxxp://bit[.]ly/2FRI9rE
+hxxps://paste[.]ee/r/bOZW3
+hxxps://paste[.]ee/r/O53RV
+hxxps://pomf.pyonpyon[.]moe/wmtqck.mp4
+hxxps://pomf.pyonpyon[.]moe/ggesuy.jpg (different info stealer)
+Downloader:
+2091F8A68BE181B0149C83DCBF2CFC05
+MP4 Advertisement (embedded Orcus RAT)
+09751BF69D496AAA3C92DF5ED446785B (mp4)
+161307CD9FA201256B0D17D9F3085E78F32D642A (embedded Orcus)
+C2:
+weirdly.crabdance[.]com
+poulty55.chickenkiller[.]com
+194.5.98[.]139:9030
+Additional Artifacts
+Strings: “Dole Food Company”  (this string appeared in many of the .NET assemblies from
+multiple different attack chains, it also appeared in some of the persistency stages)
+13/13

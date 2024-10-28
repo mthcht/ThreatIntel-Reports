@@ -1,0 +1,1 @@
+[Link to the article](https://research.checkpoint.com/2023/from-hidden-bee-to-rhadamanthys-the-evolution-of-custom-executable-formats/)

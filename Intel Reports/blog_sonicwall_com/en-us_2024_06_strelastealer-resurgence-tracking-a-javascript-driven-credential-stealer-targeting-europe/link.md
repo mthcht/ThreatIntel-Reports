@@ -1,0 +1,1 @@
+[Link to the article](https://blog.sonicwall.com/en-us/2024/06/strelastealer-resurgence-tracking-a-javascript-driven-credential-stealer-targeting-europe/)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.fortinet.com/blog/threat-research/malicious-pypi-packages-deploy-coinminer-on-linux-devices)

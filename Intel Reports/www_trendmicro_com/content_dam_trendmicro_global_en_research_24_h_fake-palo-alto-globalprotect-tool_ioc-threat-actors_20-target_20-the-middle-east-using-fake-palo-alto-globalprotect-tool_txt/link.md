@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/24/h/fake-palo-alto-globalprotect-tool/ioc-threat-actors%20-target%20-the-middle-east-using-fake-palo-alto-globalprotect-tool.txt)

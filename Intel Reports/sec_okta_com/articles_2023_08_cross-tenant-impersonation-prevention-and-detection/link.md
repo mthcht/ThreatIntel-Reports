@@ -1,0 +1,1 @@
+[Link to the article](https://sec.okta.com/articles/2023/08/cross-tenant-impersonation-prevention-and-detection)

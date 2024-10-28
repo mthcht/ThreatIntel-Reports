@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/crowdstrike-named-leader-for-cybersecurity-incident-response-services-q2-2024/ - CrowdStrike Named a Leader with “Bold Vision” in 2024 Forrester Wave for Cybersecurity Incident Response Services)

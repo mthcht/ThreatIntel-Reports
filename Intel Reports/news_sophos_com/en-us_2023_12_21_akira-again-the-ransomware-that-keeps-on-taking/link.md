@@ -1,0 +1,1 @@
+[Link to the article](https://news.sophos.com/en-us/2023/12/21/akira-again-the-ransomware-that-keeps-on-taking/)

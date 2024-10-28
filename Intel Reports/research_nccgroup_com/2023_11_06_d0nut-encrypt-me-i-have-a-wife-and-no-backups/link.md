@@ -1,0 +1,1 @@
+[Link to the article](https://research.nccgroup.com/2023/11/06/d0nut-encrypt-me-i-have-a-wife-and-no-backups/)

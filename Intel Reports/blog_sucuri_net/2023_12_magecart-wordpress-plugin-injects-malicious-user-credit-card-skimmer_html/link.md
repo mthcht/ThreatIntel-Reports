@@ -1,0 +1,1 @@
+[Link to the article](https://blog.sucuri.net/2023/12/magecart-wordpress-plugin-injects-malicious-user-credit-card-skimmer.html)

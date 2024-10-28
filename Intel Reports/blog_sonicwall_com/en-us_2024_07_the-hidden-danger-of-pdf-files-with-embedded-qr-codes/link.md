@@ -1,0 +1,1 @@
+[Link to the article](https://blog.sonicwall.com/en-us/2024/07/the-hidden-danger-of-pdf-files-with-embedded-qr-codes/)

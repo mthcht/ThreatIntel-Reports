@@ -1,0 +1,1 @@
+[Link to the article](https://developer.android.com/reference/android/app/admin/DevicePolicyManager#setPermittedCrossProfileNotificationListeners(android.content.ComponentName,%20java.util.List%3Cjava.lang.String%3E))

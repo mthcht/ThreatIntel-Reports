@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/en_us/research/24/i/how-ransomhub-ransomware-uses-edrkillshifter-to-disable-edr-and-.html)

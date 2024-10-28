@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.jpcert.or.jp/en/2023/07/dangerouspassword_dev.html)

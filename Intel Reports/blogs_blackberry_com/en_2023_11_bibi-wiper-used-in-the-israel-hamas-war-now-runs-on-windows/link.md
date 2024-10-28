@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.blackberry.com/en/2023/11/bibi-wiper-used-in-the-israel-hamas-war-now-runs-on-windows)

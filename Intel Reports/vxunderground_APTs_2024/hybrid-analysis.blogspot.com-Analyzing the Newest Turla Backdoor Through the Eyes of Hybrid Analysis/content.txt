@@ -1,0 +1,183 @@
+1/16
+hybrid-analysis.blogspot.com
+/2024/09/analyzing-newest-turla-backdoor-through.html
+Analyzing the Newest Turla Backdoor Through the Eyes of
+Hybrid Analysis
+ Author: Vlad Pasca
+A Hybrid Analysis perspective and deep technical dive into the new Turla APT backdoor 
+Turla starts its attack by using shortcut files to infect victims 
+Evasion techniques employed by the group involve unhooking and disabling ETW and AMSI for
+stealth
+Backdoor implements custom commands for execution of malicious PowerShell scripts and file
+creation
+In a recent campaign, the Russian APT group Turla (also known as Venomous Bear), used shortcut files
+(.lnk) to infect systems with a fileless backdoor. The malware employs multiple evasion techniques such
+as disabling ETW and AMSI, and unhooking. Our contribution to existing research consists of analyzing
+the backdoor from a Hybrid Analysis perspective and presenting the implementation of the malicious
+routines. We will present the deobfuscation process and perform a complete technical analysis of the
+malware that reveals its functionalities. 
+A Hybrid Analysis Perspective
+Turla’s backdoor was obfuscated using the “SmartAssembly” obfuscator to complicate the analysis. It
+implements evasion techniques to extend malicious activity and influence the logging process. The
+backdoor commands can be used to create new files and run malicious PowerShell scripts using
+PowerShell runspaces.
+We’ve analyzed an attack that started with a shortcut file called “Advisory23-UCDMS04-11-01.pdf.lnk”
+detonated via Hybrid Analysis. As shown in Figure 1, the file’s icon is set to PDF in order to trick the
+user. 
+2/16
+Figure 1 - PDF icon set
+However, a legitimate PDF called “Advisory23-UCDMS04-11-01.pdf” is displayed during the execution, as
+seen in the runtime screenshots from the Hybrid Analysis detonation report:
+Figure 2 - Legitimate PDF displayed
+The detonation report also displays the process tree (Figure 3 ) showing that the initial process creates a
+file called “ChromeConnection” in the temporary folder. This is executed using the MSBuild tool:
+Figure 3 - Process tree
+3/16
+The final payload is a fileless backdoor. The sample executes the Main function of the backdoor with six
+custom parameters. The presence of these six custom parameters is highly suspicious and should be a
+first red flag for taking a closer look at this sample. We could identify this operation in the “Extracted
+Strings” section of the Hybrid Analysis report (see Figure 4).
+Figure 4 - Final backdoor is executed with 6 parameters
+As shown below, the PDF and the created file can be downloaded from the “Extracted Files” section of
+the report.
+Figure 5 - Extracted Files section on Hybrid Analysis
+A Deep Dive into The Dropper
+Based on these observations, we are able to  determine that the fileless backdoor is worth a deeper
+investigation. After finding the final dropped file (SHA256:
+7091ce97fb5906680c1b09558bafdf9681a81f5f524677b90fd0f7fc0a05bc00) we can download it locally
+and analyze it using PEStudio. We determine that the sample is a .NET executable obfuscated using the
+“SmartAssembly” obfuscator (Figure 6).
+4/16
+Figure 6 - PEStudio detects the SmartAssembly obfuscator
+Dumbassembly performs initial deobfuscation operations on the malware (Figure 7).
+Figure 7 - Dumbassembly tool deobfuscates the backdoor
+Simple Assembly Explorer is  used to further deobfuscate the resulting executable, as highlighted in
+Figure 8.
+Figure 8 - Simple Assembly Explorer options
+It’s very important that we use the right options for deobfuscating the code.
+Finally, de4dot is used to restore the remaining obfuscated code, as displayed in Figure 9 and Figure 10
+below, which shows the difference between the decompiled codes. 
+Figure 9 - Before deobfuscation
+5/16
+Figure 10 - After deobfuscation
+The process creates a mutex called “{C916E9A6-EEDF-4648-9A29-9E5713F4E79A}” to ensure that only
+one copy of the malware is running at a single time.
+The first three parameters passed to the program are Base64-decoded and then decrypted using the
+XOR operator, with the first byte representing the key. 
+Figure 11 - Parameters are passed to the decryption function
+Figure 12 - Implementation of the operations
+We’ve developed a custom Python script that decrypts the required parameters. The C2 server
+https[:]//files.philbendeck[.]com is revealed after the decryption.
+The last three parameters are used to compute the receive timeout, sleep time, and reconnect timeout,
+respectively. The default values are 30 seconds for the first two and 30 minutes for the third.
+Figure 13 - Last parameters are used to compute the timeouts
+6/16
+The malicious process obtains the network interfaces on the local computer via a function call to
+GetAllNetworkInterfaces, and then extracts the MAC address. The address is modified to delete the “-“
+character and the result is concatenated with the first parameter previously decrypted (Figure 14).
+Figure 14 - MAC address extraction
+The value computed above is XOR-ed with a randomly generated byte and stored in a variable called
+“strEncodedID”. This is used to compute a unique identifier of the infected machine.
+Figure 15 - Unique identifier stored in strEncodedID variable
+The following DLLs are mapped to memory: ntdll.dll, KernelBase.dll, and kernel32.dll. The purpose of this
+operation is to bypass hooks that might have been installed, by mapping “fresh” (not hooked) DLLs to
+replace the .text hooked sections with the clean ones . To accomplish that, the memory protections of 
+.text sections of the loaded DLLs need to be  changed to 0x40 (PAGE_EXECUTE_READWRITE) using
+VirtualProtect (Figure 16).
+7/16
+Figure 16 - DLLs that will be mapped
+Figure 17 - Windows APIs used for mapping
+Figure 18 - Memory protection changed using VirtualProtect
+8/16
+The MAC address concatenated with the first parameter described before is set to be an AES-128 key
+that will be used in upcoming C2 communication activities (Figure 19).
+Figure 19 - AES algorithm initialization
+The hostname and username are retrieved and encrypted using the AES algorithm. The result is Base64-
+encoded and exfiltrated to the C2 server using a POST request (see Figure 20 and Figure 21).
+Figure 20 - Create a POST request to the C2 server
+Figure 21 - AES encryption and Base64 encoding
+The process reads the server’s response by calling the GetResponse method. It expects 38 bytes in the
+response (Figure 22).
+9/16
+Figure 22 - Server’s response is read and verified
+If any exception occurs, the binary Base64-encodes the hostname concatenated with the username, and
+downloads a resource from the C2 server based on the “search=” parameter, as shown below.
+Figure 23 - Download a resource if any exception occurs
+The value “strEncodedID” is encrypted using the AES algorithm and Base64-encoded. The encrypted
+data is sent to the C2 server (Figure 24).
+Figure 24 - Exfiltration of the unique strEncodedID identifier
+10/16
+The server’s response is decrypted and Base64-decoded. The structure of the result is
+“value1|value2|…”, where the first value is the command to be executed and the remaining values
+represent the required parameters.
+Figure 25 - Server’s response contains the command to be executed
+Turla’s process of encrypting communication between the victim and C2 is a sophisticated attempt to
+avoid detection by automated cybersecurity solutions and SecOps teams. This method of hiding
+communications and the exchange between victim and C2 makes the attack very difficult to discover and
+analyze, even by defenders employing networking tools.  
+Custom Backdoor Commands
+“uf” command
+This command is used to create a new file and populates it with content received from the C2 server. The
+first parameter is the file path and the second parameter represents the file’s content that is Base64-
+decoded before being written (Figure 26).
+11/16
+Figure 26 - A new file is created and written on it
+“op” command
+The command has three subcommands: “rct”, “st” and “rt”. It’s used to modify the reconnect timeout,
+sleep time, and receive timeout, respectively.
+Figure 27 - Reconnect timeout is changed
+12/16
+“cps” command
+The process closes a PowerShell Runspace using the Runspace.Close function:
+Figure 28 - Close a PowerShell Runspace
+“ps” command
+The command can be used to run PowerShell scripts. The process disables ETW and turns off AMSI
+during the malicious activity. 
+Figure 29 - Command’s result is sent to the C2 server
+The malicious process creates a PowerShell Runspace via a function call to CreateRunspace and an
+empty PowerShell instance (Figure 30).
+13/16
+Figure 30 - Create a PowerShell Runspace
+The following functions will be patched: EventWrite, EtwEventWrite, ReportEventW, AmsiOpenSession,
+and AmsiScanBuffer. These functions are targeted because they’re used by ETW and AMSI, providing
+Telemetry to Security Products. 
+Figure 31 - Functions used by ETW and AMSI are patched
+The patching operation is done by modifying the first instruction of the functions. The backdoor first
+changes the protection of the region using VirtualProtect, then copies the new instructions and changes
+the protection back to original(Figure 32).
+14/16
+Figure 32 - Make the code of the functions modifiable
+For example, the code of the EventWrite method is modified to always return a value of 0, avoiding to
+create the ETW events to consume. The bypass of the AmsiScanBuffer function consists of returning the
+E_INVALIDARG value, as highlighted in the figure below, to avoid sending those buffers to the AMSI
+Provider.
+Figure 33 - New instructions of EventWrite
+Figure 34 - New instructions of AmsiScanBuffer
+Moreover, the process loads the “System.Management.Automation” assembly and disables ETW of the
+PowerShell session by setting the value of the “m_enabled” field from the “Tracing.PSEtwLogProvider”
+class to 0, by leveraging Reflection. 
+15/16
+Figure 35 - Disable ETW of the PowerShell session
+If the “ldscr” subcommand is specified, the process can run PowerShell scripts specified in the C2
+server’s response. The AddScript and AddCommand functions are utilized to run scripts and collect the
+output. Finally, the output is exfiltrated to the C2 server.
+Figure 36 - Scripts’ output is exfiltrated to the C2 server
+Figure 37 - Scripts are passed to the AddScript function
+Final Thoughts
+Hybrid Analysis is a great platform for identifying and analyzing APT samples. It provides the context and
+data that can be investigated further during the dynamic analysis of the malware. If you want to perform a
+more in-depth analysis of the sample, you can download the sample by registering with a Hybrid Analysis
+account and becoming a vetted user. 
+16/16
+This example highlighting Turla shows the value of the platform. After deobfuscating the backdoor, we
+were able to analyze its commands that turned out to be intuitive and very effective.  
+Indicators of Compromise
+C2 server
+https[:]//files.philbendeck[.]com
+SHA256
+cac4d4364d20fa343bf681f6544b31995a57d8f69ee606c4675db60be5ae8775
+b6abbeab6e000036c6cdffc57c096d796397263e280ea264eba73ac5bab39441
+8d6fe8e336e020410753ff15ece5f36bae992f7f234385a23590a11ed734792d
+7091ce97fb5906680c1b09558bafdf9681a81f5f524677b90fd0f7fc0a05bc00
+Mutex
+{C916E9A6-EEDF-4648-9A29-9E5713F4E79A}

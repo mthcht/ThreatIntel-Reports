@@ -1,0 +1,1 @@
+[Link to the article](https://go.recordedfuture.com/hubfs/reports/CTA-RU-2024-0530.pdf)

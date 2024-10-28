@@ -1,0 +1,1 @@
+[Link to the article](https://www.sentinelone.com/blog/decrypting-catb-ransomware-analyzing-their-latest-attack-methods/)

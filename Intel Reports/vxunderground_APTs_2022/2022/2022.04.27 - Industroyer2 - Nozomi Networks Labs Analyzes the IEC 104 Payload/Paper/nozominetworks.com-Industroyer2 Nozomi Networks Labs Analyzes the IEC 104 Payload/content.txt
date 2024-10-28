@@ -1,0 +1,145 @@
+1/6
+By
+April 27, 2022
+Industroyer2: Nozomi Networks Labs Analyzes the IEC
+104 Payload
+nozominetworks.com/blog/industroyer2-nozomi-networks-labs-analyzes-the-iec-104-payload/
+In a previous blog we gave a high-level overview of Industroyer2, the latest tool that
+advanced persistent threat (APT) group Sandworm used to target the Ukrainian power
+grid. As the name coined by ESET suggests, this sample presents many commonalities
+with its predecessor Industroyer, which was used in the notorious December 2016 attack
+on Ukraine’s grid. In this blog, we will compare the two samples by providing a side-by-
+side analysis to uncover the similarities, which helps us gain more insight into the mind of
+the attacker.
+Before we present evidence that will link the two samples, we will first focus on the main
+task of Industroyer2, namely manipulating IEC-104 Information Object Address (IOA).
+Unlike Industroyer, which targeted IEC-101, IEC-104, IEC 61850 and OPC Data Access
+mostly through different Dynamic-link libraries (DLLs) (i.e.101.dll, 104.dll, 61850.dll,
+OPC.exe and OPCClientDemo.dll), the malware dubbed Industroyer2 is a standalone
+executable which exclusively targets IEC-104.
+During the analysis of the sample, we came across something unusual in modern
+malware: the authors did not bother hiding its activity, nor perform any form of
+obfuscation. The core of the malware consists of its configuration which, among other
+parameters described below, contains a hardcoded list of IOAs to manipulate. This
+configuration is not protected in the executable, rather it is embedded as a regular
+Unicode string.
+This lack of concern for detection on the endpoint suggests that the threat actor had a
+fairly complete understanding of the security measures deployed in the target
+environment. At the same time, the hardcoded list of IOAs indicates two things:
+1. The operators had a thorough understanding of the Operational Technology (OT)
+environment; and
+2. The Industroyer2 sample is designed to be executed in a privileged environment
+with direct access to the target devices.
+The window between initial access and when Industroyer2 was launched is unknown.
+However, we can assume that the window between access and attack was within days
+rather than hours, based on the malicious activity.
+2/6
+Nozomi Networks Labs’ analysis of Industroyer2 suggests that the threat actors had a
+fairly complete understanding of the security measures deployed in the target
+environment.
+IEC-104 Configuration
+The sample that we analyzed contains hardcoded configurations for three different
+stations. For each station the configuration includes:
+1. Station Configuration Header: Header to configure the station interaction
+2. IOA Configuration Format: Table containing multiple IOAs and their corresponding
+parameters
+Station Configuration Header
+The configuration for one of the stations uses the following header:
+10.x.y.z 2404 3 0 1 1 PService_PPD.exe 1 “D:\OIK\DevCounter” 0 1 0 0 1 0 0 44
+10.x.y.z → Controlled station local IP address
+2404 → Controlled station port
+3 → ASDU address
+0 → Operation mode. If set to 0, the hardcoded table of IOA is used. If set to 1, two
+arguments need to follow specifying a start and an end IOA number, which are then used
+to set a range of IOA to iterate through.
+3/6
+1 → Switch that requires 9 arguments:
+a) 1 → Boolean, accepted values: 0, 1
+b) PService_PPD.exe → Name of the process to be killed
+c) 1 → Controls if the filename rename should happen, accepted values: 0 (skip rename),
+1 (rename)
+d) “D:\OIK\DevCounter” → Folder where the executable targeted for killing and rename is
+stored
+e) 0 → Sleep time in minutes, executed prior to initiating interaction with the station
+f) 1 → Sleep time in seconds
+g) 0 → Sleep time in seconds
+h) 0 → Sleep time in seconds
+i) 1 → Boolean, accepted values: 0, 1
+0 → If set, it will interact with each IOA again, with SCO/DCO On/Off inverted
+44 → Number of IOA following header
+IOA Configuration Format
+Figure 1. IOA Configuration.
+160921 1 0 1 1 2
+160921 → IOA address
+1 → Sets single or double command, accepted values: 0 (Double), 1 (Single)
+0 → Sets SCO/DCO Select/Execute, accepted values: 0 (Execute), 1 (Select)
+1 → Sets SCO/DCO On/Off, accepted values: 0 (Off), 1 (On)
+1 → Priority
+2 → IOA entry index in the configuration list
+4/6
+Operation
+Figure 2. IEC 104 Interaction.
+After terminating PServiceControl.exe , and based on the configuration,
+PService_PPD.exe  which is then renamed with .MZ  appended to its name, the
+sample begins IEC 104 interaction (Figure 2).
+Traffic sent from the malicious sample to the substation is prefixed with MASTER ->> SLV
+in the sample’s debugging output and vice versa. The interaction begins with a sequence
+of TESTFR frames: TESTFR act  sent from the malicious sample, which is then
+acknowledged by a TESTFR con  frame. TESTFR frames are used to check if there are
+connectivity problems between two nodes.
+The next frame sent to the receiving station is STARTDT act , which is a data transfer
+activation request, expecting back a STARTDT con  reply as confirmation. Once data
+transfer is enabled it is followed by interrogation command (C_IC_NA_1) .
+5/6
+The next step that the sample performs using its hardcoded station configuration is to
+iterate through the hardcoded list of IOA per station and send C_SC_NA_1 or
+C_DC_NA_1  type frames, depending on each IOA’s configuration. Apart from specifying
+whether an IOA is meant to be used with a single or double command, as detailed in the
+configuration above, it is possible to specify the bits used to control Single/Double
+(SCO/DCO), On/Off, and Select/Execute.
+Industroyer vs Industroyer2: Side-by-side Analysis
+The Industroyer2 sample with sha256
+d69665f56ddef7ad4e71971f06432e59f1510a7194386e5f0e8926aea7b88e00  has an
+overwhelming number of similarities with the Industroyer sample called 104.dll and
+sha256 7907dd95c1d36cf3dc842a1bd804f0db511a0f68f4b3d382c23a3c974a383cad .
+This is a strong indication that the same threat actor had access to the source code.
+The following screenshot (Figure 3) presents an example of these similarities with a side-
+by-side comparison of the decompiled main thread of both samples. On the left side we
+have the Industroyer sample from 2016, while on the right we have the Industroyer2
+sample from 2022.
+Figure 3. Industroyer (left) and Industroyer2 (right) technical comparison of decompiled
+main thread of both samples.
+The “process killing” functionality that Industroyer implements in the main thread, in
+Industroyer2 has been factored out into the thread that eventually spawns this main
+thread. What stands out the most though, is the usage of a structure that we renamed
+“main_config” in both the samples which stores data used globally throughout the
+execution. The “main_config” structure as found in Industroyer2 has been updated to hold
+additional fields, but it shares the same “blueprint” of Industroyer.
+The following screenshot (Figure 4) contains the decompiled code responsible for the
+creation of the STARTDT  frame. The similarities between the two samples are once again
+clear, with the “main_config” structure being passed as an argument from one function to
+6/6
+another.
+Figure 4. Industroyer (left) and Industroyer2 (right) technical comparison of decompiled
+code which creates STARTDT frame.
+We can conclude that the threat actor does not aspire to be stealthy and is not concerned
+about obfuscating the malware activity or the similarities between Industroyer and
+Industroyer2.
+Recommendations
+Here are some ways companies can increase their protection:
+Basic cyber hygiene: reset passwords, check employee and vendor
+account/network access and permissions, scan the network for any open
+ports and close/secure them, etc.
+Utilize YARA rules to search for and generate alerts on associated
+malware activity
+Use anomaly detection tools to detect any changes or variations to
+malware, as well as any irregular activity occurring in OT environments
+Use an automated firewall in conjunction with an anomaly detection
+tool to stop further attack commands
+Threat hunt for suspicious activity in your network; this can
+potentially help to discover attackers early on
+We also recommend adhering to CISA’s 2017 advisory if those security measures have
+not been implemented already.
+Nozomi Networks will continue to monitor the situation and provide updates on what we
+are seeing, as well as recommendations the OT industry can use to protect their
+networks.

@@ -1,0 +1,1 @@
+[Link to the article](https://insight-jp.nttsecurity.com/post/102ic6o/webgoogle-chrome)

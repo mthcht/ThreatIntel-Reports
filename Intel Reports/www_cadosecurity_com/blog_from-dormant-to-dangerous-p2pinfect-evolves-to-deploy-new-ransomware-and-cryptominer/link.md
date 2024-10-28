@@ -1,0 +1,1 @@
+[Link to the article](https://www.cadosecurity.com/blog/from-dormant-to-dangerous-p2pinfect-evolves-to-deploy-new-ransomware-and-cryptominer)

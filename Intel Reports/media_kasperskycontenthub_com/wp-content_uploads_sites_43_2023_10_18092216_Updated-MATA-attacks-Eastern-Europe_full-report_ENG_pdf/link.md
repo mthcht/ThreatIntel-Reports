@@ -1,0 +1,1 @@
+[Link to the article](https://media.kasperskycontenthub.com/wp-content/uploads/sites/43/2023/10/18092216/Updated-MATA-attacks-Eastern-Europe_full-report_ENG.pdf)

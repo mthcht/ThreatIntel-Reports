@@ -1,0 +1,257 @@
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+1/17
+Threat Intelligence Team
+October 6, 2020
+Release the Kraken: Fileless APT attack abuses
+Windows Error Reporting service
+blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service
+This blog post was authored by Hossein Jazi and Jérôme Segura.
+On September 17th, we discovered a new attack called Kraken that injected its payload
+into the Windows Error Reporting (WER) service as a defense evasion mechanism.
+That reporting service, WerFault.exe, is usually invoked when an error related to the
+operating system, Windows features, or applications happens. When victims see
+WerFault.exe running on their machine, they probably assume that some error happened,
+while in this case they have actually been targeted in an attack.
+While this technique is not new, this campaign is likely the work of an APT group that had
+earlier used a phishing attack enticing victims with a worker’s compensation claim. The
+threat actors compromised a website to host its payload and then used the CactusTorch
+framework to perform a fileless attack followed by several anti-analysis techniques.
+At the time of writing, we could not make a clear attribution to who is behind this attack,
+although some elements remind us of the Vietnamese APT32 group.
+Malicious lure: ‘your right to compensation’
+On September 17, we found a new attack starting from a zip file containing a malicious
+document most likely distributed through spear phishing attacks.
+The document “Compensation manual.doc” pretends to include information about
+compensation rights for workers:
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+2/17
+Figure 1: Malicious Document
+The file contains an image tag (“INCLDEPICTURE“) that connects to
+“yourrighttocompensation[.]com” and downloads an image that will be the document
+template.
+Figure 2: Imagetag embedded within the document
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+3/17
+Figure 3: yourrighttocompensation website
+This domain was registered on 2020-06-05 while the document creation time is 2020-
+06-12, which likely indicates that they are part of the same attack.
+Inside, we see a malicious macro that uses a modified version of CactusTorch VBA
+module to execute its shellcode. CactusTorch is leveraging the DotNetToJscript technique
+to load a .Net compiled binary into memory and execute it from vbscript.
+The following figure shows the macro content used by this threat actor. It has both
+AutoOpen and AutoClose functions. AutoOpen just shows an error message while
+AutoClose is the function that performs the main activity.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+4/17
+Figure 4: Macro
+As you can see in Figure 4, a serialized object in hex format has been defined which
+contains a .Net payload that is being loaded into memory. Then, the macro defined an
+entry class with “Kraken.Kraken” as value. This value has two parts that have been
+separated with a dot: the name of the .Net Loader and its target class name.
+In the next step, it creates a serialization BinaryFormatter object and uses the deseralize
+function of BinaryFormatter to deserialize the object. Finally, by calling DynamicInvoke
+the .Net payload will be loaded and executed from memory.
+Unlike CactusTorch VBA that specifies the target process to inject the payload into it
+within the macro, this actor changed the macro and specified the target process within the
+.Net payload.
+Kraken Loader
+The loaded payload is a .Net DLL with “Kraken.dll” as its internal name, compiled on
+2020-06-12.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+5/17
+This DLL is a loader that injects an embedded shellcode into WerFault.exe. To be clear,
+this is not the first case of such a technique. It was observed before with the NetWire RAT
+and even the Cerber ransomware.
+The loader has two main classes: “Kraken” and “Loader“.
+Figure 5: Kraken.dll
+The Kraken class contains the shellcode that will be injected into the target process
+defined in this class as “WerFault.exe“. It only has one function that calls the Load
+function of Loader class with shellcode and target process as parameters.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+6/17
+Figure 6: Kraken class
+The Loader class is responsible for injecting shellcode into the target process by making
+Windows API calls.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+7/17
+Figure 7: Load function
+These are the steps it uses to perform its process injection:
+StartProcess function calls CreateProcess Windows API with 800000C as
+dwCreateFlags.
+FindEntry calls ZwQueryInformationProcess to locate the base address of the
+target process.
+CreateSection invokes the ZwCreateSection API to create a section within the target
+process.
+ZwMapViewOfSection is called to bind the section to the target process in order to
+copy the shellcode in by invoking CopyShellcode.
+MapAndStart finishes the process injection by calling WriteProcessMemory and
+ResumeThread.
+ShellCode Analysis
+Using HollowHunter we dumped the shell code injected into WerFault.exe for further
+analysis. This DLL performs its malicious activities in multiple threads to make its
+analysis harder.
+This DLL is executed by calling the “DllEntryPoint” that invokes the “Main” function.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+8/17
+Figure 8: Main Process
+The main function calls DllMain which creates a thread to perform its functions in a new
+thread within the context of the same process.
+Figrue 9: Dll main
+The created thread at first performs some anti-analysis checks to make sure it’s not
+running in an analysis/sandbox environment or in a debugger.
+It does this through the following actions:
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+9/17
+1) Checks existence of a debugger by calling GetTickCount:
+GetTickCount is a timing function that is used to measure the time needed to execute
+some instruction sets. In this thread, it is being called two times before and after a Sleep
+instruction and then the difference is being calculated. If it is not equal to 2 the program
+exits, as it identifies it is being debugged.
+Figure 10: Created thread
+2) VM detection:
+In this function, it checks if it is running in VmWare or VirtualBox by extracting the
+provider name of the display driver registry key
+(`SYSTEM\\ControlSet001\\Control\\Class\\{4D36E968-E325-11CE-BFC1-
+08002BE10318}\\0000′) and then checking if it contains the strings VMware or Oracle.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+10/17
+Figure 11: VM detection
+3) IsProcessorFeaturePresent:  
+This API call has been used to determine whether the specified processor feature is
+supported or not. As you see from the below picture, “0x17” has been passed to this API as
+a parameter which means it checks __fastfail support before proceeding with immediate
+termination.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+11/17
+Figure 12: InProcessorFeaturePresent
+4) NtGlobalFlag:
+The shell code checks NtGlobalFlag in PEB structure to identify whether it is being
+debugged or not. To identify the debugger it compares the NtGlobalFlag value with 0x70.
+5) IsDebuggerPresent:
+This checks for the presence of a debugger by calling “IsDebuggerPresent“.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+12/17
+Figure 13: NtGlobalFlag and IsDebuggerPresent check
+After performing all these anti-analysis checks, it goes into a function to create its final
+shellcode in a new thread. The import calls used in this part are obfuscated and resolved
+dynamically by invoking the “Resolve_Imports” function.
+This function gets the address of “kernel32.dll” using LoadLibraryEx and then in a loop
+retrieves 12 imports.
+Figure 14: Resolve_Imports
+Using the libpeconv library we are able to get the list of resolved API calls. Here is the list
+of imports, and we can expect it is going to perform some process injection.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+13/17
+VirtualAlloc
+VirtualProtect
+CreateThread
+VirtualAllocEx
+VirtualProtectEx
+WriteProcessMemory
+GetEnvironmentVariableW
+CreateProcessW
+CreateRemoteThread
+GetThreadContext
+SetThreadContext
+ResumeThread
+After resolving the required API calls it creates a memory region using VirtualAlloc and
+then calls “DecryptContent_And_WriteToAllocatedMemory” to decrypt the content of
+the final shell code and write them into created memory.
+In the next step, VirtualProtect is called to change the protection to the allocated memory
+to make it executable. Finally, CreateThread has been called to execute the final shellcode
+in a new thread.
+Figure 15: Resolve Imports and Create new thread
+Final Shell code
+The final shellcode is a set of instructions that make an HTTP request to a hard-coded
+domain to download a malicious payload and inject it into a process.
+As first step it loads the Wininet API by calling LoadLibraryA:
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+14/17
+Figure 16: Loads Wininet
+Then it builds the list of function calls that are required to make the HTTP request which
+includes: InternetOpenA, InternetConnectA, InternetOpenRequestA and
+InternetSetOptionsExA.
+Figure 17: HttpOpenRequestA
+After preparing the requirements for building HTTP request, it creates a HTTP request
+and sends it by calling HttpSendrequestExA. The requested URL is: http://www.asia-
+kotoba[.]net/favicon32.ico
+Figure 18: HttpSendRequestExA
+In the next step, it checks if the HTTP request is successful or not. If the HTTP request is
+not successful it calls ExitProcess to stop its process.
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+15/17
+Figure 19: Checking the http request success
+If the return value of HTTPSendRequestExA is true, it means the request is successful and
+the code proceeds to the next step. In this step it calls VirtualAllocExA to allocate a
+memory region and then calls InternetReadFile to read the data and write it to the
+allocated memory.
+Figure 20: InternetReadFile call
+At the end it jumps to the start of the allocated memory to execute it. This is highly likely
+to be another shellcode that is hosted on the compromised “asia-kotoba.net” site and
+planted as a fake favicon in there.
+Since at the time of the report the target URL was down, we were not able to retrieve this
+shellcode for further analysis.
+The work of an APT, but which one?
+We do not have enough evidence to attribute this attack. However, we have found some
+loose connections to APT32 and are still investigating them:
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+16/17
+APT32 is one of the actors that is known to use CactusTorch HTA to drop variants of
+the Denis Rat. However, since we were not able to get the final payload we cannot
+definitely attribute this attack to APT32.
+The domain used to host malicious archives and documents is registered in Ho chi
+minh city, Vietnam. APT32 has used strategic web compromises to target victims
+and is believed to be Vietnam-based.
+Malwarebytes blocks access to the compromised site hosting the payload:
+Figure 21: Lure document attempting to contact remote site
+IOCs
+Lure document:
+31368f805417eb7c7c905d0ed729eb1bb0fea33f6e358f7a11988a0d2366e942
+Archive file containing lure document:
+d68f21564567926288b49812f1a89b8cd9ed0a3dbf9f670dbe65713d890ad1f4
+Document template image:
+yourrighttocompensation[.]com/ping
+Archive file download URLs: 
+yourrighttocompensation[.]com/?rid=UNfxeHM
+yourrighttocompensation[.]com/download/?
+key=15a50bfe99cfe29da475bac45fd16c50c60c85bff6b06e530cc91db5c710ac30&id=0
+yourrighttocompensation[.]com/?rid=n6XThxD
+yourrighttocompensation[.]com/?rid=AuCllLU
+10/8/2020
+Release the Kraken: Fileless APT attack abuses Windows Error Reporting service - Malwarebytes Labs | Malwarebytes Labs
+https://blog.malwarebytes.com/malwarebytes-news/2020/10/kraken-attack-abuses-wer-service/
+17/17
+Download URL for final payload: 
+asia-kotoba[.]net/favicon32.ico

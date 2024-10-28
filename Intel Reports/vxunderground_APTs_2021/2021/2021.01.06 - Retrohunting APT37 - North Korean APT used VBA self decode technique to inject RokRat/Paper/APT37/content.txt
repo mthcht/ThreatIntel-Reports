@@ -1,0 +1,147 @@
+1/14
+Threat Intelligence Team
+January 6, 2021
+Retrohunting APT37: North Korean APT used VBA self
+decode technique to inject RokRat
+blog.malwarebytes.com/threat-analysis/2021/01/retrohunting-apt37-north-korean-apt-used-vba-self-decode-
+technique-to-inject-rokrat
+This post was authored by Hossein Jazi
+On December 7 2020 we identified a malicious document uploaded to Virus Total which
+was purporting to be a meeting request likely used to target the government of South
+Korea. The meeting date mentioned in the document was 23 Jan 2020, which aligns with
+the document compilation time of 27 Jan 2020, indicating that this attack took place
+almost a year ago.
+The file contains an embedded macro that uses a VBA self decoding technique to decode
+itself within the memory spaces of Microsoft Office without writing to the disk. It then
+embeds a variant of the RokRat into Notepad.
+Based on the injected payload, we believe that this sample is associated with APT37. This
+North Korean group is also known as ScarCruft, Reaper and Group123 and has been
+active since at least 2012, primarily targeting victims in South Korea.
+In the past, this APT has relied on Hangul Office documents (hwp files) to target victims,
+as it’s software that’s commonly used in South Korea. However, in this blog we describe
+an interesting alternative method, delivered via self-decoding VBA Office files. To the best
+of our knowledge, this is a first for this APT group.
+Document analysis
+2/14
+The actor used the VBA self-decoding concept in its macro that was first introduced in
+2016. A malicious macro is encoded within another that is then decoded and executed
+dynamically.
+Figure 1: Malicious document
+We can consider this technique an unpacker stub, which is executed upon opening the
+document. This unpacker stub unpacks the malicious macro and writes it into the
+memory of Microsoft Office without being written to disk. This can easily bypass several
+security mechanisms.
+3/14
+Figure 2: Self decoding technique
+Figure 3 shows the macro used by this document. This macro starts by calling the
+“ljojijbjs” function, and based on the results will take different paths for execution.
+Figure 3: Encoded macro
+Microsoft by default disables the dynamic execution of the macro, and if an attacker needs
+to execute one dynamically—which is the case here—the threat actor needs to bypass the
+VB object model (VBOM) by modifying its registry value.
+To check if it can bypass the VBOM, it looks to see if the VBOM can be accessed or not.
+The “ljojijbjs” function is used for this purpose and checks read access to the
+VBProject.VBComponent. If it triggers an exception, it means the VBOM needs to be
+bypassed (IF clause). If there is no exception, it means the VBOM is already bypassed and
+VBA can extract its macro dynamically (Else clause).
+4/14
+Figure 4: Check VB object model accessibility
+“fngjksnhokdnfd” is called with one parameter to bypass VBOM. This function sets the
+VBOM registry key to one.
+Figure 5: Modifying VBOM registry key
+After bypassing VBOM, it calls another function which creates a Mutex in the victims’s
+machine by calling CreateMutexA API call and names it “mutexname”. This could be used
+by the actor to make sure it infects its victim only once but in this document we didn’t
+observe any evidence of checking the mutex.
+Figure 6: Mutex creation
+Finally, in order to perform the self-decoding process, it needs to open itself by creating a
+new Application object and load the current document in it in invisible mode.
+Figure 7: Self open
+5/14
+If VBOM is already bypassed, The function Init is called and generates the malicious
+macro content in obfuscated format.
+Figure 8: Obfuscated macro
+In the next step, this obfuscated macro is passed to “eviwbejfkaksd” to be de-obfuscated
+and then executed into memory.
+Figure 9: De-obfuscator
+To de-obfuscate the macro, two string arrays have been defined:
+StringOriginal which contains an array of characters before de-obfuscation
+StringEncoded which contains an array of characters after de-obfuscation
+6/14
+A loop has been defined to de-obfuscate the macro. For each iteration it takes a character
+in the obfuscated macro and looks for its index in StringEncoded. When it finds its index,
+it looks for its equivalent index in StringOriginal, takes that character from it and adds it
+to the new macro. As an example “gm* bf” as encoded macro will be decoded to “Option”.
+Figure 10: De-obfuscation loop
+Following this process gives us the final macro that will be executed in the memory space
+of Microsoft Office. In order to execute this decoded macro, it creates a module and writes
+into it before calling its main function to execute the macro.
+The main function defines a shellcode in hex format, and a target process which is
+Notepad.exe. Then, based on the OS version, it creates a Notepad.exe process and
+allocates memory within its address space using VirtualAlloc. It then writes the shellcode
+into the allocated memory using WriteProcessMemory. At the end it calls
+CreateRemoteThread to execute the shellcode within the address space of Notepad.exe.
+7/14
+Figure 11: De-obfuscated macro
+Shellcode analysis (RokRat):
+The shellcode injected into Notepad.exe downloads an encrypted payload from
+http://bit[.]ly/2Np1enh which is redirected to a Google drive link.
+8/14
+Figure 12: Download URL
+Downloaded payload is a variant of a cloud-based RAT known as RokRat which has been
+used by this group since 2017. This sample compilation date is 29 Oct 2019. This RAT is
+known to steal data from a victim’s machine and send them to cloud services (Pcloud,
+Dropbox, Box, Yandex).
+Figure 13: Encoded cloud services
+ 
+Similar to its previous variants, it uses several anti-analysis techniques to make sure it is
+not running in an analysis environment. Here are some of the checks:
+9/14
+Checking the DLLs related to iDefense SysAnalyzer, Microsoft Debugging DLL and
+Sandboxies
+Calling IsDebuggerPresent and GetTickCount to identify a debugger
+Checking VMWare related file
+Figure 14: Anti-analysis techniques
+This RAT has the following capabilities:
+Capture ScreenShots
+10/14
+Figure 15: Capture screenshots
+Gather system info (Username, Computer name, BIOS)
+11/14
+Figure 16: Gather BIOS data
+Data exfiltration to cloud services
+12/14
+13/14
+Figure 17: Data exfiltration
+ 
+Stealing credentials
+File and directory management
+For more detailed analysis of this RAT you can refer to the reports from NCC Group and
+Cisco Talos.
+Conclusion
+The primary initial infection vector used by APT37 is spear phishing, in which the actor
+sends an email to a target that is weaponized with a malicious document. The case we
+analyzed is one of the few where they did not use Hwp files (Hangul Office) as their phish
+documents and instead used Microsoft Office documents weaponized with a self decode
+macro. That technique is a clever choice that can bypass several static detection
+mechanisms and hide the main intent of a malicious document.
+The final payload used by this threat actor is a known custom RAT (RokRat) that the
+group has used in previous campaigns. In the past, RokRat has been injected into
+cmd.exe, whereas here they chose Notepad.exe.
+14/14
+ 
+Indicators of Compromise
+Maldoc:
+ 
+3c59ad7c4426e8396369f084c35a2bd3f0caa3ba1d1a91794153507210a77c90
+RokRat:
+ 
+676AE680967410E0F245DF0B6163005D8799C84E2F8F87BAD6B5E30295554E08
+ 
+A42844FC9CB7F80CA49726B3589700FA47BDACF787202D0461C753E7C73CFD2A
+ 
+2A253C2AA1DB3F809C86F410E4BD21F680B7235D951567F24D614D8E4D041576
+ 
+C7CCD2AEE0BDDAF0E6C8F68EDBA14064E4A9948981231491A87A277E0047C0CB
+ 
+ 

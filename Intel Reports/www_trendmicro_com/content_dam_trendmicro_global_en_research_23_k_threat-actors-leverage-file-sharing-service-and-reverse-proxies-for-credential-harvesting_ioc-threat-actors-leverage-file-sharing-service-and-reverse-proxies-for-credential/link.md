@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/k/threat-actors-leverage-file-sharing-service-and-reverse-proxies-for-credential-harvesting/ioc-threat-actors-leverage-file-sharing-service-and-reverse-proxies-for-credential-harvesting.txt)

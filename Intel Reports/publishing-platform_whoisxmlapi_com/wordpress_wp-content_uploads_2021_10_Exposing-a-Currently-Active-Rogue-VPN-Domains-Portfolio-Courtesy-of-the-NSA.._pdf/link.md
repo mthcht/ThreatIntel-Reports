@@ -1,0 +1,1 @@
+[Link to the article](https://publishing-platform.whoisxmlapi.com/wordpress/wp-content/uploads/2021/10/Exposing-a-Currently-Active-Rogue-VPN-Domains-Portfolio-Courtesy-of-the-NSA-An-OSINT-Analysis_edited.docx-1.pdf)

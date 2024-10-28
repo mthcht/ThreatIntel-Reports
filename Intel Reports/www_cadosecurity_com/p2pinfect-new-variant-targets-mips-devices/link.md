@@ -1,0 +1,1 @@
+[Link to the article](https://www.cadosecurity.com/p2pinfect-new-variant-targets-mips-devices/)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.forcepoint.com/blog/x-labs/url-shortener-microsoft-word-remcos-rat-trojan)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.esentire.com/blog/fin7-uses-trusted-brands-and-sponsored-google-ads-to-distribute-msix-payloads)

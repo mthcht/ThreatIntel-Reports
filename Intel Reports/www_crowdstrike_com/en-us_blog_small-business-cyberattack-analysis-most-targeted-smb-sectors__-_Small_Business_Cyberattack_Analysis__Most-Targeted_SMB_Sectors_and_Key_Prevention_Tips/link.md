@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/small-business-cyberattack-analysis-most-targeted-smb-sectors/ - Small Business Cyberattack Analysis: Most-Targeted SMB Sectors and Key Prevention Tips)

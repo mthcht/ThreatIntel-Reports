@@ -1,0 +1,236 @@
+1/14
+mp.weixin.qq.com
+/s/f5YE12w3x3wad5EO0EB53Q
+疑似Lazarus（APT-Q-1）涉及npm包供应链的攻击样本分析
+威胁情报中心
+奇安信威胁情报中心
+奇安信威胁情报中心
+gh_166784eae33e
+威胁情报信息共享，事件预警通报，攻击事件分析报告，恶意软件分析报告
+2023-12-08 03:52
+Posted on 四川
+团伙背景
+Lazarus是疑似具有东北亚背景的APT组织，奇安信内部跟踪编号APT-Q-1。该组织因2014年攻击索尼影业
+开始受到广泛关注，其攻击活动最早可追溯到2007年。Lazarus早期主要针对政府机构，以窃取敏感情报
+为目的，但自2014年后，开始以全球金融机构、虚拟货币交易场等为目标，进行敛财为目的的攻击活动。
+此外，该组织还针对安全研究人员展开攻击。近年来，Lazarus频繁发起软件供应链攻击，今年上半年披露
+的3CX供应链攻击事件被认为出自该组织之手。
+事件概述
+奇安信威胁情报中心近期发现一批较为复杂的下载器样本，这类样本经过多层嵌套的PE文件加载，最终从
+C2服务器下载后续载荷并执行。其中一个C2服务器IP地址在不久前被披露用于一起软件供应链攻击事件
+[1]，攻击者通过伪装为与加密有关的npm包投递恶意软件。结合上述报告内容和下载器样本自身的信息，
+可以确认这些下载器恶意软件与此次npm包供应链攻击事件有关。
+2/14
+根据下载器和其他相关样本的代码特征，我们关联到Lazarus组织的历史攻击样本，加上Lazarus常用供应
+链攻击手段，所以我们认为此次npm包投毒事件背后的攻击者很可能为Lazarus。
+详细分析
+下载器样本基本信息如下：
+MD5
+d8a8cc25bf5ef5b96ff7a64f663cbd29
+文件名称
+sql.tmp
+创建时间
+2023-09-12 15:49:34 UTC
+文件类型
+PE DLL, 64-bit
+大小
+318.00 KB (325632字节)
+PDB路径
+F:\workspace\CBG\npmLoaderDll\x64\Release\npmLoaderDll.pdb
+C&C
+hxxp://91.206.178.125/upload/upload.asp
+MD5
+46127a35b73b714a9c5c58aaa43cb51f
+文件名称
+sql.tmp
+创建时间
+2023-10-24 09:35:01 UTC
+文件类型
+PE DLL, 64-bit
+大小
+334.50 KB (342528字节)
+PDB路径
+-
+C&C
+hxxps://blockchain-newtech.com/download/download.asp
+MD5
+a6e7c231a699d4efe85080ce5fb36dfb
+文件名称
+preinstall.db
+创建时间
+2023-11-23 16:07:22 UTC
+文件类型
+PE DLL, 64-bit
+3/14
+大小
+386.00 KB (395264字节)
+PDB路径
+D:\workspace\CBG\Windows\Loader\npmLoaderDll\x64\Release\npmLoaderDll.pdb
+C&C
+hxxps://chaingrown.com/manage/manage.asp
+样本均经过多层加载过程，最终运行下载器主模块，下面以样本a6e7c231a699d4efe85080ce5fb36dfb为
+例进行分析。
+加载过程
+Stage 1
+preinstall.db的导出函数CalculateSumW从文件自身数据解密出后续，并内存加载。
+密钥初始化过程如下。
+4/14
+解密过程如下，加密数据位于.data段的0x18000BED0位置，为原址解密。
+5/14
+解密得到的数据为PE文件数据，内存加载执行。
+Stage 2
+6/14
+内存加载的PE为DLL文件，主要功能在sub_180002440函数中实现。首先采用相同的解密方法，解密文件
+中内嵌的zip压缩包数据。
+zip压缩包中有一个PE文件，被释放到路径"%AppData%\\..\\Roaming\\Microsoft\\IconCache.db"。
+7/14
+另一段内嵌数据释放到路径"%AppData%\\..\\Roaming\\Microsoft\\Network\\NTUSER.DAT"。
+随后建立持久化，依次尝试采用计划任务、注册表、启动目录三种方式。
+(1) 计划任务
+通过COM接口创建名为"MicrosoftEdgeUpdate"的计划任务，执行命令如下。
+8/14
+RUNDLL32.exe %APPDATA%\..\Roaming\Microsoft\IconCache.db,GetProcFunc
+ %APPDATA%\..\Roaming\Microsoft\Network\NTUSER.DAT
+ 8888
+(2) 注册表
+如果计划任务创建不成功，则在"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"下添加名
+为"GoogleUpdate"的键值，设置的执行命令如下。
+cmd /c start /b rundll32
+ %APPDATA%\..\Roaming\Microsoft\IconCache.db,GetProcFunc
+ %APPDATA%\..\Roaming\Microsoft\Network\NTUSER.DAT
+ 8888
+(3) 启动目录
+如果注册表键值也未能成功设置，则在启动目录下释放文件，并将文件属性设置为系统隐藏，文件路径
+为"C:\\Users\\[user]\\AppData\\Roaming\\Microsoft\\Windows\\Start
+Menu\\Programs\\Startup\\check.cmd"。
+Stage 3
+IconCache.db有两个导出函数，其中GetProcFunc为空，GetProcFuncW实现恶意功能。由于rundll32调用
+函数的特性[2]，当传入宽字符串参数时，对GetProcFunc的调用实际会执行GetProcFuncW函数。
+9/14
+GetProcFuncW函数从作为参数的NTUSER.DAT文件中解密得到PE数据，然后内存加载，再调用其导出函
+数GetWindowSizedW。
+下载器主模块
+从NTUSER.DAT解密得到的PE文件为下载器主模块，先从C&C服务器获取后续载荷的基本信息，再根据
+这些信息下载后续载荷并执行。
+首先选择作为C&C服务器的URL，3组URL字符串实际为同一个。
+10/14
+向C&C服务器发送的POST请求数据中有7对参数，参数名均是随机生成的字符串，而参数的值含义分别如
+下。
+参数序号说明
+1
+以下载器操作指令(见下面)的值为长度的随机字符串
+2
+感染设备ID字符串的base64编码
+
+ 感染设备ID由三部分组成：传入IconCache.db的参数(“8888”)，字符
+串“64”，以及随机字符，最终构成16字节长度的字符串
+3
+某段数据的base64编码，具体作用暂时未知
+4
+和操作指令相关的数字值
+5
+参数6对应字符串的长度
+6
+和操作指令相关的字符串base64编码，包含传递给C&C服务器的信息
+7
+随机字符串，用于混淆
+发送的请求数据示例如下。
+下载器的操作指令有下列几个。
+参数序号
+说明
+0xA
+开始请求后续载荷，获取payload的基本信息
+0x7
+下载payload
+0xB
+报告错误信息
+0xC
+执行payload
+0xD
+结束程序
+下载器向C&C服务器请求后续载荷时，C&C服务器回复的关于payload的基本信息包括：payload编号、长
+度、执行的导出函数名、传入的参数以及校验MD5值。在请求后续载荷阶段，C&C服务器也会下发指令结
+束下载器程序。
+成功取得payload信息后，下载器利用payload编号向C&C服务器获取相应的载荷数据，计算下载数据的
+MD5哈希，与之前取得的校验值进行比较。如果校验不通过则向C&C服务器报告'Hash error!'。
+11/14
+在执行payload阶段，先用和下载器加载过程相同的解密算法对payload解密。检查解密后的数据是否为PE
+文件，内存加载，然后找到指定导出函数的内存地址，并传入参数执行。
+溯源关联
+相关攻击活动
+样本d8a8cc25bf5ef5b96ff7a64f663cbd29的C&C服务器IP地址91[.]206.178.125在今年11月发布的一篇关
+于npm包投毒的分析报告[1]中提到。
+安全研究人员也发现了下载器样本46127a35b73b714a9c5c58aaa43cb51f出现在此次攻击活动中，但报告
+发布时他们仍在分析该样本。样本的名称sql.tmp和preinstall.db，以及导出函数名CalculateSum均在恶意
+脚本中出现。
+此外，下载器样本的PDB路径npmLoaderDll.pdb也表明与此次npm包投毒事件有关。
+关联样本
+根据上述下载器样本中出现的字符串信息，我们关联到一个木马样本。
+MD5
+1c4227bf06121fe9c454a85ad9245b56
+文件名称
+T_DLL.dll
+创建时间
+2023-08-01 09:49:31 UTC
+12/14
+文件类型
+PE DLL, 64-bit
+大小
+747.00 KB (764928字节)
+该木马样本的C&C服务器为hxxp://156.236.76.9/faq/faq.asp。除此之外，样本中还出现了下载器恶意软件
+频繁使用的解密算法。
+归属
+下载器内存加载PE的方式与此前Lazarus攻击安全研究人员所用的Comebacker DLL样本[3]一致。
+执行方式同样是rundll32调用DLL的导出函数，并传入数字字符串（”2907”）作为参数，而且DLL的导出函
+数ASN2_TYPE_new为空，ASN2_TYPE_newW函数实现恶意功能。
+关联到的木马样本1c4227bf06121fe9c454a85ad9245b56在解密字符串时使用A5加密算法，其中常量
+0xFE268455，0xC2B45678，0x90ABCDEF也出现在Lazarus的历史攻击样本中[4]。
+在今年7月，Github官方发布安全警告[5]，攻击者借助Github仓库和恶意npm包展开行动，攻击手法与
+Phylum报告[1]相似。在微软的报告[7]中提到，Jade Sleet是Lazarus的别名。
+总结
+从此批下载器样本的多层加载方式和C&C通信特点可以看出攻击者在尽量隐藏攻击痕迹，减少后续载荷暴
+露的风险。由于恶意软件牵涉到npm包供应链攻击，相关攻击活动可以追溯至今年7月之前，受此影响的人
+13/14
+员数量可能不少，再加上与Lazarus组织存在关联，意味着攻击者很可能以此为基础展开进一步的攻击行
+动。
+防护建议
+奇安信威胁情报中心提醒广大用户，谨防钓鱼攻击，切勿打开社交媒体分享的来历不明的链接，不点击执
+行未知来源的邮件附件，不运行标题夸张的未知文件，不安装非正规途径来源的APP。做到及时备份重要
+文件，更新安装补丁。
+若需运行，安装来历不明的应用，可先通过奇安信威胁情报文件深度分析平台
+（https://sandbox.ti.qianxin.com/sandbox/page）进行判别。目前已支持包括Windows、安卓平台在内的
+多种格式文件深度分析。
+目前，基于奇安信威胁情报中心的威胁情报数据的全线产品，包括奇安信威胁情报平台（TIP）、天擎、天
+眼高级威胁检测系统、奇安信NGSOC、奇安信态势感知等，都已经支持对此类攻击的精确检测。
+IOC
+MD5
+d8a8cc25bf5ef5b96ff7a64f663cbd29
+46127a35b73b714a9c5c58aaa43cb51f
+a6e7c231a699d4efe85080ce5fb36dfb
+7298b1f10ee6afab5e8bf648be1ca13b
+420a13202d271babc32bf8259cdaddf3
+1c4227bf06121fe9c454a85ad9245b56
+C&C
+91.206.178.125:80
+156.236.76.9:80
+blockchain-newtech.com
+chaingrown.com
+URL
+14/14
+hxxp://91.206.178.125/upload/upload.asp
+hxxps://blockchain-newtech.com/download/download.asp
+hxxps://chaingrown.com/manage/manage.asp
+hxxp://156.236.76.9/faq/faq.asp
+hxxp://103.179.142.171/npm/npm.mov
+hxxp://103.179.142.171/files/npm.mov
+hxxp://91.206.178.125/files/npm.mov
+参考链接
+[1].https://blog.phylum.io/crypto-themed-npm-packages-found-delivering-stealthy-malware/
+[2].https://www.attackify.com/blog/rundll32_execution_order/
+[3].https://www.microsoft.com/en-us/security/blog/2021/01/28/zinc-attacks-against-security-researchers/
+[4].https://www.welivesecurity.com/2023/04/20/linux-malware-strengthens-links-lazarus-3cx-supply-chain-
+attack/
+[5].https://github.blog/2023-07-18-security-alert-social-engineering-campaign-targets-technology-industry-
+employees/
+[6].https://blog.phylum.io/junes-sophisticated-npm-attack-attributed-to-north-korea/
+[7].https://query.prod.cms.rt.microsoft.com/cms/api/am/binary/RW1aFyW

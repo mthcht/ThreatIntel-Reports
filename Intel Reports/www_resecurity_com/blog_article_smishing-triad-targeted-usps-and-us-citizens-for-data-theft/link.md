@@ -1,0 +1,1 @@
+[Link to the article](https://www.resecurity.com/blog/article/smishing-triad-targeted-usps-and-us-citizens-for-data-theft)

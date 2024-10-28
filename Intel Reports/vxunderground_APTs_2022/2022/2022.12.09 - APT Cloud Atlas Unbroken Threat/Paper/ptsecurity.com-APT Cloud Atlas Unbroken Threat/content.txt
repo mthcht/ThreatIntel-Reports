@@ -1,0 +1,689 @@
+1/27
+www.ptsecurity.com
+/ww-en/analytics/pt-esc-threat-intelligence/apt-cloud-atlas-unbroken-threat/
+APT Cloud Atlas: Unbroken Threat
+Positive Technologies ⋮ ⋮ 12/9/2022
+Published on 9 December 2022
+Introduction
+Specialists at the PT Expert Security Center have been monitoring the Cloud Atlas group since May 2019. According
+to our data, its attacks have been targeting the government sector of the following countries:
+Russia
+Belarus
+Azerbaijan
+Turkey
+Slovenia
+The goals of the group are espionage and theft of confidential information.
+The group typically uses phishing emails with malicious attachments as the initial vector for their attacks.
+In the third quarter of 2022, during our investigation we identified a phishing campaign targeting employees of
+Russian government agencies. The attackers used targeted mailing based on the professional field of the recipients,
+even though we found no publicly available information about them.
+We first knew about the attackers back in 2014, when Kaspersky researchers published a report. Since then, their
+tools have not changed much (you can find more about them in the "Malware analysis" section). However, there has
+not yet been a detailed analysis and description of the functionality of these tools.
+In this report, we'll discuss the main techniques of the Cloud Atlas group, and take an in-depth look at the tools they
+use.
+Analysis of the documents found
+As in previous years, the group begins its attack by sending phishing emails, using current geopolitical issues that are
+directly related to the target country as a bait text. An example of an email with malicious content that was sent as
+part of the campaign in 2022 is shown in Figure 1. Pay special attention to the sender's address: the attackers
+disguised themselves as the news portal Lenta.ru, well-known in Russia and the CIS. However, email addresses with
+such a domain can be created with Rambler (Figure 2).
+Figure 1. The email
+2/27
+Figure 2. A registration window with the @lenta.ru domain name
+Most often, the text is taken from the media or from publicly available official documents. Also, for example, in a 2019
+attack aimed at Azerbaijan, a text related to the "Indestructible Brotherhood 2019" training exercises in Tajikistan was
+used, while in the 2020 attacks on organizations in Belarus, the emails contained a text related to the presidential
+elections.
+Figure 3 shows an example of a document which downloads a malicious template (here is a link to the page with the
+document's contents).
+3/27
+Figure 3. The malicious document
+In all cases, the malicious attachment was a document (in either DOC or DOCX format) that implements a Template
+Injection attack. In such attacks, the document does not contain macros or any other malicious code, and, in most of
+the observed cases when the DOC format was used, it may not be flagged by static analysis tools such as antiviruses
+(see Figure 4).
+4/27
+Figure 4. The document with a link to the template is not detected as malicious
+The document contains only a link to the template, which is located on a remote server. When the document is
+opened, the template is automatically downloaded from the remote server.
+Figure 5. An example of a template link in Cloud Atlas documents
+It's the template that may be malicious, containing a macro or exploit. This download method is a legitimate function
+of Microsoft Office, but attackers can take advantage of it. For example, the same technique is used by the
+Gamaredon group in their attacks.
+In most cases of a successful connection, an empty document was returned in response. However, in some attacks,
+we managed to detect the download of a malicious template in the form of an RTF file containing an exploit for the
+CVE-2017-11882 vulnerability.
+Researchers at Palo Alto discovered a similar malware delivery chain in 2018. In these attacks, the downloaded RTF
+templates contained an exploit for the CVE-2017-11882 vulnerability, as well as a simple PowerShell backdoor, which
+was dubbed PowerShower.
+We paid special attention to the DOC documents used in this attack: a characteristic feature of all the documents
+containing a malicious download was a link to malicious content inside the 1Table or 0Table stream (Figure 9,
+highlighted in green).
+After studying the DOC format and comparing malicious documents with regular ones, we found a number of patterns
+in the infected files.
+First, the DOC format requires the 1Table or 0Table stream in any document, along with the mandatory
+WordDocument stream (Figure 6).
+Figure 6. DOC format content
+Second, each document contains a special FIB (File Information Block) structure—in Figure 7, the fragment is
+highlighted in yellow—in which there is a base.fWhichTblStm parameter. Setting this bit to 0 or 1 determines which of
+the given streams should be used in the document.
+5/27
+Figure 7. An FIB fragment in a document
+Figure 8 shows the structure of an FIB taken from the documentation. Particular attention should be paid to the
+structure highlighted in red. The G bit interests us here the most (highlighted in green). This is the base.fWhichTblStm
+parameter.
+Figure 8. A fragment of an FIB structure
+Finally, the last thing that we discovered: links to malicious templates are always located at approximately the same
+offsets relative to the hex strings in the Table stream. (We were not much interested in the format of the stream itself
+yet.) In Figure 9, the strings of bytes are shown in yellow and red. Using these, we calculated various malicious
+template link offsets. This allowed us to quite effectively detect the use of this technique in a specific implementation.
+6/27
+Figure 9. A malicious link inside a Table stream
+Attack chain analysis
+In the course of our research, we identified several attack chains (Figure 10), which differed in the number of stages
+required to load the main functionality, as well as the tools used at each stage. Nevertheless, the use of these chains
+is not new for this group.
+Figure 10. Flow chart of the identified attack chains
+The first thing we noticed was a remote template downloading an RTF document with an exploit, which in turn
+downloads and launches an HTA file. An example of the contents is shown in Figure 11.
+7/27
+Figure 11. The contents of the HTA file
+An examination of the document and its contents revealed that a vulnerability in Equation Editor was used to launch
+the exploit payload. The shellcode (highlighted in red in Figure 12) is located inside one of the document's objects
+and is executed in the context of the EQNEDT32.EXE process.
+Figure 12. The encrypted shellcode
+The bulk of the shellcode is stored in encrypted form and decrypted after control is transferred to it.
+Figure 13 shows the decrypted shellcode, with the first 13 bytes responsible for decrypting the main part of the
+shellcode (the loop statement is decrypted at the first iteration). For decryption, XOR is used with a two-byte key
+embedded in the code.
+8/27
+Figure 13. The decrypted shellcode
+The direct link to the HTA file (through which the loading is performed) is stored in the body of the shellcode (Figure
+14) and is additionally XOR-encrypted with the one-byte value of 0x12.
+9/27
+Figure 14. The link to the malicious HTA file
+As seen in Figure 11, the HTA file is designed to create on the disk the VBS scripts with the payload for subsequent
+stages, as well as an LNK file with the main payload containing the code for loading binary modules. Thus, the main
+task of the VBS macros (in our case, both macros had similar names: unbroken.vbs and unbroken.vbs.vbs) is to
+deobfuscate the contents of the LNK file (shown in Figure 15) and transfer control to it, after which the payload which
+was downloaded by the LNK file code is launched (we will discuss this in the "Malware analysis" section).
+Figure 15. The LNK file
+It is also worth noting that malicious documents which exploit the same vulnerabilities in Equation Editor and contain
+identical object names (for example, "weaseoijsd",highlighted in red in Figure 16) in RTF documents were analyzed
+by Cisco Talos Intelligence specialists and attributed to the Bitter APT group.
+Figure 16. The object name in the RTF file
+The second chain that we found is downloading malicious PowerShell scripts via remote templates (Figure 17), which
+in turn download malicious components (mostly Base64-encoded).
+10/27
+Figure 17. The script that loads the payload
+We also encountered cases of an intermediate .NET loader that downloaded a payload from a remote server and
+transferred control to it.
+This .NET loader is decoded from Base64 and launched by a PowerShell script (Figure 18).
+Figure 18. The script for decoding and launching the necessary export
+The export (Figure 19), activated from the loader, takes all the necessary parameters for network communication,
+including the connection encryption key (highlighted in yellow in Figure 18).
+Figure 19. The export activated from the loader
+The communication is encrypted with a simple XOR operation with the transferred key (Figure 20).
+Figure 20. The encryption of the communication inside the loader
+Malware analysis
+Initial module
+The main task of the initial stage is to decrypt the loader of the main functionality and transfer control to it. We should
+mention that all such samples that we discovered are quite large and also obfuscated. The loader, in turn, is stored
+exclusively in the process memory and is not present on the disk at all. The loader is decrypted in parts, via single-
+11/27
+byte XOR with different keys (Figure 21). It is also striking that the decryption code is "diluted" with various
+operations. This is obviously to make searching for and identifying data decryption procedures more complicated.
+Figure 21. Partial decryption of the loader
+We also noted that almost all of the functions that decrypt the loader contain a large amount of polymorphic code.
+This performs various operations with strings located inside the image, stack strings, as well as with their individual
+elements (Figure 22 shows an example). However, these operations do not have any effect on the decrypted data
+itself. They are used to calculate various variables and constants that affect the decryption parameters (data size,
+offsets, and so on), as well as to complicate the analysis process. The decrypted data is copied to a pre-allocated
+memory area as a valid PE image, after which control is transferred to it.
+Figure 22. An example of polymorphic code
+Main loader
+12/27
+The loader, in turn, is responsible for reading the data from the file containing the main payload, as well as for its
+decryption and unpacking.
+First, the loader decrypts the configuration located in its body. The decryption algorithm (Figure 23) is single-byte
+XOR with an embedded key. After decryption, the configuration is validated.
+We noted that the configuration has not changed since previous studies—it contains the same data and parameters
+(Figure 23).
+Figure 23. Decrypting the loader configuration
+13/27
+Figure 24. The loader configuration
+Next, the loader reads the file created at the initial stage of the installation, after which it decrypts and unpacks the
+data contained in it.
+It's at this stage where the first differences from earlier samples appear: to hide the payload, AES in CBC mode is
+used, after which the data is unpacked by LZNT1 (it used to be LZMA).
+The unpacking algorithm is rather interesting: the data is unpacked not as a single byte array, but by chunks of
+various sizes. Figure 25 shows the addition of the header_start_chunk offset to the zero offset of each chunk (for the
+first of them, an additional offset of 4), after which the unpacking function is activated.
+Thus, the structure of the first chunk in the decrypted load can be represented as follows:
+14/27
+    
+struct first_comprChunk
+{
+DWORD signature;
+WORD sizeOfCurrChunk; // in fact compressed buffer size
+BYTE data[sizeOfCurrChunk]; //compressed data
+};
+    
+Correspondingly, the remaining chunks do not have the first DWORD field and have the following structure:
+    
+struct comprChunk
+{
+WORD compressedBuffSize;
+BYTE data[sizeOfCurrChunk];
+};
+    
+Each chunk is unpacked independently of the others, without any padding, strictly according to the offsets from its
+headers.
+Figure 25. Unpacking the decrypted data
+The final stage of the loader involves loading the unpacked data as a valid PE image, searching for the required
+export by the ordinal name, and transferring control to it (Figure 26).
+15/27
+Figure 26. Overview of the loader functionality
+Payload
+The data received at the loader stage is the payload of the malware. Its main functionality is to initialize the
+connection to the control server and load various modules from it.
+Curiously enough, the payload module also has a configuration inside which is identical to the one in the loader, but
+in this case it is AES-encrypted and gets decrypted after control is transferred to the main module.
+Next, the malware generates a communication packet that is sent to the server to establish a connection. This packet
+contains information about the infected machine and is most likely designed to identify targets that are of interest for
+attackers.
+The structure of the packet is shown below (Figure 27).
+    
+struct Message
+{
+DWORD lenOfPacket;
+DWORD sizeOf_OSVERSIONINFO;
+BYTE data_OSVERSIONINFO[sizeOf_OSVERSIONINFO - 4];
+DWORD volumeInformation;
+BYTE timestamp[16]; // GetLocalTime
+WORD GetUserDefaultLCID;
+WORD GetSystemDefaultLCID;
+DWORD len_of_1_field;
+DWORD len_of_2_field;
+DWORD len_of_3_field;
+DWORD len_of_4_field;
+char username; //1_field
+char PcName; //2_field
+char executePath; //3_field
+char applicationName; //4_field
+char argvParam;
+DWORD lenOf_curr currFileSystem;
+char currFileSystem[lenOf_curr currFileSystem];
+};
+16/27
+Figure 27. An example of a generated packet
+The malware sends the generated packet to the control server, using the CLSID_IServerXMLHTTPRequest2 COM
+object for communication (Figure 28).
+Figure 28. The object initialization code
+The restored table of this object's virtual methods can be described by the following structure:
+    
+struct IServerXmlHttpRequest2Vtbl
+{
+int QueryInterface;
+int AddRef;
+int Release;
+int GetTypeInfoCount;
+int GetTypeInfo;
+int GetIDsOfNames;
+int Invoke;
+int open;
+int setRequestHeader;
+int getResponseHeader;
+int getAllResponseHeaders;
+int send;
+int abort;
+int get_status;
+int get_statusText;
+int get_responseXML;
+int get_responseText;
+int get_responseBody;
+int get_responseStream;
+int get_readyState;
+int put_onreadystatechange;
+int setTimeouts;
+int waitForResponse;
+int getOption;
+int setOption;
+17/27
+int setProxy;
+int setProxyCredentials;
+};
+    
+It should be noted that the protocol for communicating between the malware and the server supports five types of
+requests (Figure 29), each of which is used at a certain stage of communication.
+Figure 29. Types of requests from the malware to the control server
+For example, after a PROPFIND request that installs the directory contents on the remote server, a GET request is
+made to load the module contained on the control server. Curiously, if the loading is successful, this module is
+deleted (Figure 30).
+Figure 30. A fragment of the communication with the control server
+If the communication is successful, binary data is loaded (Figure 31) containing a specific module in obfuscated form.
+18/27
+Figure 31. Loading a module from the server
+The same procedures are used for obfuscating the data as for extracting the payload with the loader: AES-CBC
+encryption and LZNT1 compression.
+The functions responsible for the payload extraction procedure, as well as the encryption keys and initialization
+vectors used to encrypt the communication, are identical to those used to extract the payload in the loader.
+In the course of our research, we managed to obtain a sample that the malware downloads from the control server
+(examples of the server contents are shown in Figures 32 and 33).
+Figure 32. The directories on the remote server
+Figure 33. The file containing the module on the server
+The loaded module is decrypted and unpacked (Figure 34), and placed in the memory as a PE image, just as in the
+case of the loader. It's also worth noting that the ordinal name (which is used to search for the export to call) is
+identical to the one used to transfer control to the payload.
+19/27
+Figure 34. A fragment of decrypted and unpacked data
+20/27
+The decrypted payload is an executable module, which is preceded by a configuration. Based on the content of the
+configuration, the main functionality of the loaded module becomes clear: to steal files from an infected computer
+according to certain parameters.
+In particular, attackers are interested in files with these extensions: *.doc, *.docx, *.xls, *.xlsx, *.pdf, *.rtf, *.contact,
+*.odt, *.jpg, *.jpeg. Accordingly, the paths needed to search for the files are also present in the configuration. These
+can be both disk names and network paths to remote machines.
+Functionality of the loaded module
+The first thing that interested us was that the function that transfers control to the code of the loaded module in the
+first argument (Figure 35) passes a pointer to the function which communicates with the control server.
+Figure 35. A code fragment for calling the downloaded module
+Analyzing this function allowed us to understand that in this case the communication scheme is identical to the one
+described above: data is transferred by function calls from the table of virtual methods of the same COM object (in
+this case, PUT is used as the communication method).
+Other than this, the analysis of the loaded module reveals nothing of interest. It simply performs a recursive search in
+the directories of certain paths.
+It's worth noting that for each type of disk connected to the computer, a different type of search is used (Figure 36). It
+is also possible to steal files from remote servers—in this case, usernames and passwords (stored in the malware
+configuration) are transferred as parameters.
+21/27
+Figure 36. Different types of search implemented in the malware
+Let's also have a look at the function responsible for analyzing the contents of the scanned directories (Figure 37). It's
+worth noting that the function itself does not read the file directly. Instead, the pointer to the read function
+(pfnReadFile in the figure) is transferred through the global context—the structure that is initialized at the initial stage
+of the application—and the function is called this way.
+22/27
+Figure 37. The function for searching files in a directory
+Network infrastructure
+All the domains that we discovered in the 2019–2021 attacks were registered through the anonymous registrar
+bitdomain[.]biz. This resource guarantees complete anonymity and payment on the service is made exclusively in
+bitcoins.
+After analyzing the SOA records of the domains, we found that the admin email address field contains perfectly
+normal email addresses. In some cases, they turned out to be the registrant addresses that we found in WHOIS.
+Therefore, in those domains where WHOIS was hidden by the privacy settings, it can be assumed that the email in
+the SOA is the email of the registrant.
+Domain
+email
+mynewtemplate.com
+adam_s92@protonmail.com
+new-template.com
+piterjesten@protonmail.com
+upgrade-office.com
+p.borovin@protonmail.com
+upgrade-office.org
+pavel.savin1992@bk.ru
+msofficeupdate.org
+g.j.dodson@protonmail.com
+officeupgrade.org
+alex.sval@tutanota.com
+newoffice-template.com
+j.konnoban@email.cz
+template-new.com
+e.darmanin@inbox.lv
+When analyzing the 2022 campaign, we found a pattern: all the control servers registered by the attackers are used
+only to load remote templates.
+List of the detected servers:
+checklicensekey.com
+comparelicense.com
+driver-updated.com
+sync-firewall.com
+system-logs.com
+technology-requests.net
+translate-news.net
+23/27
+We also discovered an interesting fact: the attackers disguised one of the control servers (technology-requests.net),
+trying to make it look like the site https://www.hoosierheightsindianapolis.com (Figure 38).
+Figure 38. The legitimate site
+Figure 39 shows what the malicious site looked like on July 26, according to webcache.googleusercontent.com.
+Figure 39. The site from which the malicious content was downloaded
+The malicious tools communicate through a cloud service (similar to previous years), namely OpenDrive
+(https://www.opendrive.com). The service is used for both storing the malware modules to be loaded and for loading
+the collected data. In this case, a temporary mailbox is used for logins.
+Conclusion
+The Cloud Atlas group has been active for many years, carefully thinking through every aspect of their attacks. The
+group's toolkit has not changed for years—they try to hide their malware from researchers by using one-time payload
+requests and validating them. The group avoids network and file attack detection tools by using legitimate cloud
+storage and well-documented software features, in particular in Microsoft Office.
+The attackers also carefully choose their victims and target their attacks: the group used targeted mailings based on
+the professional field of the recipients, but we noted the absence of any publicly available information about the
+recipients, which could indicate a well-prepared attack.
+We predict that the group will continue to operate, increasing the complexity of its tools and attack techniques due to
+the fact that it has once again attracted the attention of researchers.
+Authors: Denis Kuvshinov, Aleksandr Grigorian, Daniil Koloskov, Positive Technologies
+24/27
+The article's authors thank the incident response and threat intelligence teams PT Expert Security Center for their
+help in drafting the story.
+Detection of CloudAtlas group activity by Positive Technologies
+products
+MP SIEM
+The following correlation rules analyze triggered processes and help identify the described activity:
+Suspicious_Connection
+Malicious_Office_Document
+Windows_Autorun_Modification
+The following correlation rules analyze the triggered scripts and help detect the described activity:
+Execute_Malicious_Powershell_Cmdlet
+Execute_Malicious_Command
+Implementation of D3FEND techniques in MP SIEM, which will help in detecting CloudAtlas grouping activity
+D3FEND
+ID
+Name of technique
+D3FEND
+Description
+D3-PA
+Process Analysis
+CloudAtlas group activity can be identified through the rules of process
+analysis.
+D3-SEA
+Script Execution
+Analysis
+CloudAtlas group activity can be detected through the analysis rules of the
+launched scripts.
+PT NAD
+PT NAD contains a CloudAtlas reputation list, which will help in identifying CloudAtlas grouping activity.
+Implementation of D3FEND techniques in PT NAD, which will help in detecting CloudAtlas activity.
+D3FEND
+ID
+Name of technique
+D3FEND
+Description
+D3-DNSTA
+DNS Traffic Analysis
+Using reputation lists to detect Cloud Atlas group activity
+D3-FC
+File Carving
+Extracting from traffic the files downloaded by the Cloud Atlas
+group
+PT Sandbox
+PT Sandbox verdicts on CloudAtlas grouping activity:
+Trojan.Win32.Generic.a
+Trojan.Win32.RegLOLBins.a
+Backdoor.Win32.CloudAtlas.a
+Trojan-Downloader.Win32.Generic.a
+Network traffic analysis rules to help detect CloudAtlas grouping activity:
+LOADER [PTsecurity] Possible CloudAtlas
+SUSPICIOUS [PTsecurity] PROPFIND method in http request
+SUSPICIOUS [PTsecurity] MKCOL method in http request
+Yara-rules, which will help in detecting CloudAtlas grouping activity:
+PTESC_tool_win_ZZ_OfficeTemplate__Downloader__DOC
+PTESC_exploit_win_ZZ_MalDoc__CVE201711882__Rtf__CA
+Implementation of D3FEND techniques in PT Sandbox, which will help in detecting CloudAtlas grouping activity
+D3FEND
+ID
+Name of technique
+D3FEND
+Description
+D3-PA
+Process Analysis
+Analysis of the behavior of processes created by malicious applications of
+the Cloud Atlas group
+D3-FA
+File Analysis
+Analysis of Cloud Atlas group files to determine their status and
+functionality
+D3-NTA
+Network Traffic
+Analysis
+CloudAtlas activity can be detected through traffic analysis
+Yara
+25/27
+    
+rule PTESC_tool_win_ZZ_OfficeTemplate__Downloader__DOC
+{
+	
+strings:
+	
+	
+$a = {00 A5 06 6E 04 B4}
+	
+	
+$b = {FF FF FF 7F FF FF FF 7F}
+	
+	
+$c = {B4 00 B4 00 81 81 12 30 00}
+	
+	
+$pref_1 = {68 00 74 00 74 00 70 00 3A 00 2F 00 2F}
+	
+	
+$pref_2 = {68 00 74 00 74 00 70 00 73 00 3A 00 2F 00 2F}
+	
+condition:
+	
+	
+uint16be ( 0 ) == 0xd0cf and ( for any i in ( 300 .. 400 ) : ( uint8be 
+( @a + i ) == 0x68 and uint8be ( @a + i + 2 ) == 0x74 and uint8be ( @a + i + 4 ) == 
+0x74 and uint8be ( @a + i + 6 ) == 0x70 ) or for any j in ( 100 .. 200 ) : ( uint8be ( 
+@b + j ) == 0x68 and uint8be ( @b + j + 2 ) == 0x74 and uint8be ( @b + j + 4 ) == 0x74 
+and uint8be ( @b + j + 6 ) == 0x70 ) or for any k in ( 200 .. 400 ) : ( uint8be ( @c + 
+k ) == 0x68 and uint8be ( @c + k + 2 ) == 0x74 and uint8be ( @c + k + 4 ) == 0x74 and 
+uint8be ( @c + k + 6 ) == 0x70 ) ) and ( ( for any l in ( 14 .. 70 ) : ( uint8be ( 
+@pref_1 + l ) == 0x2f ) ) or ( for any y in ( 16 .. 70 ) : ( uint8be ( @pref_2 + y ) 
+== 0x2f ) ) )
+}
+    
+rule PTESC_exploit_win_ZZ_MalDoc__CVE201711882__Rtf__CA
+{
+ strings:
+ $equation = "4571756174696F6E" nocase ascii //180000004571756174696F6E
+ $msftedit = "generator Msftedit 6.39.15" nocase ascii //generator Msftedit 
+6.39.15.1401
+ $objclass = "objclass weaseoijsd" nocase ascii
+ condition:
+ uint32be ( 0 ) == 0x7B5C7274 and ($equation and ($msftedit or $objclass) or (for any 
+i in (50..350) : (uint8be (@equation + i) == 0x64 and uint8be (@equation + i + 2) == 
+0x64 and uint8be (@equation + i + 4) == 0x64 and uint8be (@equation + i + 6) == 
+0x38)))
+}
+IOCs
+File indicators
+Name
+SHA-256
+Методические рекомендации для
+грузоотправителей-грузополучателей (2022).doc
+(Guidelines for consignors-consignees (2022).doc)
+f2c4281e4d6c11173493b759adfb0eb798ce46650076e7633cf086b6d59fdb
+Будьте_бдительны_Корпоративное_уведомление.doc
+(Stay_alert_Corporate_Notice.doc)
+482aeb3db436e8d531b2746a513fe9a96407cf4458405680a49605e13685
+Иранские оценки визита В. Путина в Тегеран.doc
+(Iranian assessments of V. Putin's visit to Tehran.doc)
+2f97374c76ae10c642a57a8b13d25cbdc070c9098c951ea418d1533ac01d
+Почему исламский мир не дает Западу изолировать
+Россию.doc (Why the Islamic world does not allow the
+West to isolate Russia.doc)
+3cf2bda35e88c59bb89e7fdc8fcfd4c46b2b9186e61325d2924e049d775b74
+leptophis[1].doc
+c0e154b10d70b99b5616a2eda6bfe188a49f85ed3aa92d48ec9ce709df9d5
+lep[1].hta
+a4194555b19ea32680cc23f8f7d42da02b82eba8b64cb5f4630110f4e2c1dd
+unbroken.vbs
+59066dc428cde7cc55f3c24c2658d3e288f3f072811d86243a85af14bd4827
+unbroken.vbs.vbs
+4cb6e224b6b03a2f6ac1ac23e6bf097067018b90493ee94f210f66fbbbbdce
+list.ps1
+2233c0d4030cc728c2219b1e9c4c05cb262e2ddc7f4ac2f2924767396418c
+office.ps1
+7fcf7c1dad362283d0a27993df4764e2bbb11857842b80f63d63449b9f2f1fa
+office.ps1
+d9fc6504c8970fefc441c77965937c382b029f1278918d1f54d196859e9f6e7
+rtcpsvc.dll
+3e7b066c26ba98d285a41043c739be8767606d9df057ee2f7bcddb7862c00
+lockrail.dll
+c5d1de206445f508c1af5f213e46b915b536e4b36ef917c4e826a982dd47c3
+holeincorner
+8215e918ca3a77424dadac1aebc9a44b8f9840cd1389df0399a9fa4eb6329
+Salzgitters.avi
+b8dc70b9ffe06c9ecaf0216ea7948fe718143db10641a23297652693ea026a
+Schultes.wmv
+f4e710f515249e8c08ae76284bfb280070e1fd2308e9d9321d92163dfc73be
+26/27
+Network indicators:
+api-help.com
+driver-updated.com
+sync-firewall.com
+system-logs.com
+technology-requests.net
+translate-news.net
+checklicensekey.com
+comparelicense.com
+msupdatecheck.com
+protocol-list.com
+Payload filenames (from the configuration):
+callicrates
+tinh
+amianthium
+mandarinduck
+cushioning
+kingsclover
+Email addresses from which malicious emails were sent:
+MITRE TTPs
+ID
+Name
+Description
+Resource Development
+T1583
+Acquire Infrastructure
+The Cloud Atlas group used servers to store remote
+templates, as well as cloud storage as a control server
+T1585
+Establish Accounts
+The Cloud Atlas group registered cloud service accounts
+and tempmail mailboxes
+Initial Access
+T1566.001 Phishing: Spearphishing Attachment The Cloud Atlas group sent phishing emails with malicious
+content
+Execution
+T1204.002
+User Execution: Malicious File
+The Cloud Atlas group sent emails with malicious DOC and
+DOCX files
+T1559.001
+Inter-Process Communication:
+Component Object Model
+The Cloud Atlas group used COM components in their tools
+T1059.001 Command and Scripting Interpreter:
+PowerShell
+The Cloud Atlas group used PowerShell scripts to load and
+run their components
+T1059.005 Command and Scripting Interpreter:
+Visual Basic
+The Cloud Atlas group used Visual Basic scripts to load
+and run their components
+T1203
+Exploitation for Client Execution
+The Cloud Atlas group used vulnerabilities in Microsoft
+Office components to launch their malicious components
+Persistence
+T1547.001
+Boot or Logon Autostart Execution:
+Registry Run Keys / Startup Folder
+The Cloud Atlas group used registry keys (autorun) for
+persistence
+Defense Evasion
+T1221
+Template Injection
+The Cloud Atlas group used a remote template injection
+technique to hide the malicious payload
+T1140
+Deobfuscate/Decode Files or
+Information
+The Cloud Atlas group encrypts its components to protect
+them from discovery and analysis
+Collection
+T1025
+Data from Removable Media
+The Cloud Atlas group used tools to collect information
+from various remote devices
+T1039
+Data from Network Shared Drive
+The Cloud Atlas group used tools to collect information
+from various network devices
+T1005
+Data from Local System
+The Cloud Atlas group used tools to collect information
+from the file system
+T1560.002 Archive Collected Data: Archive via
+Library
+The Cloud Atlas group applies LZNT1 compression to
+collected data using the WinAPI library
+T1560.003 Archive Collected Data: Archive via
+Custom Method
+The Cloud Atlas group used custom data encryption
+algorithms
+T1119
+Automated Collection
+The Cloud Atlas group used methods of automatic data
+collection from infected machines
+Command and Control (C2)
+T1573.001
+Encrypted Channel: Symmetric
+Cryptography
+The Cloud Atlas group used AES encryption to hide
+network communication
+T1041
+Exfiltration Over C2 Channel
+The Cloud Atlas group used a C2 channel to transfer
+27/27
+collected data
+T1102
+Web Service
+The Cloud Atlas group used the OpenDrive cloud service
+as a control server
+General TTP countermeasures used by CloudAtlas
+Basic protective measures
+D3FEND
+ID
+Name of
+technique
+D3FEND
+Description
+D3-
+SYSVA
+System
+Vulnerability
+Assessment
+Since CloudAtlas exploits vulnerabilities, it is necessary to monitor the vulnerability
+of systems in the infrastructure and update vulnerable software in a timely manner
+D3-SU
+Software
+Update
+Since CloudAtlas exploits vulnerabilities, it is necessary to monitor the vulnerability
+of systems in the infrastructure and update vulnerable software in a timely manner
+D3-OTF
+Outbound
+Traffic Filtering Restrict network traffic to untrusted servers from IOC lists
+D3-
+DNSDL DNS Denylisting Block resolution of DNS names from IOC lists
+Additional protective measures
+D3FEND
+ID
+Name of
+technique
+D3FEND
+Description
+D3-SRA
+Sender
+Reputation
+Analysis
+CloudAtlas group uses free email services, so as an additional measure of protection
+against phishing, you can specially mark emails from external free services to attract
+additional attention of the user
+D3-
+UDTA
+User Data
+Transfer
+Analysis
+CloudAtlas grouping downloads data through compromised workstations, so you can
+use profiling of the amount of data transferred to the Internet by the user to detect
+anomalies in the case of massive data exfiltration

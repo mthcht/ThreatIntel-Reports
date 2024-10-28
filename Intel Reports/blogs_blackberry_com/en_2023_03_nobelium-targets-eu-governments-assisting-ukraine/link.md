@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.blackberry.com/en/2023/03/nobelium-targets-eu-governments-assisting-ukraine)

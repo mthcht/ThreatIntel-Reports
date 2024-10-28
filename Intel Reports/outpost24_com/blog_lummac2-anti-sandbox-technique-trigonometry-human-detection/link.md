@@ -1,0 +1,1 @@
+[Link to the article](https://outpost24.com/blog/lummac2-anti-sandbox-technique-trigonometry-human-detection/)

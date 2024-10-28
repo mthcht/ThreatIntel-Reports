@@ -1,0 +1,1 @@
+[Link to the article](https://blog.talosintelligence.com/how-do-cryptocurrency-drainer-phishing-scams-work/)

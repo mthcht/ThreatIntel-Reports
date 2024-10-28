@@ -1,0 +1,1 @@
+[Link to the article](https://yoroi-company.translate.goog/warning/campagna-operation-triangulation-che-sfruttano-vulnerabilita-0-day-di-tipo-0-click-su-dispositivi-mobili-apple/?_x_tr_sl=auto&_x_tr_tl=en&_x_tr_hl=en&_x_tr_pto=wapp)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/en_us/research/24/b/cve202421412-water-hydra-targets-traders-with-windows-defender-s.html)

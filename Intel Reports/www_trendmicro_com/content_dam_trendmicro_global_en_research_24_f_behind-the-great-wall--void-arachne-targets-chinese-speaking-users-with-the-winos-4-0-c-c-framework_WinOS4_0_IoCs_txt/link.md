@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/24/f/behind-the-great-wall--void-arachne-targets-chinese-speaking-users-with-the-winos-4-0-c-c-framework/WinOS4.0_IoCs.txt)

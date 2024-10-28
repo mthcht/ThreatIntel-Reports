@@ -1,0 +1,133 @@
+1/7
+asec.ahnlab.com /en/31683/
+PseudoManuscrypt Being Distributed in the Same Method as
+Cryptbot - ASEC BLOG
+⋮ 2/18/2022
+The ASEC analysis team has discovered that PseudoManuscrypt malware was being distributed in Korea
+since May 2021. Introduced in the previous ASEC blog, PseudoManuscrypt is disguised as an installer
+that is similar to a form of Cryptbot, and is being distributed. Not only is its file form similar to Cryptbot,
+but it is also distributed via malicious sites exposed on the top search page when users search
+commercial software-related illegal programs such as Crack and Keygen.
+The team has confirmed the executable file path below in the logs collected by AhnLab’s ASD (AhnLab
+Smart Defense) infrastructure, and it appears that the user was trying to download a Windows validation
+program from a malicious site.
+Executable File Path
+…\downloads\60b63e_kmsauto-net-201\kmsauto-net-2016-v154-windows-10-activator-
+portable\60b63e21e82a660b63e21e_setup_v18.2.9\main_setup_x86x64.exe
+Log Detection Graph
+Such a distribution method targets random users, and it has been confirmed that numerous PCs in Korea
+were infected. The figure above is a graph of the number of logs that were detected since the start of
+distribution (May 2021) up till now. The green graph shows the number of infected PCs, and the red
+graph shows the number of detected files. You can see that on average, around 30 PCs were
+consistently being infected every day.
+2/7
+PseudoManuscrypt operation flow
+The top-level file disguised as an illegal program is in the form of NSIS (Nullsoft Scriptable Install System)
+Installer, and it creates the “setup_installer.exe” file to execute it. “Setup_installer.exe” is in the form of 7z
+SFX, and it creates a Loader file, various malware, and numerous dll files. The dll files are all normal
+files, and they are libraries needed to execute the Loader file. Loader executes the various malware that
+was created together, and this process is the same as the execution process of Cryptbot. Other than
+PseudoManuscrypt, malware executed by Loader includes SmokeLoader, Glupteba, etc., and
+PseudoManuscrypt is in the form of 7z SFX. Finally, PseudoManuscrypt creates install.dll (Loader that
+performs decoding) and install.dat (Encoded shellcode) in the %TEMP% path. It then creates and
+executes a shortcut file called “install.dll.lnk” to operate a certain function inside the install.dll file.
+Property of install.dll.lnk
+C:\Windows\system32\rUNdlL32.eXe “%TEMP%\install.dll”,install
+PseudoManuscrypt execution flow (2)
+The install.dll file decodes the install.dat file to execute it in the memory. The install.dat file contains a
+shellcode and pe data that is encoded and compressed, and the shellcode decodes the encoded and
+compressed pe data and executes it. The pe data then performs the actual malicious behavior and
+decodes additional data inside to create it with the tmp extension, which is then registered to service.
+Details about pe data are explained below.
+3/7
+Command line scan
+The called pe data first checks if the name of the currently running process is svchost.exe. In this case,
+the current process was run as rundll32.exe by the shortcut file.
+MachineGuid value
+When it is not a svchost.exe process, it creates a certain registry key and saves malicious data. For the
+name of the created registry, it uses the MachineGuid value that exists in the
+HKLM\SOFTWARE\Microsfot\Cryptography registry. MachineGuid is a HardwareID value, where each
+PC has a unique value. It uses this characteristic to create the registry key name.
+MachineGuid value is encoded via the “Global” string, and the encoded MachineGuid value is used to
+create a registry key in the path below. The encoded “install.dat” data is then saved to the registry key.
+4/7
+– HKLM\SOFTWARE\Classes\CLSID\MachineGuid(“Global”):1 – Encoded “install.dat”
+Running service scan
+After it creates the registry key, it checks the process id of services that include “-k netsvcs” in their
+arguments, then injects the decoded “install.dat” in the process. It then deletes the “install.dat” file that
+exists in the %TEMP% path, and the injected process references the encoded “install.dat” data that was
+saved to the registry key.
+The injected svchost.exe goes through the same process and scans the command line. It checks if the
+name of the current process is svchost.exe and if netsvcs is included in the argument, it executes two
+threads.
+The threat that is first executed performs the feature of registering a certain file to service when the
+process is terminated. It first brings down the priority of process termination to the lowest and configures
+the control handler.
+5/7
+Control handler function
+The function that is added to the control handler is as shown above, and it checks the received control
+signals. The function scans for the following control signal values: 5 and 6. If the signal value is 5 (When
+the user logs off), it reconfigures the priority of process termination and the control handler, and if the
+signal value is 6 (When the system shuts down), it executes a function that creates a malicious service.
+The malicious service is created via the process below.
+After creating the SYSTEM\\CurrentControlSet\\Services\\AppService[a-z] registry, it configures this
+service registry as shown below.
+– Start : 0x02 (Starts automatically when the system starts)
+– imagepath : %SystemRoot%\System32\svchostexe -k AppService
+The name of the created service and the file that is executed via the service are configured as follows:
+– SYSTEM\\CurrentControlSet\\ServicesAppService[a-z]\\Parameters:servicedll = %System%\Encoded
+string.tmp
+– SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Svchost:AppService =AppService[a-z]
+Created service
+The file that is to be registered to the service decodes the data that exists in a certain location and
+creates it with the tmp extension in the System path. The created tmp file acts as a Loader that decodes
+and executes the encoded “install.dat” data existing in a certain registry key. It appears that this process
+serves the purpose of performing continuous malicious behaviors even when the user PC is shut down
+and restarted.
+6/7
+Adding an exclusion to Windows Defender
+After the service is created, the System folder is excluded from Windows Defender scans, and the first
+thread is terminated.
+Creating process
+The second thread that is executed is the %System%\svchost.exe -k SystemNetworkService command,
+which performs the function of creating a process and injecting the decoded “install.dat” data.
+The injected svchost.exe goes through the same process to scan the command line, and if it’s
+svchost.exe run by the SystemNetworkService argument, it performs the actual malicious behavior. It
+steals various user credentials including the data below via this process and sends them to the attacker’s
+server.
+VPN connection information
+Clipboard data
+Audio data
+List of shared network folders
+Information of processes that accept TCP and UDP ports
+File version information of the running process
+C2 : email.yg9[.]me
+In addition to the malicious features above, it can also access the C2 server under the attacker’s
+command and perform various malicious behaviors such as file download, screen capture, and execution
+of keylogger and cmd commands.
+As this malware is disguised as an illegal software installer and is distributed to random individuals via
+malicious sites, users must be careful not to download relevant programs. As malicious files can also be
+registered to service and perform continuous malicious behaviors without the user knowing, periodic PC
+maintenance is necessary.
+7/7
+[File Detection]
+Trojan/Win.Generic.R420870 (2021.05.16.01)
+Malware/Win.Generic.R421780 (2021.05.21.03)
+Trojan/Win.Generic.C4512227 (2021.06.04.01)
+Trojan/Win.Generic.C4512246 (2021.06.04.01)
+Trojan/Win.Generic.R421722 (2021.08.17.03)
+Trojan/Win.Generic.R436809 (2021.08.17.03)
+Trojan/Win.Generic.R436811 (2021.08.17.03)
+Trojan/Bin.Encoded (2022.01.28.02)
+[IOC Info]
+1fecb6eb98e8ee72bb5f006dd79c6f2f
+5de2818ced29a1fedb9b24c1044ebd45
+58efaf6fa04a8d7201ab19170785ce85
+839e9e4d6289eba53e40916283f73ca6
+89c8e5a1e24f05ede53b1cab721c53d8
+5e6df381ce1c9102799350b7033e41df
+a29e7bbe6dee4eea95afa3f2e3a1705a
+8ae40c8418b2c36b58d2a43153544ddd
+email.yg9[.]me
+Subscribe to AhnLab’s next-generation threat intelligence platform ‘AhnLab TIP’ to check related
+IOC and detailed analysis information.

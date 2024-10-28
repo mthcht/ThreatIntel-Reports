@@ -1,0 +1,1 @@
+[Link to the article](https://www.deepinstinct.com/blog/muddyc2go-latest-c2-framework-used-by-iranian-apt-muddywater-spotted-in-israel)

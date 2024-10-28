@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/anonymous-sudan-hacktivist-group-ddos-indictment/ - U.S. Department of Justice Indicts Hacktivist Group Anonymous Sudan for Prominent DDoS Attacks in 2023 and 2024)

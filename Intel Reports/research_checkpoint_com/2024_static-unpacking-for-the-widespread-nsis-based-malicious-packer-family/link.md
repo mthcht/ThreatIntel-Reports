@@ -1,0 +1,1 @@
+[Link to the article](https://research.checkpoint.com/2024/static-unpacking-for-the-widespread-nsis-based-malicious-packer-family/)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.verfassungsschutz.de/SharedDocs/publikationen/EN/prevention/2023-03-20-joint-cyber-security-advisory.pdf;jsessionid=C932136E2B1078A87C5D02616A769AEB.intranet672?__blob=publicationFile&v=2)

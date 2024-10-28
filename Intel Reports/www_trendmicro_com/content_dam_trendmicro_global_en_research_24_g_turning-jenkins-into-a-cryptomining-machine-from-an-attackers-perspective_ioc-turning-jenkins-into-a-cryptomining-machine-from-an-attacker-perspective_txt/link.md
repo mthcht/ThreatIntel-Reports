@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/24/g/turning-jenkins-into-a-cryptomining-machine-from-an-attackers-perspective/ioc-turning-jenkins-into-a-cryptomining-machine-from-an-attacker-perspective.txt)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.reversinglabs.com/blog/r77-rootkit-typosquatting-npm-threat-research)

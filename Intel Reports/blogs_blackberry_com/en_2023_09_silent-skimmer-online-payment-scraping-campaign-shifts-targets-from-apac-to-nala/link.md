@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.blackberry.com/en/2023/09/silent-skimmer-online-payment-scraping-campaign-shifts-targets-from-apac-to-nala)

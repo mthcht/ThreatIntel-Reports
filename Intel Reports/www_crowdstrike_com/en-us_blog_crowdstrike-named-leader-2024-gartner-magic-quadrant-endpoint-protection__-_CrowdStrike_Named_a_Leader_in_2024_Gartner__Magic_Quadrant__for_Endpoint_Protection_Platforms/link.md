@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/crowdstrike-named-leader-2024-gartner-magic-quadrant-endpoint-protection/ - CrowdStrike Named a Leader in 2024 Gartner® Magic Quadrant™ for Endpoint Protection Platforms)

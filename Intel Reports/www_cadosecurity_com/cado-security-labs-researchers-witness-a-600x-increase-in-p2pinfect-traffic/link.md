@@ -1,0 +1,1 @@
+[Link to the article](https://www.cadosecurity.com/cado-security-labs-researchers-witness-a-600x-increase-in-p2pinfect-traffic/)

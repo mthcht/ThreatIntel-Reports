@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/l/analyzing-asyncrat-code-injection-into-aspnet_compiler-exe-/ioc-analyzing-asyncrat-code-injection-into-aspnet-compiler-exe%20.txt)

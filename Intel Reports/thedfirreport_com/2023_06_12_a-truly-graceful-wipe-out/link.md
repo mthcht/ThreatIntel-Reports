@@ -1,0 +1,1 @@
+[Link to the article](https://thedfirreport.com/2023/06/12/a-truly-graceful-wipe-out/)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/en_us/research/23/e/8220-gang-evolution-new-strategies-adapted.html)

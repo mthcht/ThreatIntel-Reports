@@ -1,0 +1,517 @@
+1/19
+February 9, 2021
+BendyBear: Novel Chinese Shellcode Linked With
+Cyber Espionage Group BlackTech
+unit42.paloaltonetworks.com/bendybear-shellcode-blacktech
+By Mike Harbison
+February 9, 2021 at 3:00 AM
+Category: Unit 42
+Tags: BendyBear, BlackTech, DbgPrint, malware, shellcode, TaiDoor, WaterBear
+This post is also available in: 日本語 (Japanese)
+Executive Summary
+Highly malleable, highly sophisticated and over 10,000 bytes of machine code. This is
+what Unit 42 researchers were met with during code analysis of this “bear” of a file. The
+code behavior and features strongly correlate with that of the WaterBear malware family,
+which has been active since as early as 2009. Analysis by Trend Micro and TeamT5
+unveiled WaterBear as a multifaceted, stage-two implant, capable of file transfer, shell
+access, screen capture and much more. The malware is associated with the cyber
+espionage group BlackTech, which many in the broader threat research community have
+assessed to have ties to the Chinese government, and is believed to be responsible for
+recent attacks against several East Asian government organizations. Due to the
+similarities with WaterBear, and the polymorphic nature of the code, Unit 42 named this
+2/19
+novel Chinese shellcode “BendyBear.” It stands in a class of its own in terms of being one
+of the most sophisticated, well-engineered and difficult-to-detect samples of shellcode
+employed by an Advanced Persistent Threat (APT).
+The BendyBear sample was determined to be x64 shellcode for a stage-zero implant
+whose sole function is to download a more robust implant from a command and control
+(C2) server. Shellcode, despite its name, is used to describe the small piece of code loaded
+onto the target immediately following exploitation, regardless of whether or not it actually
+spawns a command shell. At 10,000+ bytes, BendyBear is noticeably larger than most,
+and uses its size to implement advanced features and anti-analysis techniques, such as
+modified RC4 encryption, signature block verification, and polymorphic code.
+The sample analyzed in this blog was identified by its connections to a malicious C2
+domain published by Taiwan’s Ministry of Justice Investigation Bureau in August 2020. It
+was discovered absent additional information regarding the exploit vector, potential
+victims or intended use.
+Palo Alto Networks customers can be protected from the attacks outlined in this blog with
+the Next-Generation Firewall alongside DNS Security, URL Filtering and WildFire
+security subscriptions, and Cortex XDR.
+A New Class of Shellcode
+At a macro level, BendyBear is unique in that it:
+Transmits payloads in modified RC4-encrypted chunks. This hardens the
+encryption of the network communication, as a single RC4 key will not decrypt the
+entire payload.
+Attempts to remain hidden from cybersecurity analysis by explicitly checking its
+environment for signs of debugging.
+Leverages existing Windows registry key that is enabled by default in Windows 10 to
+store configuration data.
+Clears the host’s DNS cache every time it attempts to connect to its C2 server,
+thereby requiring that the host resolve the current IP address for the malicious C2
+domain each time.
+Generates unique session keys for each connection to the C2 server.
+Obscures its connection protocol by connecting to the C2 server over a common port
+(443), thereby blending in with normal SSL network traffic.
+Employs polymorphic code, changing its runtime footprint during code execution to
+thwart memory analysis and evade signaturing.
+Encrypts or decrypts function blocks (code blocks) during runtime, as needed, to
+evade detection.
+Uses position independent code (PIC) to throw off static analysis tools.
+In the following sections, we provide an in-depth technical breakdown of each of these
+capabilities.
+3/19
+Technical Details
+Shellcode Execution
+The shellcode (SHA256:
+64CC899EC85F612270FCFB120A4C80D52D78E68B05CAF1014D2FE06522F1E2D0) is
+considered to be a stager, or downloader, whose function is to download an implant from
+a C2 server. During execution, the code employs byte randomization to obscure its
+behavior. This is achieved by using the host’s current time as a seed for a pseudorandom
+number generator, and then performing additional operations against that output. The
+resulting values are used to overwrite blocks of previously executed code. This byte
+manipulation is the first anti-analysis technique observed in the code, as any attempt to
+dump the memory segment would result in illegitimate or incorrect operations. Figure 1
+shows an example of the shellcode main entry point before and during runtime execution.
+Figure 1. Modified shellcode runtime example.
+Because shellcode lacks the ability to run on its own, a Windows loader is required to
+allocate an environment in memory for it to execute. At the time of analysis, no loader had
+been identified for this shellcode; Therefore, Unit 42 created a custom loader to study the
+code during its runtime execution. Since then, however, several older installers were
+discovered with embedded WaterBear shellcode based on attributes identified from this
+sample. More information on these loaders can be found in the Appendix section “x86
+WaterBear Loaders”.
+The shellcode begins by locating the target’s Process Environment Block (PEB) to check if
+it’s currently being debugged. However, the code is written such that it pulls both the
+“BeingDebugged” and “BitField” values from the PEB, resulting in code logic that
+invalidates the debugger check. Because of this, the shellcode will always fail to recognize
+when a debugger is attached. This routine is performed 52 times in a while loop.
+Next, the shellcode iterates through the PEB’s loader module list looking for the base
+address of Kernel32.dll. This is typical of shellcode, as the Kernel32.dll base address is
+necessary to resolve any dependency files required by the shellcode to run. With this
+address, the shellcode loads its dependency modules and resolves any necessary Windows
+Application Programming Interface (API) calls using standard shellcode API hashing. The
+following modules are loaded:
+Advapi32.dll
+4/19
+Kernel32.dll
+Msvcrt.dll
+User32.dll
+Ws2_32.dll
+With the shellcode initialization complete, it moves onto its main function. It begins by
+querying the target’s registry, at the following key:
+HKEY_CURRENT_USER\Console\QuickEdit
+This registry key is used by the Windows command prompt to enable Quick Edit mode.
+Quick Edit mode allows copy and paste from the command prompt to the clipboard. By
+default, this key contains a REG_DWORD, a 32-bit number of either 1 for enabled or 0 for
+disabled. BendyBear reads this value, multiplies it by 1000 and performs the following
+calculation on the result:
+If the result is less than 1,000 or greater than 3,300,000 the shellcode configuration
+(QuickEdit) is 4,000 (0xFA0) otherwise it is the result of the computed value.
+Refer to the highlighted light blue value in Figure 2 Shellcode configuration.
+This check is performed each and every time the shellcode is executed. One explanation
+for the use of this key is that the value is written to by the shellcode loader (to a value
+other than 0 or 1) and it’s used by the shellcode to obtain configuration settings.
+It then decrypts its internal configuration structure, which is 1,152 bytes. An example is
+shown in Figure 2.
+5/19
+6/19
+Figure 2. Shellcode configuration structure.
+A breakdown of the configuration structure shown in Figure 2 is below (from top to
+bottom):
+Highlighted in neon green are the two, 16-byte keys used for XORing values
+throughout the shellcode.
+ 
+7D 38 BA FD E1 C8 D2 DF B6 EE 33 F9 14 BF 52 96 
+ 
+71 17 DF E4 AE 3B A9 F2 D5 3D 75 CC D3 0D 57 72
+Highlighted in light blue are the two bytes computed from the host’s Quick Edit
+Registry key.
+ 
+E8 03
+Highlighted in orange are the four bytes that represent the shellcode version.
+ 
+30 2E 32 34 (0.24)
+Highlighted in pink are the 17 bytes that make up the C2 domain. Bitwise NOT
+(unsigned byte) to decode the values including the NULL.
+ 
+88 98 CE D1 96 91 94 9A 8C 93 96 89 9A D1 9C 90 92
+Highlighted in dark green are the 103 bytes that are used for pattern elimination.
+XOR with 0xFF to NULL values.
+ 
+FF FF FF FF FF FF FF FF FF FF FF…
+Highlighted in magenta are the two bytes that make up the target C2 port.
+ 
+BB 01
+Highlighted in light yellow are the resolved function pointers used by the shellcode.
+ 
+92 13 73 33 37 02
+Highlighted in dark cyan are the 112 bytes that make up the function pointer sizes
+used to encrypt or decrypt function blocks.
+ 
+EE 01
+Highlighted in dark red are the 289 bytes that make up the resolved Windows API
+functions used by the shellcode
+ 
+A0 2E 52 CC FC 7F 00 00…
+Network Communications
+7/19
+Figure 3. Stager communication flow.
+Before communicating with the C2 server, the shellcode flushes the host’s DNS cache by
+performing the following:
+1. Loads module dnsapi.dll
+2. Calls API DnsFlushResolverCache
+When this API is called, all domains resolved are cleared from the host’s DNS cache, not
+just the target C2 server. This forces the host to resolve the current IP associated with the
+C2 domain, ensuring that communication continues as network infrastructure becomes
+compromised or unavailable. It also implies the developers own the domain and can
+update the IP.
+The stager begins by computing 10 bytes of data to send to the C2 server. These 10 bytes
+make up a challenge request packet. The stager sends the challenge request to the C2 and
+waits for a challenge response. When received and properly decrypted, the stager checks
+for magic values or signature bytes at specific offsets. If this check fails, the network
+connection is aborted. This check ensures trusted communication with the intended C2
+server and initiates the download of the payload.
+I. Stager Generates Challenge Request Packet
+The stager computes a 10-byte challenge request containing information for the C2, to
+include the size of the data (being the session keys) to be received next. The challenge
+request and session keys are sent to the C2 simultaneously. Example request:
+26BCFCCE738A211F3763
+II. C2 Server Decrypts Challenge Request Packet
+The C2 decrypts the challenge request packet using the following steps:
+1. First byte will be XORed with the second byte, second byte with third byte…until byte
+10, followed by:
+8/19
+A. Byte 7 is updated from the result of ( byte 7 XORed with byte 3 ).
+B. Byte 2 is updated from the result of ( byte 2 XORed with byte 0 ).
+C. Byte 8 is updated from the result of ( byte 8 XORed with byte 0 ).
+D. Byte 9 is updated from the result of ( byte 9 XORed with byte 5 ).
+2. Final value is XORed with key 0x3FDA5F9AD85D50C77E6A
+The challenge request decrypts to the following (represented as hex bytes):
+Figure 4. Decrypted request challenge.
+The last four bytes of the decrypted request packet inform the C2 server of the size of the
+expected network traffic to follow. As shown above, the value is 0x20, or 32 bytes. These
+32 bytes make up the session keys used by the C2 server to encrypt a server challenge
+response and encrypt the payload.
+Example of session keys received by the C2 server:
+Session key 1–> 8C931D4F764B0661C26D77239EB454CA
+Session key 2–> 7A4DD0AA6C3F37CDBDAFA4CBD6B27697
+The challenge request packet and session keys are computed for each beacon and
+therefore would always be unique.
+III. C2 Authenticates With the Stager
+The C2 uses the session keys to build the RC4 state box and as an XOR key for encryption
+and decryption.
+*It should be noted that the use of session key 2 is not yet fully understood, and it did not
+appear to be used to communicate with the stager.
+1. The pre-session key is computed using session key 1 (first 16 bytes) as follows:
+ 
+Pre-Session Key = session key 1 XOR 
+ 
+0X6162636465666768696A6B6C6D6E6F00
+2. Using the computed pre-session key from step 1, the C2 server builds the RC4 Key
+Scheduling Algorithm (KSA). It is computed as follows:
+a. Build the RC4 KSA using the following inputs to the below function:
+ 
+data = 16-byte key 0x0C2F65194FF37B2D63D34635C7B205E4
+ 
+key = 16-byte computed pre-session key from step 1
+   Example RC4 (modified) KSA routine:
+9/19
+ def rc4_KSA(data, key):
+      x = 0
+      box = range(258)
+      box[256] = 0
+      box[257] = 0
+      for i in range(256):
+      x = (x + box[i] + ord(key[i % len(key)])) % 256
+      box[i], box[x] = box[x], box[i]
+      return box
+*Note about the input parameter “data” for the KSA routine: It is the XOR result of the
+two 16-byte keys shown neon green in Figure 2. Shellcode Configuration Structure.
+3. Construct 10-byte server challenge response header using the hex values shown in
+Figure 5.
+Figure 5. Server Command Challenge Header
+4. Encrypt server challenge response header from step 3:
+a. XOR 10-byte server challenge with key 0x33836E6B3FAA6AC464DA and perform the
+following:
+i. Byte 7 is updated from the result of ( byte 7 XORed with byte 3 ).
+ 
+ii. Byte 2 is updated from the result of ( byte 2 XORed with byte 0 ).
+ 
+iii. Byte 8 is updated from the result of ( byte 8 XORed with byte 0 ).
+ 
+iv. Byte 9 is updated from the result of ( byte 9 XORed with byte 5 ).
+b. Encrypted server challenge response header = result of 4(a)
+5. Compute final authentication key:
+a. XOR the following values:
+i. 0x0C2F65194FF37B2D63D34635C7B205E4
+ 
+ii. Value computed from step 1, i.e. Pre-Session Key
+*The 16-byte value in 5.a.i is the same input parameter used in the KSA algorithm in step
+2. The stager expects this key from the C2 otherwise the session is aborted.
+10/19
+The values generated in steps 4 and 5 make up the complete server challenge response. At
+this point, the C2 sends the server challenge response to the stager, completing the
+authentication process.
+IV. C2 Encrypts and Transmits Payload
+Next, the C2 prepares to send a command to the stager. BendyBear only supports one
+type of command: payload download.
+1. Build a 10-byte command header using the hex values shown in Figure 6.
+Figure 6. Updated server command challenge header.
+The only change to the header is the fixed signature value from 0x40 to 0x43.
+2. Encrypt the command header from step 1:
+The following is an example of a RC4 modified routine that can be used. The first
+argument, box, would be the S-Box computed in step III.2 and the second argument, data,
+would be the command header from step 1.
+def rc4_Mod_Crypt(box, data):
+ 
+    x = box[256]
+ 
+    y = box[257]
+ 
+    c = 0
+ 
+    out = []
+ 
+    for char in data:
+ 
+        x = (x + 1) % 256
+ 
+        y = (y + box[x]) % 256
+ 
+        box[x], box[y] = box[y], box[x]
+ 
+        z = ( (box[x] + box[y] )&0xff ) % 256
+ 
+        al = rol( box[z],4,8 )
+ 
+        out.append( chr( ord( data[c] ) ^ al ) )
+ 
+        box[z] = al
+ 
+        c+=1
+ 
+    box[256] = x
+ 
+    box[257] = y
+ 
+    return ”.join(out)
+11/19
+3. Obtain the size of the payload and encrypt that value using the same RC4 algorithm as
+in step 2. The size of the payload should be the total decrypted size of the payload.
+4. Encrypt and send the payload to the stager in chunks:
+a. Read 4,086 bytes from the payload. This is the maximum chunk size that the stager will
+accept.
+b. Build a command header (step 1 above) and update the following fields:
+i. Header size = size of payload chunk.
+ii. Command = 1.
+c. Send the updated 10-byte command header to the stager.
+d. Send the encrypted payload chunk.
+e. Repeat steps a – d until payload is sent.
+Figure 7 shows an example of one payload chunk that is sent to the stager.
+Figure 7. Encrypted payload header and data.
+Upon receiving each chunk, the stager strips the command header and decrypts the
+payload chunk in memory.
+Payload In-Memory Loading
+Once the payload is fully decrypted, the stager performs some basic checks to ensure that
+the payload conforms to a Windows executable. It validates the DOS and PE header and
+that the payload is a DLL. It then direct-memory loads the payload and calls into its entry
+point (AddressOfEntryPoint). The direct memory load of the payload emulates that of the
+Windows PE loader – LoadLibrary. As a result, the PEB LDR_DATA_TABLE_ENTRY
+metadata structures are not created and the PEB for the process running the shellcode has
+12/19
+no record of the DLL loading, which can be used to detect rogue modules running on your
+host. This is visible in WinDbg running the command !address within the process that
+loaded the shellcode. An example is shown in Figure 8.
+Figure 8. Artifact of direct in-memory loaded DLL.
+In-memory artifacts:
+Type is MEM_PRIVATE, meaning it is private to the process that loaded it. On
+Windows platforms, DLLs are typically loaded as MEM_IMAGE so that they can be
+shared between different processes to save memory space.
+Protection is PAGE_EXECUTE_READWRITE(RWX), which means the area is
+writable and executable with a memory area containing an MZ header. The MZ
+header is the in-memory loaded module.
+The output of the WinDbg !address command shown in Figure 8 spots the anomalous
+entry. The memory address of module 0x7ff4c2450000 was the result of private memory
+allocation, protection set to RWX and usage containing an MZ header.
+x64 Shellcode Behaviors
+The following table describes the main behaviors of BendyBear.
+Behavior Artifact
+ATT&CK IDs
+Query Registry
+HKEY_CURRENT_USER\Console\QuickEdit
+T1012: Query Registry
+Command and Control
+T1573.002: Encrypted
+Channel: Asymmetric
+Cryptography
+Payload transfer from remote host
+T1105: Ingress Tool
+Transfer
+Payloads in modified RC4-encrypted chunks
+T1027.002: Obfuscated
+Files or Information:
+Software Packing
+~65 calls to Windows API kernel32!GetTickCountKernel32
+prior to the shellcode connecting to the C2 server. Used to
+encrypt or decrypt function blocks.
+T1497.003: Time Based
+Evasion
+Dynamic DLL Importing and API Lookups
+T1106 Native API
+13/19
+52 iterations of the shellcode obtaining the process
+environment block (PEB) and checking for IsDebugger flag
+T1082: System
+Information Discovery
+Eight calls to msvcrt!time prior to connecting to the C2 server
+Clearing host’s DNS cache via API DNSAPI!DnsFlushResolverCache
+PEB _LDR_DATA_TABLE_ENTRY metadata structures are not created, and the PEB
+for the process running the shellcode has no record of the DLL loading.
+Loaded payload module (DLL) has a type of MEM_PRIVATE
+BendyBear vs. WaterBear
+Attributes
+WaterBear
+BendyBear
+File Type
+EXE/DLL
+Shellcode
+Implant Type
+Stage-2
+Stage-0
+Modified RC4
+Additional Encryption
+UNKNOWN
+Extra XOR Computations
+16-Byte XOR keys
+Authenticated C2 Communications
+Signature Verification Magic Bytes
+1F 40
+1F 43
+1F 40
+1F 43
+Chunked Payloads
+Polymorphic Code
+In-Memory Loading
+PEB Debugger Check
+Pattern Elimination
+Encrypt/Decrypt Function Routines
+API Hooking
+Table 1. x64 shellcode commands executed.
+14/19
+Process Hiding
+Network Traffic Filtering
+File Type – WaterBear is a standalone PE/EXE. BendyBear is a x64 Shellcode that
+requires loader or code injection.
+Implant Type – WaterBear is a stage-2 implant with many capabilities; BendyBear is a
+stage-0 downloader.
+Modified RC4 Encryption – Both WaterBear and BendyBear use a modified RC4, but
+implement them slightly differently. WaterBear uses a 256 RC4 state box with byte
+shifting and addition within the key scheduling algorithm. BendyBear uses a 258 RC4
+state box and performs XOR within the key scheduling algorithm.
+Additional Encryption – While both use encryption as a way to conceal artifacts,
+BendyBear was found to contain additional XOR encryption steps.
+16-Byte XOR Key – Both use the same 16-byte XOR key to create the pre-session key:
+0x6162636465666768696A6B6C6D6E6f00
+Authenticated C2 Communications – Both send an initial 10-byte challenge request
+followed by 32-byte session keys.
+Signature Verification Magic Bytes – Both use the same matching magic byte
+verification values.
+Chunked Payload – Both expect the payloads to be sent in encrypted chunks.
+Polymorphic Code – Both employ code manipulation during runtime execution with
+random bytes.
+In-Memory Loading – Both support the in-memory loading of payloads.
+PEB Debugger Check – Both check to see if the code is being debugged.
+Pattern Elimination –Both re-encrypt any decrypted strings upon use.
+Encrypt/Decrypt Function Routines – Both WaterBear and BendyBear obfuscate
+runtime function addresses.
+API Hooking – Variants of WaterBear implement API hooking, while BendyBear does
+not.
+Process Hiding – Variants of WaterBear can hide processes via API hooking, while
+BendyBear does not support this capability.
+Table 2. Comparison of BendyBear and WaterBear.
+15/19
+Network Traffic Filtering – Variants of WaterBear can filter or hide network traffic
+via API hooking, while BendyBear does not support this capability.
+Conclusion
+The BendyBear shellcode contains advanced features that are not typically found in
+shellcode. The use of anti-analysis techniques and signature block verification indicate
+that the developers care about stealth and detection-evasion. Additionally, the use of
+custom cryptographic routines and byte manipulations suggest a high level of technical
+sophistication.
+Palo Alto Networks customers can be protected from the attacks outlined in this blog in
+the following ways:
+The C2 domain used in this shellcode has been categorized as malware in DNS
+Security, URL Filtering and WildFire, which are security subscriptions for Next-
+Generation Firewall customers.
+Cortex XDR can identify and block the shellcode during execution.
+App-ID, the traffic classification system in Next-Generation Firewalls, is capable of
+identifying applications irrespective of port, protocol, encryption (SSH or SSL) or
+any other evasive tactic used by the application. This shellcode attempts to
+communicate over TCP port 443 with traffic that does not conform to proper SSL or
+any other known application. As a matter of best practice, we advise customers to
+block unknown outbound TCP traffic in their security policies.
+Indicators of Compromise
+Shellcode Samples
+x64 – (version 0.24)
+ 
+64CC899EC85F612270FCFB120A4C80D52D78E68B05CAF1014D2FE06522F1E2D0
+wg1.inkeslive[.]com
+x86 – (version 0.1)
+ 
+49901034216a16cfd05c613f438eccee4a7bf6079a7988b3e7094d9498379558
+web2008.rutentw[.]com
+x86 WaterBear Loaders
+The following executables have been identified as loaders/injectors that contain older
+WaterBear x86 shellcode. The shellcode code is identical to the x86 sample
+49901034216…. (version 0.1) listed above.
+5d1414b47d88e95ae6612d3fc211c29b35cc5db4a8a992f5e27cff5203ebf44b
+ 
+9880ba4f93cade2f6bbb4cc8efdcf087e8ac51b5c209ee32ad8134eb87ef70e1
+ 
+682122f34027e3f8025928d446989b02952449f5e5930c2670f8f789f41573ff
+ 
+2a09ec2d6edadd06e18c841e0ed794ba3eeb21818476f75ccc0e5d40e08eac80
+ 
+76ef704d21fbaaceca8a131429ccfb9f5de3d8f43a160ddd281ffeafc391eb98
+16/19
+Additional Resources
+Taiwan News – Taiwan urges blocking 11 China-linked phishing domains.
+iThome News – The Bureau of Investigation’s recent investigation of several cases of
+Taiwan Government agencies hacked.
+TeamT5 – Evil Hidden in Shellcode: The Evolution of malware DbgPrint.
+TrendMicro – WaterBear Returns, Uses API Hooking to Evade Security.
+TrendMicro – The Trail of BlackTech’s Cyber Espionage Campaigns.
+CryCraft Technology Corp – Taiwan Government Targeted by Multiple Cyberattacks in
+April 2020 Part 1: Waterbear Malware
+JPCERT/CC Eyes – ELF_PLEAD – Linux Malware Used by BlackTech
+Appendix
+Shellcode Proof of Concept
+Mock C2 server serving request to stager and sending a payload (DLL) that displays a
+message box:
+python.exe U42ETHOS_C2.py -l 8080 -p c:\temp\DLLSample.dll
+[+] Started U42ETHOS_C2.py ver 1.0.0 waiting for connection on TCP port 8080
+[!] Using payload file c:\temp\DLLSample.dll
+[!] Received new connection from: (‘192.168.163.138’, 49918)
+[-] Received Encrypted challenge Request Packet–> 40da9a64bf3992d39db6
+[-] Decrypted challenge Request packet–> 46401f8c032320000000
+[+] Session key 1–> 9816f78b57fff54efb5419202d81a729
+[+] Session key 2–> 6ec83a6e4d8bc4e28496cac865878574
+[+] Computed PreSessionKey–> f97494ef32999226923e724c40efc829
+[+] Challenge command–> a3601149a495d02598b7
+[-] Challenge key is–> f55bf1f67d6ae90bf1ed3479875dcdcd
+[+] Payload Size is 00920100
+[!] Payload sent to stager. Check if executed
+Figure 9. Unit 42 mock C2 server.
+17/19
+Figure 10. Example stager in-memory loading test DLL
+Figure 9 is a Python mock C2 server that was created by Unit 42 to interact with the
+stager. It is configured to listen on TCP port 8080, and the payload is a test DLL that
+launches calc.exe and displays a message box (Hello, Implant). Figure 10 is a Windows 10
+host running the shellcode in memory via a custom loader. The shellcode was configured
+to communicate with the mock C2 server.
+Network Traffic for the Above Payload (truncated):
+18/19
+Figure 11. Network traffic capture example.
+19/19
+ 
+ 

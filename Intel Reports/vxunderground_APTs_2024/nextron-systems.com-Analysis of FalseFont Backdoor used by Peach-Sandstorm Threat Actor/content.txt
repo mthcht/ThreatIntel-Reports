@@ -1,0 +1,262 @@
+1/11
+www.nextron-systems.com
+/2024/01/29/analysis-of-falsefont-backdoor-used-by-peach-sandstorm-threat-actor/
+Analysis of FalseFont Backdoor used by Peach-Sandstorm
+Threat Actor
+Nextron Threat Research Team ⋮
+In this article, we will explore the FalseFont Backdoor used by Peach Sandstorm APT to target defense
+contractors worldwide. The backdoor was initially identified and reported on by Microsoft. The malware
+features data exfiltration and remote access capabilities. It poses as a legitimate application from US
+Defense and Intelligence Contractor Maxar Technologies, and provides the user with a realistic UI and
+behavior.
+Triage
+When starting the application we are met, with a login screen. The branding and style match the website
+of Maxar Technologies. The victim is prompted to login to their account or login as a guest. Logging in as
+a guest will prompt for some personal data for registration.
+2/11
+We attempted a login with randomly chosen credentials, which resulted in an infinite loading screen.
+However we did gather some information during the execution as we had our Aurora Agent running on
+the System. Aurora detected multiple suspicious activities.
+The screenshot shows Aurora provided a number of events including multiple warning level events.
+These events are quite typical for malware establishing persistence. The major event to consider here
+are the files dropped in AppData and the modification of the autostart registry keys in quick succession.
+The warning events serve as an urgent indicator for a human analyst to take action. The notice events
+while often overlooked gave us some valuable information here. They actually revealed the first C2 which
+as we later found out is responsible for credential stealing.
+After gaining an initial understanding of the malware’s behavior, we proceeded with our in depth analysis
+reverse-engineering the payload.
+3/11
+Technical Analysis
+The sample is written in .NET and utilizes the self-contained single-file host feature, encapsulating the
+managed code within a native bootstrapping application. We’ll begin by, extracting the managed code
+from the native application bundle using the ILSpy decompiler. In the decompiler we can see the
+individual components of the bundle, which contains a bunch of .NET system libraries and the payload
+Maxar.dll which we can identify using the Maxar.deps.json file.
+Further analysis of the managed payload will be conducted in dnSpy. On first glance we are not dealing
+with obfuscated or heavily packed code here. We can spot some WPF code which is responsible for the
+frontend provided by the malware to pose as a legitimate application.
+The UI
+The UI does more than we initially anticipated. We found that all logins are actually sent to a different host
+than the C2 handling the remote access features. The application offers two options a normal login and a
+guest login. The guest login will show a fake registration and tell the user to wait for feedback from the
+4/11
+team at Maxar, or in this case likely the threat actor. When pressing the login button the agent checks if
+the email is valid and the password matches the requirements: one capital letter, one special character
+longer than eight characters. After those checks it contacts the following IP
+hxxp://64[.]52[.]80[.]30:8080 which is hardcoded in the UI code. The entered credentials are
+transmitted. During the process the agent serves the user with a loading screen. If the credential server
+successfully received the credentials and responds with a success. The client will show the user a new
+form asking for personal details like full name, address, email etc. as well as employment history with
+Maxar Technologies.
+We suspect that the threat actor is collecting this information for espionage or identity theft. During the
+initialization of the app the actual backdoor is executed which installs persistence and establishes a
+connection with the actual C2 server for remote access.
+ Command and Control
+After some initial analysis of the entry-point we found the actual core of this backdoor the SignalRHub
+class. This sparked our interest, SignalR is Microsoft’s real-time web API protocol. After further inspection
+we confirmed that the malware uses the SignalR protocol for its Command and Control (C2)
+communication. The code presented below unveils the response handlers implemented by the client,
+offering some insights into the capabilities of this malware.
+5/11
+All C2 communication is encrypted using AES CBC with a hardcoded key and IV. Encryption is
+implemented as a separate service in the Core.Agent.Services.Implementationes namespace.
+Communication and command handling are implemented in a modular way using interfaces and services
+following common C# app development practice. To further understand the capabilities of the client we
+will analyze the handlers individually.
+The Command Handler
+Starting with the Command handler, we need to find the implementation of the class as its implemented
+from an interface. In the implementation we can spot some strings indicating browser credential stealing
+as well as reverse shells in various forms. Interesting to note: The list of targeted browsers only includes
+major Chromium based browsers Edge, Chrome and Brave. As indicated by the target paths shown in
+the screenshot:
+\Google\Chrome\User Data\
+
+\BraveSoftware\Brave Browser\User Data\
+
+\Microsoft\Edge\User Data\
+6/11
+The Command handler implements a number of sub commands ranging from reverse shell to process
+termination and data exfiltration. The sub commands are implemented in additional services such as the
+ProcessService for reverse shell, process enumeration etc. and the FileStorageService for
+download, upload and file system inspection. Below you can find an overview of all available sub
+commands of the Command handler.
+Command
+Functionality
+Exec
+Execute attacker supplied command using Process.Start().
+Optional run as Background Task*
+ExecUseShell
+Execute attacker supplied command using Process.Start() with
+ShellExecute, RedirectStandardError and
+RedirectStandardOutput. Optional run as Background Task*
+ExecAndKeepAlive
+Not implemented just returns “not work”
+CMD
+Run attacker supplied command trough cmd.exe, if parameters
+are “pass” run browser credential stealer. Optional run as
+Background Task*
+PowerShell
+Run attacker supplied Powershell query. Optional run as
+Background Task*
+KillByName
+Terminate process by name
+KillById
+Terminate process by ID
+Download
+Download and unpack zip file from C2
+Upload
+Exfiltrate data from victim system, can upload one or multiple files
+or entire directories
+Delete
+Delete file from victim system
+GetDirectories
+Check if attacker supplied directory exists and report contents
+7/11
+ChangeTime
+Change timeout for next request
+SendAllDirectory
+Send all Disks and their directory structure
+UpadateApplication
+Download update and restart the new agent with a special
+argument to delete old copies and register new copies of the
+agent
+Restart
+Restart the agent with a special argument, check for persistence
+copies and restart them if found
+GetProccess
+Send list of all running processes including process name and ID
+SendAllDirectoryWithStartPath Send all sub directories contained in an attacker supplied starting
+directory
+* Background Task use CreateNoWindow and WindowStyle Hidden properties
+The GetDir and GetHard Handlers
+These two handlers are rather simple. The GetDir handler is quite similar to the GetDirectories sub
+command of the Command handler. It send a list of all files and directories including path, name and
+create date for an attacker requested directory. In case the attacker does not specify a directory it scans
+the current one.
+The GetHard handler sends a list of all logical drives to the C2. The list includes the following information:
+name, drive type, free space and total capacity.
+The GetScreen and StopSendScreen Handlers
+These handlers are on and off switches for the remote screen viewer feature of the backdoor. The
+GetScreen handler starts the screen viewer which uploads screenshots of the victim’s screen using
+attacker specified interval, duration, resolution and quality. The screen viewer is run as a new thread
+capturing the screen and encoding the images as JPEG data then converting it a Base64 string which is
+send to the C2 server.
+8/11
+The StopSendScreen will stop the screen viewer from if it is still running. We suspect that one reason the
+threat actor chose SignalR is due to its optimization for real-time data transmission, making it ideal for
+real-time screen monitoring.
+Persistence
+Another interesting part of this backdoor are it’s persistence mechanisms. The persistence functions are
+executed in the initialization of the main WPF GUI class. Finding were the actual malicious code started
+was quite a challenge due to the heavy use of abstraction. The persistence features are implemented tin
+the Core.Agent.Utilities.Prerequisite class. There are multiple components to the process.
+The CopyMyApp function is the core, it is run immediately on application start. The function first checks if
+the application has been updated which is indicated by a command line argument on application start. If
+an update was performed the function will delete the following three files:
+%appdata%\\host.exe
+%localappdata%\\broker.exe
+%localappdata%\\Microsoft\\System.exe
+This step is skipped if no update was performed. Next, the agent checks if the same files have a registry
+value entry under SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run. If it doesn’t find an
+entry, it replicates itself in all the designated locations and creates new entries in the registry. Each entry
+9/11
+uses the file name as the value and the file’s path as data. There also functions to remove the subkeys
+entirely and one to replace the file paths for the keys, however these functions are not used. We suspect
+that these have been implemented for future updates to the C2 commands.
+Config
+While reversing we encountered the Core.Agent.Utilities.Constants class which holds config
+values and encrypted strings. The encrypted strings are outlined into separate methods that call the
+decryption function and return the result. The strings are decrypted using AES CBC with the same
+hardcoded key and IV used for the C2 communication. To ease reversal we wrote a simple python script
+to statically decrypt and inline the strings. The script uses dnlib to parse the binary and decrypt all strings
+using the hardcoded AES parameters.
+The screenshot provides a side-by-side comparison of the reverse shell runner before and after clean up.
+After decryption we can easily read the C2 domain and Mutex as well as filenames and commandline
+arguments used for update and reset. You can find the full decryption and clean up script on our GitHub.
+Conclusion
+The FalseFont backdoor is a complex remote access and data exfiltration tool, with a focus of monitoring
+the user machine. Most of the features target user files and data structure, considering the lure of this
+malware the actors likely plan to extract US Defense / Intelligence related documents. The screen
+recording functionality is another vector of data exfiltration allowing the actors to obtain more potentially
+confidential information from data not stored on disk like E-Mails or chat messages. Along side the
+standard file exfiltration FalseFont also includes a browser credential stealer, which would potentially
+allow compromise of high value online accounts. While the malware is complex, the protection scheme
+seems to neglect strings and other potential malicious indicators. Allowing for rather simple detection of
+the binaries.
+10/11
+Detection
+You can find all IOCs and links to the latest version of the detections rules (YARA, Sigma) in our new
+Github repository.
+YARA
+rule APT_MAL_FalseFont_Backdoor_Jan24 {
+   meta:
+      description = "Detects FalseFont backdoor, related to Peach Sandstorm 
+APT"
+      author = "X__Junior, Jonathan Peters"
+      date = "2024-01-11"
+      reference = 
+"https://twitter.com/MsftSecIntel/status/1737895710169628824"
+      hash = 
+"364275326bbfc4a3b89233dabdaf3230a3d149ab774678342a40644ad9f8d614"
+      score = 80
+   strings:
+      $x1 = "Agent.Core.WPF.App" ascii
+      $x2 = "3EzuNZ0RN3h3oV7rzILktSHSaHk+5rtcWOr0mlA1CUA=" wide //AesIV
+      $x3 = "viOIZ9cX59qDDjMHYsz1Yw==" wide // AesKey
+      $sa1 = "StopSendScreen" wide
+      $sa2 = "Decryption failed :(" wide
+      $sb1 = "{0}     {1}     {2}     {3}" wide
+      $sb2 = "\\\\BraveSoftware\\\\Brave-Browser\\\\User Data\\\\" wide
+      $sb3 = "select * from logins" wide
+      $sb4 = "Loginvault.db" wide
+      $sb5 = "password_value" wide
+   condition:
+      uint16(0) == 0x5a4d
+      and (
+         1 of ($x*)
+         or all of ($sa*)
+         or all of ($sb*)
+         or ( 1 of ($sa*) and 4 of ($sb*) )
+      )
+}
+Sigma
+11/11
+Process Creation Peach Sandstorm
+Peach Sandstorm FalseFont Backdoor C2 Communication
+IOCs
+Type
+Indicator
+SHA-256
+364275326bbfc4a3b89233dabdaf3230a3d149ab774678342a40644ad9f8d614
+SHA-1
+ddd18e208aff7b00a46e06f8d9485f81ff4221ea
+MD5
+6fd5d31d607a212c6f7651c79e7655a3
+Mutex
+864H!NKLNB*x_H?5
+Commandline SQP’s*(58vaP!tF4
+
+(argument used for Update and Restart)
+Filename
+Maxar.exe
+Path
+%localappdata%\\Temp\\Maxar.exe
+Path
+%localappdata%\\Microsoft\\System.exe
+Path
+%localappdata%\\broker.exe
+Path
+%appdata%\\host.exe
+URL
+hxxp://64[.]52[.]80[.]30:8080
+Domain
+hxxp://digitalcodecrafters[.]com
+Registry
+SOFTWARE\Microsoft\Windows\CurrentVersion\Run
+- `Value: host.exe Data: %appdata%\host.exe
+- `Value: broker.exe Data: %localappdata%\broker.exe
+- `Value: System.exe Data: %localappdata%\Microsoft\System.exe
+
+Authors:
+Jonathan Peters
+Mohamed Ashraf

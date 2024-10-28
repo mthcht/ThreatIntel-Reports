@@ -1,0 +1,1 @@
+[Link to the article](https://research.checkpoint.com/2024/maldocs-of-word-and-excel-vigor-of-the-ages/)

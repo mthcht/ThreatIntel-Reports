@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/f/malvertising-used-as-entry-vector-for-blackcat-actors-also-leverage-spyboy-terminator-/Malvertising_IOCs.txt)

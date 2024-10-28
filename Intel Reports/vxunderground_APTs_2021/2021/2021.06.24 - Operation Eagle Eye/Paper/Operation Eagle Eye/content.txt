@@ -1,0 +1,215 @@
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+1/20
+b0yd
+Operation Eagle Eye
+securifera.com/blog/2021/06/24/operation-eagle-eye
+This article is in no way affiliated, sponsored, or endorsed with/by Fidelis Cybersecurity. All graphics are being
+displayed under fair use for the purposes of this article.
+Who remembers that movie about 15 years ago called Eagle Eye? A supercomputer has access to massive
+amounts of data, introduce AI, things go to crap. Reflecting back on that movie, I find myself more interested in
+what a hacker could actually do with that kind of access rather than the AI bit. This post is about what I did
+when I got that kind of access on a customer red team engagement.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+2/20
+Being a network defender is hard. Constantly trying to balance usability, security, and privacy. Add too much
+security and users complain they can’t get their job done. Not enough and you open yourself up to being
+hacked by every script kiddie on the internet. How does user privacy fit in? Well as a network defender your first
+grand idea to protect the network against adversaries might be to implement some form of network traffic
+inspection for “malicious” activity. This might have worked 20 years ago, but now most network protocols at
+least support some form of encryption to protect users’ data from prying eyes. If only there was a way to
+decrypt it, inspect it, and then encrypt it back… Let’s call it break and inspect.
+The graphic above was pulled from an article from the NSA, warning about break and inspect and the risks
+introduced with its usage (I’d be inclined to heed the warning since the NSA are likely experts on this particular
+topic). The most obvious risk introduced by break-and-inspect is clearly the device(s) performing the operation.
+Compromise of these devices would provide an attacker access to all unencrypted traffic traversing the
+network.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+3/20
+All of this lead up was meant to describe what I can only assume happened with one of our customers. After
+years of assessments, I noticed one day that all outbound web traffic now had a custom CA certificate when
+visiting websites from the customer network. This was a somewhat natural progression as we had been utilizing
+domain fronting for some time to evade network detection for our C2 domains. In response, the network
+defenders implemented break-and-inspect to identify traffic with  conflicting Host headers. As a red teamer, my
+almost immediate thought was, What if we could get access to the break-and-inspect device? Being able to sift
+through all unencrypted web traffic on a large network would be a goldmine. Operation Eagle Eye began…
+Enumeration
+After no small amount of time, we identified what we believed to be the device(s) responsible for performing the
+break-and-inspect operation on the network. We found the BigIP F5 device that was listed as the hostname on
+the CA certificate and we found a Fidelis Network CommandPost and several HP iLO management web services
+in the same subnet. For those that aren’t familiar, Fidelis Cybersecurity sells a network appliance suite that can
+perform traffic inspection and modification. They also just so happen to be listed as an accredited product on
+the NSA recommended National Information Assurance Partnership (NIAP) website so I assume its super-
+secure-hackproof
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+4/20
+First order of business was to do some basic enumeration of each of the devices in this network segment. The
+F5’s had been recently updated just after a recent RCE bug had been released so I moved on to the next
+devices. The Fidelis CommandPost web application presented a CAS based login portal on the root URL as
+seen below.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+5/20
+After some minimal research on CAS and what appeared to be a rather mature and widely used authentication
+library, I decided to start brute forcing endpoints with dirsearch on the CommandPost web application. While
+that was running I moved on to the HP iLOs to see what we had there.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+6/20
+The first thing that jumped out to me about this particular iLO endpoint was that it was HP and the version
+displayed was under 2.53. This is interesting because a heap-based BOF vulnerability (CVE-2017-12542) was
+discovered a few years back that can be exploited to create a new privileged user.
+Exploitation – HP iLO (CVE-2017-12542)
+While my scanner was still enumerating endpoints on the CommandPost,  I went ahead and fired up the iLO
+exploit to confirm whether or not the target was actually exploitable. Sure enough, I was able to create a new
+admin user and login.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+7/20
+We now have privileged access to an iLO web management portal of some unknown web server. Outside of
+getting some server statistics and being able to turn the server on and off, what can we actually do that’s useful
+from an attacker’s perspective? Well for one we can utilize the remote console feature. HP iLOs actually have
+two ways to do this, one via Java web start from the web interface and one over SSH (which shares the
+credentials for the web interface).
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+8/20
+Loading up the remote console via Java for this iLO reveals that this server is actually a Fidelis Direct Sensor
+appliance. Access to the remote console in itself is not super useful since you still have to have credentials to
+login to the server. However, when you bring up the Java web start remote console you’ll notice a menu that
+says “Virtual Drives”. What this menu allows you to do is to remotely mount a ISO of your choosing.
+With the ability to mount a custom ISO remotely, this introduces a possible avenue to gain code execution. If the
+target server does not have a BIOS password and doesn’t utilize full disk encryption, we should be able to boot
+to an ISO we supply remotely and gain access to the server’s file system. This technique definitely isn’t subtle
+as we have to turn off the server but maybe the system owner won’t notice if the outage is brief
+If you are reading this there’s a good chance you’ll be attempting to pull this off through some sort of proxy/C2
+comms mid-operation rather than physically sitting at a system on the same network. This makes the choice of
+ISO critical since network bandwidth is limited. A live CD image that is as small as possible is ideal. I originally
+tried a 30MB TinyCore linux but eventually landed on the 300 MB Puppy Linux since it comes with a lot more
+features out-of-the-box. Once the OS loaded up I mounted the filesystem and confirmed access to critical files.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+9/20
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+10/20
+Since the device had SSH enabled, I decided the easiest mechanism for compromise would be to simply add a
+SSH public key to the root user’s authorized key file. The “sshd_config” also needed to be updated to allow root
+login and enable public key authentication.
+Exploitation – Unauthenticated Remote Command Injection (CVE-2021-35047)
+After gaining initial access to the Fidelis Direct sensor appliance via SSH, I began poking around at the services
+hosted on the device and investigating what other systems it was communicating with. One of the first things I
+noticed was lots of connections back to the Fidelis CommandPost appliance on port 5556 from a rconfigc
+process. I also noticed a rconfigd process listening on the sensor, my assumption was this was some kind of
+peer-to-peer client/server setup.
+Analyzing the rconfigc/rconfigd binaries revealed they were a custom remote script execution framework. The
+framework consisted of a simple TLS-based client/server application backed mostly by Perl scripts at varying
+privilege levels, utilizing a hard-coded authentication string. I reviewed a couple of these scripts and came
+across the following code snippet.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+11/20
+If you haven’t spotted the bug here, those back ticks in Perl mean to execute the command in the background.
+Since there are no checks sanitizing the incoming input for the user variable, additional commands can be
+executed by simply adding a single quote and a semicolon. It appears another perk to this particular command
+is that it is being run as root so we have automatic privilege escalation. I decided to test this remotely on the
+Fidelis CommandPost to confirm it actually worked.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+12/20
+Exploitation – Unauthenticated Remote SQL injection (CVE-2021-35048)
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+13/20
+Circling back around to the Fidelis CommandPost web application, my dirsearch brute forcing had revealed
+some interested endpoints worth investigating. While the majority required authentication, I found two that
+accepted XML that did not. After trying several different payloads, I managed to get a SQL error returned in the
+output from one of the requests.
+Exploitation – Insecure Credential Storage (CVE-2021-35050)
+Using the SQL injection vulnerability identified above, I proceeded to dump the CommandPost database. My
+goal was to find a way to authenticate to the web application. What I found was a table that stored entries
+referred to as UIDs. These hex encoded strings turned out to be a product of a reversible encryption mechanism
+over a string created by concatenating a username and password. Decrypting this value would return
+credentials that could then be used to login to the Fidelis web application.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+14/20
+Exploitation – Authenticated Remote Command Injection (CVE-2021-35049)
+With decrypted root credentials from the database, I authenticated to the web application and began searching
+for new vulnerabilities in the expanded scope. After a little bit of fuzzing, and help from my previous access, I
+identified a command injection vulnerability that could be triggered from the web application.
+Chaining this vulnerability with each of the previous bugs I was able to create an exploit that could execute root
+level commands across any managed Fidelis device from an unauthenticated CommandPost web session.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+15/20
+The DATA
+So here we are, root level access to a suite of tools that captures network traffic across an enterprise and
+makes decisions based on it. It was now time to switch gears and begin investigating what functionality these
+devices provided and how it could be abused by an attacker (post-compromise risk assessment). After
+navigating through the CommandPost web application endpoints and performing some minimal system
+enumeration on the devices, I felt like I had a handle on the systems work together. There are 3 device types,
+CommandPost, Sensors, & Collectors. The Sensors collect, inspect, and modify traffic. The Collectors store the
+data, and the CommandPost provides the web interface for managing the devices.
+Given the role of each device, I think the most interesting target to an attacker would have to be a Sensor. If a
+Sensor can intercept (and possibly modify) traffic in transit, an attacker could leverage it to take control of the
+network. To confirm this theory, I logged in to a Sensor and began searching for the software and services
+needed to do this. I started by trying to identify the network interface(s) that the data would be traversing. To my
+surprise, the only interface that showed as being “up” was the IP address I logged in to. Time to RTFM.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+16/20
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+17/20
+A picture is worth a 1000 words. Based on the figures from the manual shown above, my guess is that the traffic
+is likely traversing one of the higher numbered interfaces. Now I just have to figure out why they aren’t visible to
+the root user. After searching through the logs I find the following clue.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+18/20
+It appears a custom driver is being loaded to manage the interfaces responsible for the network traffic
+monitoring. Since the base OS is CentOS, it must be mounting them in some kind of security container that is
+restricting access to the devices which is why I can’t see it. After digging into the driver and some of the
+processes associated with it, I found that the software uses libpcap and a ring buffer in file-backed memory to
+intercept network traffic to be inspected/modified. This means to access all of the traffic flowing through the
+device all we have to do is read the files in the ring buffer and parse the raw network packets. Running the script
+for just a short time confirms our theory. We quickly notice the usual authentication flows for major websites
+like Microsoft 0365, Gmail, and even stock trading platforms.
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+19/20
+Given the impact of our discovery and what was possible post compromise on these devices, we wrapped up
+our assessment and immediately reached out the customer and the vendor to began the disclosure process.
+Vendor Disclosure & Patch
+6/24/2021
+Operation Eagle Eye – Securifera
+https://www.securifera.com/blog/2021/06/24/operation-eagle-eye/
+20/20
+We are happy to report that the disclosure process with the vendor went smoothly and they worked with us to
+get the issues fixed and patched in a reasonable time frame. Given the severity of these findings we strongly
+encourage anyone that has Fidelis Network & Deception appliances update to the latest version immediately.
+
+

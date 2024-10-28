@@ -1,0 +1,1 @@
+[Link to the article](https://checkmarx.com/blog/attacker-hidden-in-plain-sight-for-nearly-six-months-targeting-python-developers/)

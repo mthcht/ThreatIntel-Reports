@@ -1,0 +1,1 @@
+[Link to the article](https://www.sentinelone.com/blog/crowdstrike-global-outage-threat-actor-activity-and-risk-mitigation-strategies/)

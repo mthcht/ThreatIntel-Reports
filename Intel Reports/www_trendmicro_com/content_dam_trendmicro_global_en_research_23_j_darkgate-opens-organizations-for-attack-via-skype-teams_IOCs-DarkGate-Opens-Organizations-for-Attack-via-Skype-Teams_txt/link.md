@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/j/darkgate-opens-organizations-for-attack-via-skype-teams/IOCs-DarkGate-Opens-Organizations-for-Attack-via-Skype-Teams.txt)

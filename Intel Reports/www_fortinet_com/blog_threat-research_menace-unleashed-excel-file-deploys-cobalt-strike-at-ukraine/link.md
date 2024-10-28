@@ -1,0 +1,1 @@
+[Link to the article](https://www.fortinet.com/blog/threat-research/menace-unleashed-excel-file-deploys-cobalt-strike-at-ukraine)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/vice-society-ransomware-group-targets-manufacturing-companies/iocs-vice-society-ransomware-group-targets-manufacturing-companies-full.txt)

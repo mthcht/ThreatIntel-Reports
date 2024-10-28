@@ -1,0 +1,1 @@
+[Link to the article](https://www.fortinet.com/blog/threat-research/originbotnet-spreads-via-malicious-word-document)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/en_us/research/24/j/fake-lockbit-real-damage-ransomware-samples-abuse-aws-s3-to-stea.html)

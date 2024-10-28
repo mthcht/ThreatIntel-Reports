@@ -1,0 +1,162 @@
+May 22, 2016 | by Sudeep Singh, Yin Hong Chang | Threat Research, Targeted Attack
+In the first week of May 2016, FireEye’s DTI identified a wave of emails containing malicious attachments being sent
+to multiple banks in the Middle East region. The threat actors appear to be performing initial reconnaissance against
+would-be targets, and the attacks caught our attention since they were using unique scripts not commonly seen in
+crimeware campaigns.
+In this blog we discuss in detail the tools, tactics, techniques and procedures (TTPs) used in these targeted attacks.
+The attackers sent multiple emails containing macro-enabled XLS files to employees working in the banking sector in
+the Middle East. The themes of the messages used in the attacks are related to IT Infrastructure such as a log of
+Server Status Report or a list of Cisco Iron Port Appliance details. In one case, the content of the email appeared to be
+a legitimate email conversation between several employees, even containing contact details of employees from
+several banks. This email was then forwarded to several people, with the malicious Excel file attached.
+The macro first calls an Init() function (shown in Figure 1) that performs the following malicious activities:
+1. Extracts base64-encoded content from the cells within a worksheet titled "Incompatible".
+2. Checks for the presence of a file at the path %PUBLIC%\Libraries\ update.vbs. If the file is not present, the
+macro creates three different directories under %PUBLIC%\Libraries, namely up, dn, and tp.
+3. The extracted content from step one is decoded using PowerShell and dropped into two different files:
+%PUBLIC%\Libraries\update.vbs and %PUBLIC%\Libraries\dns.ps1
+4. The macro then creates a scheduled task with name: GoogleUpdateTaskMachineUI, which executes
+update.vbs every three minutes.
+Note: Due to the use of a hardcoded environment variable %PUBLIC% in the macro code, the macro will only run
+successfully on Windows Vista and subsequent versions of the operating system.
+ 
+ 
+Menu
+ 
+Figure 1: Macro Init() subroutine
+One of the interesting techniques we observed in this attack was the display of additional content after the macro
+executed successfully. This was done for the purpose of social engineering – specifically, to convince the victim that
+enabling the macro did in fact result in the “unhiding” of additional spreadsheet data.
+Office documents containing malicious macros are commonly used in crimeware campaigns. Because default Office
+settings typically require user action in order for macros to run, attackers may convince victims to enable risky macro
+code by telling them that the macro is required to view “protected content.”
+In crimeware campaigns, we usually observe that no additional content is displayed after enabling the macros.
+However, in this case, attackers took the extra step to actually hide and unhide worksheets when the macro is enabled
+to allay any suspicion. A screenshot of the worksheet before and after running the macro is shown in Figure 2 and
+Figure 3, respectively.
+Figure 2: Before unhiding of content
+Figure 3: After unhiding of content
+In the following code section, we can see that the subroutine ShowHideSheets() is called after the Init()
+subroutine executes completely:
+Private Sub Workbook_Open()
+    Call Init
+        Call ShowHideSheets
+End Sub
+The code of subroutine ShowHideSheets(), which unhides the content after completion of malicious activities, is
+shown in Figure 4.
+Figure 4: Macro used to unhide content at runtime
+After the macro successfully creates the scheduled task, the dropped VBScript, update.vbs (Figure 5), will be
+launched every three minutes. This VBScript performs the following operations:
+1. Leverages PowerShell to download content from the URI hxxp://go0gIe[.]com/sysupdate.aspx?
+req=xxx\dwn&m=d and saves it in the directory %PUBLIC%\Libraries\dn.
+2. Uses PowerShell to download a BAT file from the URI hxxp://go0gIe[.]com/sysupdate.aspx?
+req=xxx\bat&m=d and saves it in the directory %PUBLIC%\Libraries\dn.
+3. Executes the BAT file and stores the results in a file in the path %PUBLIC%\Libraries\up.
+4. Uploads this file to the server by sending an HTTP POST request to the URI
+hxxp://go0gIe[.]com/sysupdate.aspx?req=xxx\upl&m=u.
+5. Finally, it executes the PowerShell script dns.ps1, which is used for the purpose of data exfiltration using DNS.
+Figure 5: Content of update.vbs
+During our analysis, the VBScript downloaded a customized version of Mimikatz in the previously mentioned step one.
+The customized version uses its own default prompt string as well as its own console title, as shown in Figure 6.
+Figure 6: Custom version of Mimikatz used to extract user password hashes
+Similarly, the contents of the BAT file downloaded in step two are shown in Figure 7:
+whoami & hostname & ipconfig /all & net user /domain 2>&1 & net group /domain 2>&1 &
+net group "domain admins" /domain 2>&1 & net group "Exchange Trusted Subsystem" /domain
+2>&1 & net accounts /domain 2>&1 & net user 2>&1 & net localgroup administrators 2>&1 &
+netstat -an 2>&1 & tasklist 2>&1 & sc query 2>&1 & systeminfo 2>&1 & reg query
+"HKEY_CURRENT_USER\Software\Microsoft\Terminal Server Client\Default" 2>&1
+Figure 7: Content of downloaded BAT script
+This BAT file is used to collect important information from the system, including the currently logged on user, the
+hostname, network configuration data, user and group accounts, local and domain administrator accounts, running
+processes, and other data.
+Another interesting technique leveraged by this malware was the use of DNS queries as a data exfiltration channel.
+This was likely done because DNS is required for normal network operations. The DNS protocol is unlikely to be
+blocked (allowing free communications out of the network) and its use is unlikely to raise suspicion among network
+defenders.
+The script dns.ps1, dropped by the macro, is used for this purpose. In the following section, we describe its
+functionality in detail.
+1. The script requests an ID (through the DNS protocol) from go0gIe[.]com. This ID will then be saved into the
+PowerShell script.
+2. Next, the script queries the C2 server for additional instructions. If no further actions are requested, the script exits
+and will be activated again the next time update.vbs is called.
+3. If an action is required, the DNS server replies with an IP with the pattern 33.33.xx.yy. The script then
+proceeds to create a file at %PUBLIC%\Libraries\tp\chr(xx)chr(yy).bat. The script then proceeds to
+make DNS requests to fetch more data. Each DNS request results in the C2 server returning an IP address. Each
+octet of the IP address is interpreted as the decimal representation of an ASCII character; for example, the
+decimal number 99 is equivalent to the ASCII character ‘c’. The characters represented by the octets of the IP
+address are appended to the batch file to construct a script. The C2 server signals the end of the data stream by
+replying to a DNS query with the IP address 35.35.35.35.
+4. Once the file has been successfully transferred, the BAT file will be run and its output saved as
+%PUBLIC%\Libraries\tp\chr(xx)chr(yy).txt.
+5. The text file containing the results of the BAT script will then be uploaded to the DNS server by embedding file
+data into part of the subdomain. The format of the DNS query used is shown in Table 1.
+6. The BAT file and the text file will then be deleted. The script then quits, to be invoked again upon running the next
+scheduled task.
+The DNS communication portion of the script is shown in Figure 8, along with a table showing the various subdomain
+formats being generated by the script.
+Figure 8: Code Snippet of dns.ps1
+Format of subdomains used in DNS C2 protocol:
+Subdomain used to
+request for BotID,
+used in step 2 above
+[00][botid]00000[base36 random number]30
+Subdomain used
+while performing file
+transfers used in step
+3 above
+[00]
+[botid]00000[base36 random number]232A[hex_filename]
+[i-counter]
+Subdomain used
+while performing file
+upload, used in step
+5 above
+[00][botid][cmdid][partid][base36 random number][48-hex-
+char-of-file-content]
+Table 1: C2 Protocol Format
+Although this attack did not leverage any zero-days or other advanced techniques, it was interesting to see how
+attackers used different components to perform reconnaissance activities on a specific target.
+This attack also demonstrates that macro malware is effective even today. Users can protect themselves from such
+attacks by disabling Office macros in their settings and also by being more vigilant when enabling macros (especially
+when prompted) in documents, even if such documents are from seemingly trusted sources.
+This entry was posted on Sun May 22 03:00:00 EDT 2016 and filed under Advanced Targeted Attacks, Advanced
+Threat Actor, Advanced Threats, Bank security, Blog, Cybercrime, Cybersecurity, Email Attacks, Email Security,
+Latest Blog Posts, Sudeep Singh, Targeted Attack, Targeted Attack, Targeted Attacks , Threat Intel, Threat Research,
+Yin Hong Chang and targeted attackers.
+First Name
+Last Name
+Email Address
+Executive Perspective Blog
+Threat Research Blog
+Products and Services Blog
+Products
+Solutions
+Mandiant Consulting
+Current Threats
+Partners
+Support
+Company
+Careers
+Press Releases
+Webinars
+Events
+Investor Relations
+Incident?
+Contact Us
+Communication Preferences
+Report Security Issue
+Supplier Documents
+Legal Documentation
+ LinkedIn
+ Twitter
+ Facebook
+ Google+
+ YouTube
+ Podcasts
+ Glassdoor
+Contact Us:
+877-FIREEYE (877-347-3393)
+Copyright © 2016 FireEye, Inc. All rights reserved. 
+Privacy & Cookies Policy  | Safe Harbor
+Subscribe
+Subscribe

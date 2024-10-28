@@ -1,0 +1,335 @@
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+Gamaredon Infection: From Dropper to 
+Entry   
+By: CERT-EE / Estonian Information System Authority  
+Date: 27 January 2021  
+Tags: malware, Gamaredon, Primitive Bear, Armageddon 
+Version: 1.0 
+TLP: WHITE 
+ 
+Summary  
+Gamaredon (Russian state sponsored) APT group has been active from 2013 and mostly 
+known to target Ukrainian government and military officials with intention to gain access to 
+information. 
+  
+Since the beginning of 2020 there are reports that APT group has taken advantage of the 
+coronavirus pandemic and used it as a lure to attract victims to open malicious attachments 
+sent with spearphishing emails. Target audience has widened also as found in reports, 
+including European Union member countries.  
+ 
+The purpose of this case study was to understand better how the attack chain works, in order 
+to recommend ways to mitigate risks in advance and offer advice in case of suspected 
+infection. Since the group uses legitimate scripting and tools, it may happen that antivirus 
+softwares may not generate alerts/block such detections. It is highly recommended to 
+educate users to identify malicious emails and attachments.  
+ 
+Figure 0. Picture extracted from malicious .dot template depicting the Soviet Red Army insignia. 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+Case study timeline  
+ 
+The attack begins with a spearphising email with a .docx attachment. The attached .docx file 
+contains an URL to an external .dot template which contains malicious VBS code. Once the 
+.docx file is opened by the user, Microsoft Word connects to a defined template without any 
+user interaction needed and executes. 
+ 
+ 
+Figure 1. Infected Gamaredon dropper .docx file with a reference to an external .dot file. 
+ 
+The xxxx.dot file contains a macro: 
+ 
+ 
+Figure 2. Fragment from .dot macro – folder creation and wscript.exe copy. 
+ 
+On execution the script creates a folder named: ’PrintSoftware’ into the user’s profile 
+directory. It then copies ’Windows\System32\wscript.exe’ to the newly created folder 
+’%USERPROFILE%\PrintSoftware\’ and names the file: ’PrintDriver.exe’. 
+ 
+Figure 3. extract from .dot macro – creation of PrintDriver.vbs 
+ 
+Next the script creates a file named ’PrintDriver.vbs’ to the 
+’%USERPROFILE%\PrintSoftware\’ folder which contents are base64 encoded in the 
+template’s macro.  
+ 
+Details of ’PrintDriver.vbs’ will be discussed later in this document. 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+ 
+ 
+Figure 4. Fragment from the .dot macro – persistency, creation of a Scheduled Task. 
+ 
+The script creates 3 scheduled tasks:  
+1) PrintSoftware: executes every 35 minutes: 
+„%USERPROFILE%\PrintSoftware\PrintDriver.exe //b 
+%USERPROFILE%\PrintSoftware\PrintDriver.vbs“ 
+2) CleanerSoftWare: executes every 22 minutes: „taskkill /f /im PrintSoftware.exe“ 
+3) WritePrintSoftware: executes every 6 minutes: „%APPDATA% 
+\Microsoft\Windows\PrintSoftware.exe“ 
+ 
+Figure 5. Fragment from the .dot macro – security settings changes in Microsoft Word. 
+ 
+Word macro and VBA execution security settings are changed through users’ registry:  
+1) "AccessVBOM", 1, – Trust access to the VBA project object model 
+2) "VBAWarnings", 1, – Enable all macros (not recommended; potentially dangerous code 
+can run) 
+ 
+PrintDriver.vbs 
+ 
+ 
+Figure 6. Fragment from the PrintDriver.vbs script – persistency, registry key added. 
+ 
+The VBS script adds a key named ’PrintSoftware’ in the current user’s registry hive under 
+‘RunOnce’ that executes a command line:  
+1) "%USERPROFILE%\PrintSoftware\PrintDriver.exe //b  
+%USERPROFILE%\PrintSoftware\PrintDriver.vbs" 
+ 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+ 
+Figure 7. Fragment from the PrintDriver.vbs script – beacon settings for connection to C2. 
+ 
+The script queries the serial number of the system drive and the computer name via WMI, the 
+returned values are added to User-Agent, which gives the attacker a unique identificator of 
+the system that is starting to communicate with C2 server. 
+ 
+QXHUtYEBXRkD = %COMPUTERNAME% 
+xLIGzmnp = GetDrive(%SYSTEMDRIVE%).SerialNumber 
+ 
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) 
+Chrome/81.0.4044.138 Safari/537.36 OPR/68.0.3618.197::" & QXHUtYEBXRkD & "_" & 
+xLIGzmnp & "::/.isobel/. 
+ 
+As the VBS script executes every 35 minutes (as defined in the scheduled task) it starts with 
+making a GET request with the specific User-agent to hXXp://intumescere.online/index.html 
+ 
+It then uses WMIPingProvider to ping the host defined in script: „intumescere.online“. 
+When the response is: „StatusCode = 0“ (success) then the GET request goes to: 
+ 
+hXXp://“IPAadress“/index.html 
+ 
+ 
+Figure 8. Network beacon traffic. 
+ 
+ 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+ 
+Figure 9. Network beacon traffic request details. 
+ 
+As seen above all requests get the response code: 404 (Not Found). 
+ 
+It leaves an impression as if the current C2 is „dead“...  
+ 
+It activates about 6 hours later... 
+ 
+ 
+Figure 10. Network beacon traffic – response 200. 
+ 
+ 
+Figure 11. Network beacon traffic – response 200 details. 
+ 
+The attacker then sends additional tools to the infected machine.  
+ 
+ 
+Figure 12. Fragment from the PrintDriver.vbs script – actions when the C2 response is 200. 
+ 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+The “404” responses are deceptive. The VBS script contains a condition: if the GET request 
+receives the response code „200“, then action needs to be taken.  
+ 
+After receiving the content, the script creates a „PrintSoftware.exe“ file in user’s profile 
+„\AppData\Roaming\Microsoft\Windows\“ folder and executes it. 
+ 
+ 
+Figure 13. Sysmon log entry for PrintSoftware.exe execution event. 
+ 
+The file is a self-extracting archive. It extracts and renames files as needed. 
+ 
+ 
+Figure 14. Sysmon combined log entries for file renaming events after PrintSoftware.exe extraction.  
+ 
+„PrintSoftware.exe“ also contains „UltraVNC“ for remote access to the system. It is then 
+copied to „C:\Users\Public\“ to „CheckSystems.exe“ file (this is detectable by Virustotal).  
+ 
+https://www.virustotal.com/gui/file/cedbbbc4deb6569c23aa20ac64ad1c2b2bef6f7b3405cef
+861f26a0b44d836d9/detection 
+ 
+ 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+ 
+Figure 15 Sysmon log entry for wn.cmd execution. 
+ 
+ 
+Figure 16. Contents of wn.cmd. 
+ 
+ 
+Wm.cmd is executed and it initiates a connection to „torrent-vnc.ddns[.]net:5612“. 
+ 
+ 
+ 
+Figure 17. VNC connection established. 
+ 
+The attacker now gains access to the system.  
+ 
+After realizing that this particular system had no value, we observed that the deletion of files 
+started. All files and folders on the user’s desktop and profile directory were erased. 
+ 
+ 
+ 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+A picture was left as a „message“ by the member of the APT group before leaving the system. 
+ 
+ 
+Figure 18. „я был здесь“ (I was here) message. 
+ 
+...to be continued. 
+ 
+ 
+ 
+IoCs  
+  
+URL:  
+http[:]//intumescere[.]online/index.html 
+http[:]//torrent-vnc.ddns[.]net:5612 
+  
+IP:  
+188.225.82[.]216 
+195.88.208[.]51 
+ 
+SHA256: 
+cedbbbc4deb6569c23aa20ac64ad1c2b2bef6f7b3405cef861f26a0b44d836d9 
+ 
+ 
+ 
+ 
+ 
+  
+              
+  
+  
+  
+     
+  
+  
+  
+ 
+Mitre ATT&CK Framework 
+ 
+Initial Access: 
+Spearphishing Attachment 
+T1566.001 
+ 
+ 
+Execution: 
+Visual Basic 
+T1059.005 
+Windows Command Shell 
+T1059.003 
+Scheduled Task 
+T1059.005 
+Malicious File 
+T1204.002 
+ 
+ 
+Persistence: 
+Registry Run Keys / Startup Folder 
+T1547.001 
+Scheduled Task 
+T1053.005 
+ 
+ 
+Defense Evasion: 
+Deobfuscate/Decode Files or Information 
+T1140 
+Disable or Modify Tools 
+T1562.001 
+Modify Registry 
+T1112 
+Template Injection 
+T1221 
+ 
+ 
+Discovery: 
+System Information Discovery 
+T1082 
+ 
+ 
+Command and Control: 
+Ingress Tool Transfer 
+T1105 
+Web Protocols 
+T1071.001 
+ 
+ 
+Impact: 
+Data Destruction 
+T1485 
+ 

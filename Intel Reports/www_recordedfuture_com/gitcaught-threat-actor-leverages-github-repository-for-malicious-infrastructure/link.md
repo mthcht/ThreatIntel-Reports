@@ -1,0 +1,1 @@
+[Link to the article](https://www.recordedfuture.com/gitcaught-threat-actor-leverages-github-repository-for-malicious-infrastructure)

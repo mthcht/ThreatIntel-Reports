@@ -1,0 +1,1 @@
+[Link to the article](https://www.rapid7.com/blog/post/2024/02/15/rce-to-sliver-ir-tales-from-the-field/)

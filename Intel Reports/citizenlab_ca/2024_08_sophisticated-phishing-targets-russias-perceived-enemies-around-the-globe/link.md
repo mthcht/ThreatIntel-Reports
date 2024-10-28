@@ -1,0 +1,1 @@
+[Link to the article](https://citizenlab.ca/2024/08/sophisticated-phishing-targets-russias-perceived-enemies-around-the-globe/)

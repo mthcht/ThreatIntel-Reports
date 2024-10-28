@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/23/j/void-rabisu-targets-female-political-leaders/ioc-void-rabisu-targets-female-political-leaders-with-new-slimmed-down-ROMCOM-variant.txt)

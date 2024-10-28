@@ -1,0 +1,293 @@
+ 
+ 
+ New Fileless Botnet Novter Distributed by KovCoreG Malvertising Campaign
+ Technical Brief
+ 
+ 
+ 
+ 
+ 
+Novter’s attack chain 
+Novter’s attack chain 
+Novter communicates with its command-and-control (C&C) servers and downloads multiple JavaScript 
+modules for different purposes. We have identified three Novter modules, which include: 
+1. A module that shows a technical support scam page on the victim’s machine 
+2. A module that abuses WinDivert (Windows packet divert, a tool that enables network packets 
+sent to and from Windows network stacks to be captured, modified, or dropped) to block the 
+communication from processes like those from antivirus (AV) software 
+3. A module (which we dubbed as “Nodster”) that is written with NodeJS and socket.io for proxying 
+network traffic. We consider it’s a module to build proxy network for supporting their new AD click-
+fraud operation. 
+ 
+KovCoreG’s attacks are socially engineered malvertisments that lure unwitting users into downloading a 
+software package needed to update their supposedly out-of-date Adobe Flash application. However, it 
+instead drops a malicious HTML application (HTA) file, named Player{timestamp}.hta. When the victim 
+executes the HTA file, it will load additional scripts from a remote server (communication is RC4-
+encrypted) and run a PowerShell script that appears to take inspiration from the open-source Invoke-
+PSInject project.  
+The PowerShell script, in turn, will disable Windows Defender and Windows Update processes. It runs a 
+shellcode to bypass User Account Control (UAC) via the CMSTPLUA COM interface (related to 
+connection management). The PowerShell script is also embedded with Novter, which will be executed 
+filelessly via the PowerShell Reflective Injection technique. 
+ 
+Figure 1. Code snippet of the PowerShell script for disabling Windows Defender- and Windows Update-
+related procedures, bypassing UAC, and launching Novter 
+ 
+ 
+ 
+Analysis of the Novter malware 
+Novter is a backdoor in the form of an executable file. Immediately after its execution,it performs the 
+following anti-debugging and anti-analysis checks: 
+ 
+Searching for blacklisted processes and modules by comparing the CRC32 algorithms of their 
+names with a list of hardcoded CRC32s 
+ 
+Checking if the number of cores is too small 
+ 
+Checking if the process is being debugged 
+ 
+Checking if the Sleep function is being manipulated 
+ 
+If it finds any of aforementioned information, it is then reported to the C&C server. Note that it uses 
+different sets of C&C servers for different purposes. One set, for instance, is solely used for anti-analysis 
+reporting. After the affected machine’s environment is double-checked and reported, the malware goes to 
+sleep for a long time. 
+ 
+ 
+Figure 2. Snippets of code showing how anti-analysis information is reported to the C&C server (top), and 
+how the malware is configured to sleep for a certain duration 
+The malware then performs the following routines: 
+1. Disable processes related to Windows Defender and Windows updates 
+2. Set persistence through the following: 
+ 
+Dropping a randomly named .HTA file to %APPDATA%\Roaming, where the routine body 
+contains a hardcoded string with .HTA file contents and %s markers, which are replaced 
+with randomly generated strings at runtime. This .HTA file contains JavaScript code, 
+which reads and executes a PowerShell payload from registry. 
+ 
+Creating three randomly named registry subkeys in HKLM or HKCU (based on account 
+privileges) SOFTAWARE\<random string>. The first two registry subkeys have 
+hardcoded templates in the malware body, and the %s strings are randomized in a way 
+similarly to how it was done in the .HTA file.  
+ 
+The code stored in both registry subkeys are actually PowerShell scripts. The first script reads 
+and executes the second script, which is obfuscated by abusing EmpireProject’s Invoke-PSInject 
+open-source project. The third subkey contains the hex-encoded binary of the dropper, as 
+shown in Figure 5. 
+ 
+ 
+ 
+Figure 3. Code snippet showing the PowerShell script stored in the registry subkeys 
+ 
+Figure 4.  Code snippet showing how the malware is linked in the Run registry key 
+ 
+Creating a randomly named link to the .HTA file in the Run registry key, which executes 
+PowerShell code stored in the first registry subkey. This executes the PowerShell code 
+stored in the second registry subkey, which then loads the binary file stored in the third 
+registry subkey. Infection from the next reboot of the system thus becomes fileless. 
+ 
+3. Start a thread that parses an embedded configuration in JSON format and starts regular 
+heartbeat communication — beacons that informs attackers that the infected machine is 
+alive/working — by sending empty POST requests with the “accl” servers specified in the 
+configuration file 
+ 
+ 
+Figure 5. Code snippet showing the “accl” servers specified in the configuration file (top), and how the 
+configuration file is retrieved (bottom) 
+ 
+ 
+4. Start a thread that queries the “acll” server (shown in Figure 7) to get the dynamic configuration 
+file. The request interval is six hours; the configuration file is encrypted by RC4 with a hardcoded 
+password. 
+ 
+5. Start a thread that constantly queries the C&C server, and execute a command, if requested, via 
+the ShellExecute function.  
+ 
+6. Start communication with one of “accl” servers specified in the dynamic configuration file. 
+Communication is RC4-encrypted with a hardcoded password. However, this password is 
+different from the thread where the configuration file is updated. 
+ 
+The backdoor commands that Novter supports are: 
+ 
+killall — Terminate a process and delete a file (for all modules) 
+ 
+kill — Terminate a process and delete a file (for a specific module) 
+ 
+stop — Terminate process without deleting its file (for a specific module) 
+ 
+resume — Start a process (for a specific module) 
+ 
+modules — Download and execute an additional module 
+ 
+update — Download a new version and install the update 
+ 
+update_interval — Set an interval between two consecutive update attempts 
+ 
+Novter’s notable modules 
+Below is a list and our analysis of Novter’s most important modules: 
+ 
+‘call_02’ module — The module will use a Invoke-PSInject script to load a binary 
+embedded inside it. The loaded binary will connect to a remote server to retrieve data 
+and pop up a full-screen window that will display the technical support scam page to the 
+victim. 
+ 
+‘block_av_01’ module — This module is a JavaScript code and has the following 
+functions: 
+1) Extract from resources, debase64, and drop the WinDivert DLL and drivers 
+2) Run a shellcode embedded in a PowerShell script via some kind of Invoke-Shellcode 
+ 
+The shellcode will iterate through all running processes and attempt to match the ROR-
+13 hashes of their names to its own list of hardcoded ROR13 hashes. If it finds matches, 
+process IDs of the detected processes are used in the WinDivert filter. This will make the 
+WinDivert filter look like: ((processId=560 or processId=676 or processId=724 or 
+processId=848 or processId=888) and (remotePort==80 or remotePort==443)). As a 
+result, certain process communication via HTTP and HTTPS are diverted. 
+ 
+ 
+ 
+ 
+Figure 6. Snapshot of code showing the important parameters ofWinDivertOpen (top) and the list of 
+hardcoded ROR13 hashes (bottom) 
+According to the documentation, the WINDIVERT_FLAG_RECV_ONLY flag “forces the 
+handle into receive only mode which effectively disables WinDivertSend(). This means 
+that it is possible to block/capture packets or events but not inject them.” This creates a 
+communication blocker for processes with certain names. Figure 8 (bottom) shows the 
+complete list of hardcoded ROR13 hashes. After trying some known process names, we 
+found that some of these process names belong to anti-malware solutions. 
+ 
+‘all_socks_05’ (Nodster) module — A JavaScript code we named “Nodster” that has 
+the following functions: 
+1) If the OS is Windows 7, it will download and install the update KB3033929 
+(Availability of SHA-2 Code Signing Support for Windows 7 and Windows Server 
+2008 R2). WinDivert documentation shows that it requires this update for it to be 
+installed in the system. 
+ 
+2) Try to modify the affected system’s TTL value, TCP Window Size, and maximum 
+transmission unit (MTU) settings, but it needs to have administrator privileges to do 
+so. The following commands/registry values are run/set:  
+netsh interface tcp set heuristics ws=disabled  
+ 
+ 
+This disables Windows Scaling heuristics. For Windows 7 and Vista, the TCP auto-
+tuning feature is enabled by default. This feature does not always operate effectively 
+and it may result in some websites communicating with significantly reduced speed.  
+ 
+TCP window size is set to Tcp1323Opts 0x02, as the lower erased bit indicates that 
+using window scaling is not encouraged. MTU is set in the registry to 1440 (smaller 
+than standard Ethernet datagram 1500), likely to prevent fragmentation. 
+ 
+3) Download and install Node.JS, a JavaScript runtime environment 
+ 
+4) Extract to a separate folder a script that contains a base64-encoded resource, which 
+is a ZIP archive (contents shown in Figure 9). 
+ 
+ 
+ 
+Figure 7. Contents of the ZIP archive 
+5) Execute divergent or mdivergent based on OS version, a random value, and a fixed 
+probability threshold. Both files can be found as standalone executables or 
+shellcodes. In case of shellcodes, they are base64-encoded and embedded in some 
+kind of Invoke-Shellcode-style PowerShell scripts. The shellcode uses the WinDivert 
+library and drivers to manipulate packets in the following ways: 
+ 
+Divert only outbound TCP packets with tcp.Syn and tcp.Ack != 1, and ignore 
+local loopback packets 
+ 
+Check TCP options; if a combination of certain bits in the TCP header is set 
+(e.g., CWR - Congestion Window Reduced, URG - urgent pointer, etc.), the 
+window size in the TCP packet is also manipulated; the IP Type of Service 
+flag Reliability is also set to 1  
+ 
+These settings likely ensure the packets’ high reliability, which is needed for a 
+SOCKS proxy communication. 
+ 
+ 
+ 
+ 
+ 
+ 
+Figure 8. Snapshots of code showing the WinDivert library and drivers are abused to manipulate network 
+packets 
+ 
+6) Execute node.js with app.js and base64-encoded configuration address as 
+parameters 
+ 
+7) Check the configuration address (via app.js and getip) to obtain the SOCKS proxy IP 
+address, then backconnect it to the C&C server. The C&C server instructs the victim 
+machine to visit specified/requested websites. app.js uses an implementation of 
+Socket.io, a real-time protocol for web application based on WebSocket or HTTP(S) 
+protocol. The following events were listened to and processed via the Socket.io 
+connection: connect, firstmessage, closed, message, disconnect, error and 
+connect_error.  
+ 
+To start a new proxy connection, the attacker’s server will send the firstmessage, 
+which typically comprises the following: length (126), separator(:), some flags 
+specifying the type of the message followed by the message type itself (firstmessage), 
+and the last part, which is a JSON object with data, shown in Figure 11. 
+ 
+The notable aspect in the JSON object is the connection ID, shown in Figure 9. This 
+message immediately follows another message with the actual data. The message 
+has the length, followed by two base64-encoded blobs of data separated by the : 
+separator. 
+ 
+ 
+ 
+ 
+ 
+Figure 9. Code snippet showing the firstmessage (top) and the connection ID (bottom) 
+ 
+ 
+ 
+Figure 10. Code snippet of the JSON object’s connection ID parameter (top), which, when decoded, 
+reveals the connection the malware creates (center) and receives (bottom) 
+ 
+ 
+The first part of the code, once decoded, reveals Part 1 decodes to how the malware 
+uses the socks4a [17] protocol, with these parameters/values:  
+ 
+0x04 = version  
+ 
+0x01 = establish TCP stream connection 
+ 
+0x1bb = 443 port,   
+ 
+61 64 73 … 6e 65 74 = adservercheck.net = domain name 
+ 
+The second part, once decoded, is the TLS client hello message, which has 
+parameters/values that include the following: 
+ 
+0x16 = TLS record type 
+ 
+0x03 0x01 = TLS version (major/minor) 
+ 
+0x02 0x00 = Length of data in the record (excluding the header itself) 
+ 
+0x01 = CLIENT_HELLO 
+ 
+0x00 0x01 0xfc = length 
+ 
+0x03 0x03 = SSL/TLS version 
+ 
+Similarly, a closed message (Figure 13) is where the connection ID is an important 
+parameter passed in the JSON object. 
+ 
+Figure 11. Snippet of the closed message containing the connection ID 
+ 
+As with a proxy’s typical routine, Nodster will create a new TCP connection to 
+connect back to the server, receive the network request, and then send back the 
+response. A “message” event can send data over an established connection by 
+indicating the existing ID of a connection until it receives a “close” event. Nodster can 
+handle multiple TCP proxy connections at the same time. 
+ 
+ 
+ 
+ 
+TREND MICROTM RESEARCH 
+Trend Micro, a global leader in cybersecurity, helps to make the world safe for exchanging digital information.  
+Trend Micro Research is powered by experts who are passionate about discovering new threats, sharing key insights, and 
+supporting efforts to stop cybercriminals. Our global team helps identify millions of threats daily, leads the industry in 
+vulnerability disclosures, and publishes innovative research on new threats techniques. We continually work to anticipate new 
+threats and deliver thought-provoking research.   
+www.trendmicro.com 
+ 
+ 

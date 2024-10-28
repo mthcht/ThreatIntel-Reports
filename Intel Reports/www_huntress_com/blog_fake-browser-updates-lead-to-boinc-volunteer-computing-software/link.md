@@ -1,0 +1,1 @@
+[Link to the article](https://www.huntress.com/blog/fake-browser-updates-lead-to-boinc-volunteer-computing-software)

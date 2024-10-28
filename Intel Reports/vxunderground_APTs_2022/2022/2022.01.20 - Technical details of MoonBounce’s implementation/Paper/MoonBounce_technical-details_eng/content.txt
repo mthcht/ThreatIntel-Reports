@@ -1,0 +1,294 @@
+Technical details 
+of MoonBounce’s 
+implementation 
+Learn more on kaspersky.com      
+#bringonthefuture
+1
+MoonBounce UEFI Implant 
+The rogue CORE_DXE component was patched by the attackers to incorporate an additional, malicious payload, which represents 
+what we refer to as the MoonBounce implant. 
+MD5
+D94962550B90DDB3F80F62BD96BD9858
+SHA1
+6BFB3634F6B6C5A114121FE53279331FF821EE1E
+SHA256
+74B75B1A1375BA58A51436C02EB94D5ADCD49F284744CF2015E03DA036C2CF1A
+Link time
+Friday, 18.07.2014 03:29:55 UTC
+File type
+64-Bit EFI_BOOT_SERVICES_DRIVER
+File size
+1.698 MB
+File name
+CORE_DXE
+This payload was appended to an unnamed section that follows the .reloc section and contains both shellcode and a malicious 
+driver that are introduced in memory through a multistage infection chain during boot time. The driver, which is supposed to run in 
+the context of the Windows kernel during its initialization phase, is in charge of deploying user-mode malware by injecting it into an 
+svchost.exe process, once the operating system is up and running. 
+The aforementioned infection chain starts with a set of inline hooks at the beginning of several functions in the EFI_BOOT_SERVICES 
+structure. This structure, which is a part of the CORE_DXE image itself, contains a table of pointers to routines (referred to as Boot 
+Services) that are callable by subsequent components in the boot sequence, such as the DXE drivers, boot loader and OS loader. Hooking 
+functions in this table facilitates the propagation of malicious code to other boot components during system startup.
+The hooked functions in the underlying EFI_BOOT_SERVICES table, namely AllocatePool, CreateEventEx and ExitBootServices, 
+have their first 5 bytes (typically referred to as the function’s prologue) replaced with a call instruction to a single malicious hook. The 
+hook’s code checks the first bytes after the call instruction and, based on predefined byte patterns, can deduce the source function 
+triggering its execution. Based on this trait, it can dispatch the flow to successive handlers corresponding to each of the hooked 
+functions.
+Example of a hook installed at the beginning of the AllocatePool boot services 
+2
+The steps taken in the infection chain, as a result of deploying the above hooks, are depicted in the following diagram with accompanying 
+explanations:
+Flow of MoonBounce execution from boot sequence to malware deployment in user space
+1. The first Boot Services function invoked in CORE_DXE after the EFI_BOOT_SERVICES structure initialization is 
+AllocatePool, which diverts execution to its corresponding handler within the hook function. 
+3
+2. AllocatePool’s handler: 
+	• Restores the original prologue bytes that were previously modified by the attackers to “48 89 5C 24 08” (corresponding to the 
+instruction  “mov [rsp+8], rbx”) and saves the state of the registers rcx,rdx,r8,r9,rsi and rdi (some of which are typically used 
+to pass function arguments).  
+	• Calls AllocatePool (which is now unhooked) with pre-configured parameters that are intended to allocate a buffer in memory 
+and assign it with shellcode used at later stages of the infection.
+	• Restores the saved state of the registers and passes control back to the beginning of AllocatePool, which is now executed 
+with the original arguments with which it was invoked in the first place.  
+AllocatePool’s hook logic
+3. The next Boot Services function invoked in CORE_DXE is CreateEventEx that diverts execution to its handler within the 
+hook function.
+4. CreateEventEx’s handler: 
+	• Restores the original prologue bytes that were previously modified by the attackers to “48 8B C4 48 89” (corresponding to the 
+instructions “mov rax” and “mov [rax+8], rbx”) and saves the state of the registers rcx,rdx,r8,r9,rsi and rdi (some of which are 
+typically used to pass function arguments).  
+	• Calls the now unhooked CreateEventEx with predefined arguments  to register a callback for an event that represents a 
+legacy boot (designated with the GUID {2A571201-4966-47F6-8B86-F31E41F32F10}, i.e. gEfiEventLegacyBootGuid). In 
+that case, the callback is responsible for passing control to the shellcode set up in AllocatePool’s hook.
+	• Restores the saved state of the registers and passes control back to the beginning of CreateEventEx, which is now executed 
+with the original arguments with which it was invoked in the first place. 
+4
+CreateEventEx’s hook logic
+5. The boot sequence continues, passing control to the Windows OS loader. At one point, this loader calls the hooked function 
+ExitBootServices, which is supposed to hand control over to the OS loader and eliminate the dependency on the firmware-
+based Boot Services functions. 
+6. Execution is diverted to the ExitBootServices handler within the hook previously set up in CORE_DXE.  
+The hooking of ExitBootServices in particular was described as a technique in the Vault7 leaks. 
+7. The ExitBootServices handler conducts the following actions: 
+	• Restores the original prologue bytes that were previously modified by the attackers to “48 89 5C 24 08” (corresponding to the 
+instruction “mov [rsp+8],rbx”).
+	• Takes the previous return address from the stack (the first address after the call to ExitBootServices) and searches for the 
+byte pattern “41 55 48 CB” (corresponding to the instructions “push r13” and “retfq”) within a region of 0x158878 bytes after 
+it. These bytes designate the end of the function OslArchTransferToKernel in the Windows OS loader image (typically named 
+winload.efi or osloader.exe and residing in the ESP partition on disk). 
+	• Copies 0x229 bytes of shellcode to address 0x98000 in memory. 
+	• Replaces the bytes starting with “48 CB” (retfq) at the end of the OslArchTransferToKernel function to E9 <offset_
+to_0x9800_shellcode>, which is essentially a jump to the shellcode that was just copied to 0x9800.
+	• Restores the saved state of the registers and passes control back to the beginning of the now unhooked ExitBootServices, 
+which is executed as it was originally intended in flow of the Windows OS loader. 
+5
+ExitBootServices’ hook logic 
+8. In the further execution flow of the Windows loader, it invokes the aforementioned OslArchTransferToKernel function, which 
+passes control from the OS loader to the Windows kernel. As mentioned in step 7, the last bytes of the function are replaced, 
+diverting execution to a formerly allocated shellcode that effectively serves as a hook for OslArchTransferToKernel.
+9. The OslArchTransgerToKernel hook:  
+	• Locates the image base of ntoskrnl.exe in memory.
+	• Resolves function addresses exported by ntoskrnl.exe, through which it uses a name-hashing algorithm with the following 
+equivalent logic: 
+The compared function name hashes and their corresponding resolved functions are:
+	• 0x42790710 – ExRegisterCallback
+	• 0x2802057D – ExAllocatePool
+	• 0x1C88047D – MmMapIoSpace
+	• Changes the Characteristics field in each section header of ntoskrnl.exe’s image in memory: 
+	• The IMAGE_SCN_MEM_DISCARDABLE bit gets disabled (the section cannot be discarded);
+	• The IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_WRITE and IMAGE_SCN_MEM_NOT_PAGED bits get 
+enabled.
+	• Copies 0xCC bytes of another shellcode to the virtual address of the ntoskrnl.exe’s relocation directory. 
+	• Sets up an inline hook at the beginning of ExAllocatePool with a call instruction to the copied shellcode by placing the 
+bytes E8 <offset_to_shellcode> at the beginning of the function and saving the original bytes in a designated buffer.
+def fn_name_hash(name):
+    name_hash = 0
+    index = 1
+    for ch in name:
+        index += ord(ch)
+        name_hash += index 
+    return (name_hash << 16)  | index
+6
+Code that set up a hook in the ExAllocatePool function within ntoskrnl.exe
+10. Control is passed to the Windows kernel, which then invokes the hooked ExAllocatePool and in turn diverts execution to its 
+hook, which was set up in the previous stage.
+11. The ExAllocatePool hook: 
+	• Verifies if the hook was previously executed by checking a predefined global flag. If not, the flag is set to designate that the 
+hook was run so that any subsequent execution of ExAllocatePool will invoke the original function flow.
+	• Calls MmMapIoSpace to map the driver mapping shellcode, which was set up during step 2, to the virtual address space of 
+the Windows kernel. 
+	• Jumps to the address of the now mapped shellcode, passing it the following arguments on stack:  
+	• Pointer to a buffer with the saved ExAllocatePool prologue bytes
+	• Base address of ntoskrnl.exe
+	• Pointer to ExAllocatePool
+ExAllocatePool hook logic
+7
+12. At this point, the main shellcode set up in the early stages of the infection chain and mapped to the virtual memory address 
+space of the kernel in the previous step gets executed. The purpose of this shellcode is to map a raw PE image of a malicious 
+driver (that is, appended at the end of the shellcode bytes) in memory and pass control to its entry point. To achieve this goal, 
+the shellcode: 
+	• Checks if the buffer with the saved prologue bytes of ExAllocatePool passed to it in the first argument is equal to 
+0x6F4EB841 (the original bytes in ExAllocatePool that were modified when it was hooked), in which case it resets the WP bit 
+in the CR0 register in order to be able to write to read-only pages in memory and restores these original bytes to the beginning 
+of ExAllocatePool (which has its address provided as the third argument of the shellcode), effectively unhooking it. After that, 
+the shellcode restores the previous state of CR0 before it was modified. 
+	• Resolves exported functions from ntoskrnl.exe that are essential for the subsequent PE mapping. The function address 
+resolution code makes use of yet another name-hashing algorithm, which is outlined in the equivalent logic below:
+The functions resolved in this phase and their corresponding name hashes are the following:
+	• 0x0311B83F – ExAllocatePool
+	• 0x41EBE619 – RtlInitAnsiString
+	• 0x1C4F5B64 – RtlAnsiStringToUnicodeString
+	• 0x0ADC68C7 – MmGetSystemRoutineAddress
+	• Maps the malicious driver image to the kernel memory with the following common PE-loading steps: 
+	• Allocates space for the image with the now unhooked ExAllocatePool function
+	• Copies headers and sections to their corresponding virtual addresses in memory
+	• Applies relocations
+	• Resolves imports by getting each name in the import table, initializing its string with RtlAnsiString and 
+RtlAnsiStringToUnicodeString, and passing the result as an argument to MmGetSysteRoutineAddress, following which 
+the argument string is freed with RtlFreeUnicodeString.
+	• Finally, control is passed to the entry point of the malicious driver. 
+For clarity, steps 13-16, which are taken by the malicious driver and the user-mode malware it deploys, are explained in detail in the 
+following sections.
+MD5
+2228E682B2686DBE0330835B58A6F2BF (x86)
+934D06720F4CB74069A870D382AC5045 (x64)
+SHA1
+22A4BD6BFD580C3A2025B1A91F8EF1677FECA360 (x86)
+3D2E6F0C3B6FD0FB44966ADB4F13679E4091D851 (x64)
+SHA256
+707B8684009665742B9C6D801C12B9803F33FC518CB6BF513B4FA15A9E72E106 (x86)
+F17C1F644CEF38D7083CD6DDEB52BFDA2D36D0376EA38CC3F413CAB2CA16CA7D (x64)
+Link time
+Tuesday, 18.12.2018 03:48:33 UTC (x86)
+Tuesday, 18.12.2018 03:48:24 UTC (x64)
+File type
+PE32 executable (native) Intel 80386, for MS Windows
+PE32+ executable (native) x86-64, for MS Windows
+File size
+34.63 KB (x86)
+37 KB (x64)
+File name
+None
+def ror13(x):
+    return 0xFFFFFFFF & ((x >> 13) | (x << 32 – 13))
+   
+def fn_name_hash_ror13(f_name):
+    f_hash = 0
+    for i in f_name:
+        f_hash = ror13(f_hash)
+        f_hash += ord(i)
+    f_hash = ror13(f_hash)
+    return f_hash
+8
+The purpose of the malicious driver is to inject user-mode malware into a Windows service of the network services group, 
+thereby allowing it to have access to the internet. This is achieved by first having the driver register a callback using the 
+PsSetLoadImageNotifyRoutine API, which is invoked when the Windows loader maps a PE image to memory (as outlined in step 
+13 of figure 1). This callback in turn verifies that the inspected image is kernel32.dll and the underlying owning process is executed 
+with the command line: ‘SVCHOST.EXE -K NETSVCS’ or ‘SVCHOST.EXE -K NETSVCS -P’.
+Conditions to locate the target svchost.exe process for injection by MoonBounce’s driver
+If the above conditions are met, the driver continues to inject an embedded PE image, corresponding to a user-mode malware 
+stager, to the matching svchost.exe process (as outlined in step 14 of figure 1). The injection leverages the Windows APC 
+(Asynchronous Procedure Call) mechanism through the following actions: 
+	• The driver enqueues a kernel mode APC routine, which will run in kernel mode with APC_LEVEL IRQL; 
+	• The kernel APC routine initializes the following data structure:
+Offset
+Field
+0x0
+A table with pointers to various fields in the current structure and Windows API functions 
+that are used by the PE mapping shellcode
+0x28
+PE mapping shellcode used to load the raw user mode stager PE to memory
+0x800
+Buffer with the drop zone URL carrying the payload to be downloaded by the stager
+0xA00
+Padding
+0x1000
+Buffer with the raw image of the deployed user mode stager
+The first field, which we will refer to as the mapping shellcode argument, shows the following layout: 
+Offset
+Field
+0x0
+Pointer to the buffer with the user mode stager
+0x8
+Pointer to the buffer with the C2 URL containing the payload to be downloaded by the 
+stager 
+0x10
+Pointer to VirtualAlloc
+0x18
+Pointer to LoadLibraryA
+0x20
+Pointer to GetProcAddress
+9
+The kernel routine initializes a WORK_QUEUE_ITEM structure with a pointer to a worker routine and an argument structure with 
+the following layout: 
+Offset
+Field
+0x0
+Pointer to PE mapping shellcode 
+0x8
+Pointer to the PE mapping shellcode argument described above 
+0x10
+Pointer to the KTHREAD object corresponding to the current thread executing in the 
+context of the injected process
+0x18
+Pointer to a notification event 
+It then calls the ExQueueWorkItem with the above structure in order to insert the worker routine to a system wide queue.
+Initialization of a WORK_QUEUE_ITEM structure used to schedule the execution of a worker routine in kernel space
+	• The Windows kernel has a designated system thread that picks up the previously enqueued task and executes its corresponding 
+routine, passing it a pointer to the argument structure described above. In this case, the executed routine queues the 
+PE-mapping shellcode with its own argument structure to the APC queue of the current thread running in the context of the 
+injected svchost.exe process.
+Worker routine injecting the malicious MoonBounce user-mode stager to an svchost.exe instance using APC injection
+	• Once the aforementioned user-mode thread within svchost.exe is scheduled to run, its execution is preceded by the PE-
+mapping shellcode, which uses its argument structure to load the malware stager PE image to svchost.exe’s memory address 
+space and invoke its entry point (as outlined in step 15 of figure 1).
+User Mode Malware Stager
+MD5
+8DB7440B39761EA8ED75B7870542E1F3
+SHA1
+E21483618EEAE7CC476BC67BF768069572BE7FE0
+SHA256
+4CC7A14BC2E40BE93BBDF6F871430F08C3335E893519D75EA37C66942E1EB7FA
+Link time
+Tuesday, 11.12.2018 09:25:17 UTC
+File type
+PE32+ executable (DLL) (GUI) x86-64, for MS Windows
+File size
+66.5 KB
+File name
+None
+The user-mode malware stager, which is injected to an svchost.exe process by the malicious driver, is a DLL packed with a common 
+software tool called MPRESS. It operates in a similar fashion to UPX, whereby the original sections of the PE are compressed into a 
+new section called .MPRESS1 and the code for unpacking is appended into another generated section named .MPRESS2. It gets 
+executed during runtime in order to decompress the data and pass control to the original entry point within.  
+After unpacking, the malware executes a basic staging component that reaches out to a C2 URL and obtains a PE image. The 
+DLL receives an argument from the driver in the lpReserved parameter of the DllEntryPoint, which should contain a pointer to 
+a C2 URL. The same argument can contain additional optional data elements that can be used in a number of ways throughout 
+execution. These are laid out in a structure of the following form: 
+Offset
+Field
+0x0
+C&C URL (may also contain a scheduling related argument) 
+0x11c
+User-Agent
+0x180
+Proxy address
+0x1c0
+Proxy username
+0x1e0
+Proxy password
+To receive a further payload to run, the malware: 
+	• Runs a system time-dependent scheduling algorithm that postpones execution until reaching a predefined deadline value, at 
+which point the downloading logic is initiated. This value ought to be provided as part of the aforementioned DLL argument; 
+however, we did not observe it being passed by the driver we analysed. 
+	• Sets up an optional User-Agent or uses the default string “IE” instead. Once again, the driver in our case did not pass any 
+particular argument to use in this field; therefore, it is expected to be the default value. 
+	• Registers a callback function with the InternetSetStatusCallback API, which detects whether the system makes use of a 
+proxy, in which case the malware can use the proxy configuration provided in the DLL argument to issue a request. 
+	• Sends a GET request to the C2 URL, expecting to receive a raw PE image as a response. 
+	• Maps the retrieved image to the current memory address space and invokes its entry point.
+kaspersky.com
+Kaspersky’s threat research and reports: www.securelist.com
+Kaspersky’s blog. Business-related topics: business.kaspersky.com
+Enterprise security you can trust: kaspersky.com/enterprise-security
+© 2022 AO KASPERSKY LAB. REGISTERED TRADEMARKS AND SERVICE MARKS ARE THE PROPERTY OF THEIR RESPECTIVE OWNERS.

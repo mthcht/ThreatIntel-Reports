@@ -1,0 +1,1 @@
+[Link to the article](https://www.sentinelone.com/labs/acidpour-new-embedded-wiper-variant-of-acidrain-appears-in-ukraine/)

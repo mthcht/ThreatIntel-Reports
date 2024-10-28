@@ -1,0 +1,196 @@
+1/15
+securityscorecard.com
+/research/apt28s-stealer-called-credomap
+A Deep Dive Into the APT28’s stealer called CredoMap
+Prepared by: Vlad Pasca, Senior Malware & Threat Analyst
+
+Executive summary
+CredoMap is a stealer developed by the Russian APT28/Sofacy/Fancy Bear that was used to target
+users in Ukraine in the context of the ongoing war between Russia and Ukraine. The malware was
+initially discovered by Google and CERT-UA. The threat actor weaponized a document to exploit the
+Follina (CVE-2022-30190) vulnerability that would result in downloading the .NET stealer. The malware
+aims to steal the credentials and cookies from Google Chrome, Mozilla Firefox, and Microsoft Edge. The
+data exfiltration is done by sending information to a possibly compromised C2 server via the IMAP email
+protocol.
+Analysis and findings
+SHA256: 2318ae5d7c23bf186b88abecf892e23ce199381b22c8eb216ad1616ee8877933
+The process retrieves the path of the current executable and then connects to a hard-coded C2 server
+(162.241.216.236) on port 143 (IMAP) using hard-coded credentials:
+Figure 1
+2/15
+Figure 2
+The malware creates a TcpClient object, obtains a client stream for reading and writing, and then reads
+the response from the server:
+Figure 3
+The binary performs the login operation and reads the response using the Read method:
+Figure 4
+It selects the INBOX folder using the SELECT command and performs multiple function calls that steal
+the browsers’ credentials and cookies:
+Figure 5
+3/15
+Figure 6
+The sample verifies if the file “\Google\Chrome\User Data\Default\Network\Cookies” exists in the Local
+AppData folder by calling the File.Exists function:
+Figure 7
+The File.Copy method is used to copy the above file to a new file called “cc”:
+Figure 8
+The malicious binary opens a connection to the Cookies database and executes an SQL query that
+extracts some fields:
+Figure 9
+The process opens and reads the file called “Local/Google/Chrome/User Data/Local State” using
+File.ReadAllText. It extracts the Base64-encoded random key that is encrypted with DPAPI from
+JSON([“os_crypt”][“encrypted_key”]). The key is Base64-decoded and decrypted via a function call to
+ProtectedData.Unprotect:
+Figure 10
+4/15
+The binary creates an AESEngine object, an AEADParameters object containing the decrypted AES-128
+key and the nonce (12 bytes), and calls the GcmBlockCipher.Init function with a “False” parameter
+(decryption operation):
+Figure 11
+The “encrypted_value” extracted from the Cookies database is decrypted using the ProcessBytes and
+DoFinal methods:
+Figure 12
+The resulting values are stored in a dictionary that has the keys as "host_key" with values "name=
+<Decrypted encrypted_value>;”, as highlighted in the figure below.
+Figure 13
+Finally, the process serializes the dictionary to a JSON string using JsonConvert.SerializeObject:
+Figure 14
+The data exfiltration occurs by issuing a valid IMAP APPEND command. The “From” field is set to the
+username obtained from the Environment.UserName property, the “Subject” field is set to the current
+5/15
+date and time on the computer obtained from the DateTime.UtcNow property, and the JSON string is also
+included in the command (see figure 15).
+Figure 15
+The malware verifies if the file “\Google\Chrome\User Data\Default\Login Data” exists in the Local
+AppData folder using File.Exists:
+Figure 16
+The File.Copy function is utilized to copy the above file to a new file called “cp”:
+Figure 17
+The binary opens a connection to the Login Data database and executes an SQL query that extracts the
+“action_url”, “username_value”, and “password_value” fields:
+Figure 18
+6/15
+The malicious process reads the file “Local/Google/Chrome/User Data/Local State” found in the AppData
+directory and deserializes it using the JsonConvert.DeserializeObject method:
+Figure 19
+Figure 20
+The sample extracts the Base64-encoded random key that is encrypted with DPAPI from [“os_crypt”]
+[“encrypted_key”]. The key is Base64-decoded and decrypted via a function call to
+ProtectedData.Unprotect:
+Figure 21
+The encrypted “password_value” field is decrypted using a function that will be explained below:
+Figure 22
+The first 12 bytes after skipping 3 bytes (version tag) from “password_value” represent the AES nonce,
+and the rest of the information is the ciphertext, as displayed in the figure below.
+7/15
+Figure 23
+As in the first case, the “password_value” field is decrypted by calling the ProcessBytes and DoFinal
+functions:
+Figure 24
+However, not all the passwords might be encrypted using AES-GCM. In the case of older versions of
+Chrome, the threat actor tries to decrypt the passwords using the ProtectedData.Unprotect API:
+Figure 25
+As we can see in figure 26, the process computes a string containing "action_url", "username_value", and
+the decrypted “password_value” field that was obtained using the 1st method of decryption or the 2nd
+method of decryption, respectively:
+8/15
+Figure 26
+The credentials exfiltration occurs, in the same way, using an IMAP command to the C2 server.
+The binary checks if the directory “Mozilla\Firefox\Profiles\” can be located in the AppData folder (see
+figure 27).
+Figure 27
+The malware is looking for a file called “cookies.sqlite” in the profile folders. The “cookies.sqlite” database
+is copied to a file called “fc”:
+Figure 28
+The sample runs the "SELECT * FROM moz_cookies" SQL query to retrieve the Firefox cookies:
+9/15
+Figure 29
+A new dictionary is created having the keys as “host” with values “name=value;”, as shown in the figure
+below.
+Figure 30
+The dictionary is serialized to JSON and will be exfiltrated via IMAP.
+The executable verifies if the following files can be identified in the profile folders:
+logins.json
+key4.db
+cert9.db
+signons.sqlite
+key3.db
+cert8.db
+Figure 31
+10/15
+If any of the above files exist, it is copied to the current directory, and its content is encoded using
+Base64. The file location and the Base64-encoded content are exfiltrated using the IMAP protocol.
+Finally, the newly created files are deleted using File.Delete:
+Figure 32
+The File.Exists function is used to check if the file “\Microsoft\Edge\User Data\Default\Login Data” exists
+in the Local AppData directory:
+Figure 33
+The above file is copied to a new file called “ep”, as highlighted in figure 34.
+Figure 34
+The sample executes the following SQL query that extracts usernames and encrypted passwords from
+the “logins” table:
+Figure 35
+The “password_value” field is decrypted by calling the decrypt function that was also used to decrypt the
+Chrome credentials:
+11/15
+Figure 36
+In the case of older versions of Microsoft Edge, the process tries to decrypt the passwords using the
+ProtectedData.Unprotect function:
+Figure 37
+The malware creates a string containing "action_url", "username_value", and the decrypted
+“password_value” field that was obtained using one of the two decryption methods:
+Figure 38
+The executable verifies if the file “\Microsoft\Edge\User Data\Default\Network\Cookies” can be found in
+the Local AppData folder (see figure 39).
+Figure 39
+File.Copy is used to copy the above file to a file called “ec”:
+12/15
+Figure 40
+The following SQL query is run by the malware, which extracts some fields from the “cookies” table:
+Figure 41
+The binary extracts the Base64-encoded key that was encrypted with DPAPI from
+“%LocalApplicationData%\Microsoft\Edge\User Data\Local State”. The key is decrypted via a function call
+to ProtectedData.Unprotect:
+Figure 42
+The “encrypted_value” field is decrypted using the AES key extracted above by calling the ProcessBytes
+and DoFinal methods:
+Figure 43
+The function result is a dictionary containing the relevant information that is serialized using
+JsonConvert.SerializeObject:
+13/15
+Figure 44
+All the files that were copied to the current directory are deleted using the File.Delete function:
+Figure 45
+The malicious process sets Normal attributes for a file called “SQLite.Interop.dll,” which Malwarebytes
+found that it’s downloaded from the C2 server along with the initial executable. The DLL file is deleted
+using File.Delete and another deletion function implemented by the malware:
+Figure 46
+14/15
+The implementation of the deletion function consists of creating a cmd.exe process that deletes the DLL
+file shown above:
+Figure 47
+The process deletes the initial executable and then exits:
+Figure 48
+Indicators of Compromise
+C2 server
+162.241.216.236
+SHA256
+2318ae5d7c23bf186b88abecf892e23ce199381b22c8eb216ad1616ee8877933
+Processes spawned
+cmd.exe “/C Del <Files>”
+YARA rule to detect the threat
+rule CredoMap_APT28
+{
+meta:
+15/15
+author = "Vlad Pasca - SecurityScorecard"
+Date = "2022-09-16"
+strings:
+$s1 = "\\cookies.sqlite" fullword wide
+$s2 = "SQLite.Interop.dll" fullword wide
+$s3 = "Subject:" fullword wide
+$s4 = "$ LOGIN" fullword wide
+$s5 = "/C Del" fullword wide
+condition:
+(uint16(0) == 0x5A4D) and (4 of ($s*))
+}

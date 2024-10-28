@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/authorities-indict-indrik-spider-members-detail-ties-bitwise-spider-russian-state/ - International Authorities Indict, Sanction Additional INDRIK SPIDER Members and Detail Ties to BITWISE SPIDER and Russian State Activity)

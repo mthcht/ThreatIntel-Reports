@@ -1,0 +1,309 @@
+DNSpionage Campaign Targets Middle East
+blog.talosintelligence.com/2018/11/dnspionage-campaign-targets-middle-east.html
+This blog post was authored by Warren Mercer and Paul Rascagneres.
+Update 2018-11-27 15:30:00 EDT: A Russian-language document has been removed.
+Subsequent analysis leads us to believe it is unrelated to this investigation.
+Executive Summary
+Cisco Talos recently discovered a new campaign targeting Lebanon and the United Arab
+Emirates (UAE) affecting .gov domains, as well as a private Lebanese airline company.
+Based on our research, it's clear that this adversary spent time understanding the victims'
+network infrastructure in order to remain under the radar and act as inconspicuous as
+possible during their attacks.
+Based on this actor's infrastructure and TTPs, we haven't been able to connect them with
+any other campaign or actor that's been observed recently. This particular campaign
+utilizes two fake, malicious websites containing job postings that are used to compromise
+targets via malicious Microsoft Office documents with embedded macros. The malware
+utilized by this actor, which we are calling "DNSpionage," supports HTTP and DNS
+communication with the attackers.
+In a separate campaign, the attackers used the same IP to redirect the DNS of legitimate
+.gov and private company domains. During each DNS compromise, the actor carefully
+generated Let's Encrypt certificates for the redirected domains. These certificates provide
+X.509 certificates for TLS free of charge to the user. We don't know at this time if the DNS
+redirections were successful.
+In this post, we will break down the attackers' methods and show how they used malicious
+documents to attempt to trick users into opening malicious websites that are disguised as
+"help wanted" sites for job seekers. Additionally, we will describe the malicious DNS
+redirection and the timeline of the events.
+Infection vectors
+Fake job websites
+The attackers' first attempt to compromise the user involved two malicious websites that
+mimicked legitimate sites that host job listings:
+hr-wipro[.]com (with a redirection to wipro.com)
+hr-suncor[.]com (with a redirection to suncor.com)
+1/12
+These sites hosted a malicious Microsoft Office document: hxxp://hr-
+suncor[.]com/Suncor_employment_form[.]doc.
+The document is a copy of a legitimate file available on the website for Suncor Energy, a
+Canadian sustainable energy company, and contains a malicious macro.
+At this time, we don't know how the target received these links. The attackers most likely
+sent the malicious document via email as part of a spear-phishing campaign, but it also
+could have circulated via social media platforms, such as LinkedIn, in an attempt to
+legitimize the opportunity for a new job.
+Malicious Office document
+Upon opening the first Office document, the user receives a message that says "Content
+Mode Available:"
+Macros used
+The macros of the analysed samples can be divided into two steps:
+1. When the document is opened, the macro will decode a PE file encoded with base64
+and will drop it in %UserProfile%\.oracleServices\svshost_serv.doc
+2. When the document is closed, the macro will rename the file "svshost_serv.doc" to
+"svshost_serv.exe." Then, the macro creates a scheduled task named "chromium
+updater v 37.5.0" in order to execute the binary. The scheduled task is executed
+immediately and repeatedly every minute.
+The purpose of these two steps is to avoid sandbox detection.
+2/12
+The payload is executed when Microsoft Office is closed, meaning it requires human
+interaction to deploy it. The macros, while available through analysis, are also password-
+protected in Microsoft Word to stop the victim from exploring the macro code via Microsoft
+Office.
+Additionally, the macro uses classical string obfuscation in order to avoid strings detection:
+The "schedule.service" string is created by concatenation. The final payload is a remote
+administration tool that we named "DNSpionage."
+DNSpionage malware
+Malware analysis
+The malware dropped by the malicious document is an undocumented remote
+administration tool. We are naming it DNSpionage due to the fact that it supports DNS
+tunneling as a covert channel to communicate with the attackers' infrastructure.
+DNSpionage creates its own data in the running directory:
+%UserProfile%\.oracleServices/
+%UserProfile%\.oracleServices/Apps/
+%UserProfile%\.oracleServices/Configure.txt
+%UserProfile%\.oracleServices/Downloads/
+%UserProfile%\.oracleServices/log.txt
+%UserProfile%\.oracleServices/svshost_serv.exe
+%UserProfile%\.oracleServices/Uploads/
+The Downloads directory is used by the attackers to store additional scripts and tools
+downloaded from the C2 server.
+The Uploads directory is used by the attacker to temporarily store files before exfiltrating
+them to the C2 server.
+The log.txt file contains logs in plain text.
+All the executed commands can be logged in this file, it also contains the result of the
+commands.
+3/12
+The last file is Configure.txt. As expected, this file contains the malware configuration. The
+attackers can specify a custom command and control (C2) server URL, a URI and a domain
+that serves as a DNS covert channel. Additionally, the attackers can specify a custom
+base64 alphabet for obfuscation. We discovered that the attackers used a custom
+alphabet for each target.
+All the data is transferred in JSON. That's why a large part of the code of the malware is the
+JSON library.
+Communication Channels
+The malware uses HTTP and DNS in order to communicate with the C2 server.
+HTTP mode
+A DNS request (to 0ffice36o[.]com) is performed with random data encoded with base64.
+This request registers the infected system and received the IP of an HTTP server
+(185.20.184.138 during the investigation). An example of a DNS request:
+yyqagfzvwmd4j5ddiscdgjbe6uccgjaq[.]0ffice36o[.]com
+The malware is able to craft DNS requests used to provide the attacker with further
+information. Here is an example of request:
+oGjBGFDHSMRQGQ4HY000[.]0ffice36o[.]com
+In this context, the first four characters are randomly generated by the malware using
+rand(). The rest of the domain is then encoded in base32, once decoded the value is
+1Fy2048. "Fy" is the target ID and "2048" (0x800) means "Config file not found". The request
+is performed if the configuration file was not retrieved on the infected machine. This is a
+message is used to inform the attacker.
+The malware performs an initial HTTP request to retrieve its configuration at
+hxxp://IP/Client/Login?id=Fy.
+This request will be used to create the configuration file, particularly to set the custom
+base64 dictionary.
+The second HTTP request is hxxp://IP/index.html?id=XX (where "XX" is the ID for the
+infected system)
+The purpose of this request is to retrieve the orders. The site is a fake Wikipedia page:
+4/12
+The commands are included in the source code of the page:
+In this example, the commands are encoded with a standard base64 algorithm because we
+did not receive a custom alphabet. Here is another example with a custom alphabet in the
+configuration file:
+Here are the three commands automatically sent to the compromised system:
+{"c": "echo %username%", "i": "-4000", "t": -1, "k": 0}
+5/12
+{"c": "hostname", "i": "-5000", "t": -1, "k": 0}
+{"c": "systeminfo | findstr /B /C:\"Domain\"", "i": "-6000", "t": -1, "k": 0}
+The malware generates the following snippet of code after executing those commands:
+The attackers ask for the username and hostname to retrieve the infected user's domains.
+The first step is clearly a reconnaissance phase. The data is eventually sent to
+hxxp://IP/Client/Upload.
+Finally, CreateProcess() executes the commands, and the output is redirected to a pipe to
+the malware created with CreatePipe().
+DNS mode
+The malware also supports a DNS-only mode. In this mode, the orders and answers are
+handled via DNS. This option is dictated within the configure.txt file on the infected
+machine. Using DNS can sometimes be easier to allow for information to be sent back to
+the attacker as it will generally avoid proxies or web filtering in place by leveraging the DNS
+protocol.
+First, the malware initiates a DNS query to ask for orders, for example:
+RoyNGBDVIAA0[.]0ffice36o[.]com 
+The first four characters must be ignored, as mentioned earlier in the article this is random
+generated characters, and the relevant data is GBDVIAA0. The decoded value (base32) is
+"0GT\x00". GT is the target ID and \x00 the request number. The C2 server replies with an
+answer to the DNS request, this will be an IP address, whilst not always a valid IP it is
+perfectly acceptable for the DNS protocol, for example 0.1.0.3. We believe the first value
+(0x0001) is the command ID for the next DNS request and 0x0003 is the size of the
+command.
+Secondly, the malware performs a DNS query with the command ID:
+t0qIGBDVIAI0[.]0ffice36o[.]com (GBDVIAI0 => "0GT\x01")
+The C2 server will return a new IP: 100.105.114.0. If we convert the value in ASCII we have
+"dir\x00", the command to be execute.
+Finally, the result of the executed command will be sent by multiple DNS request:
+6/12
+gLtAGJDVIAJAKZXWY000.0ffice36o[.]com -> GJDVIAJAKZXWY000 -> "2GT\x01 Vol"
+TwGHGJDVIATVNVSSA000.0ffice36o[.]com -> GJDVIATVNVSSA000 -> "2GT\x02ume"
+1QMUGJDVIA3JNYQGI000.0ffice36o[.]com -> GJDVIA3JNYQGI000 -> "2GT\x03in d"
+iucCGJDVIBDSNF3GK000.0ffice36o[.]com -> GJDVIBDSNF3GK000 -> "2GT\x04rive"
+viLxGJDVIBJAIMQGQ000.0ffice36o[.]com -> GJDVIBJAIMQGQ000 -> "2GT\x05 C h"
+[...]
+Victimology
+Thanks to the DNS exfiltration and Cisco Umbrella, we are able to identify the origin of
+some of the victims and the period of activity in October and November. Here is the graph
+for 0ffice36o[.]com, the DNS we mentioned above:
+The queries were performed from Lebanon and UAE. This information is confirmed by the
+DNS redirection described in the next section.
+DNS redirection
+Introduction
+Talos discovered three IPs linked to the DNSpionage domain:
+185.20.184.138
+185.161.211.72
+185.20.187.8
+The three IPs are hosted by DeltaHost.
+The last one was used in a DNS redirection attack between September and November.
+Multiple nameservers belonging to the public sector in Lebanon and UAE, as well as some
+companies in Lebanon, were apparently compromised, and hostnames under their control
+were pointed to attacker-controlled IP addresses. The attackers redirected the hostnames
+to the IP 185.20.187.8 for a short time. Just before redirecting the IP, the attackers created
+a certificate matching the domain name with the Let's Encrypt service.
+In this section, we will present all the DNS redirection instances we identified and the
+attacker-generated certificates associated with each. We don't know if the redirection
+attack was ultimately successful, or what exact purpose the DNS redirection served.
+However, the impact could be significant, as the attackers were able to intercept all traffic
+7/12
+destined for these hostnames during this time. Because the attackers targeted email and
+VPN traffic specifically, they may have been used to harvest additional information, such as
+email and/or VPN credentials.
+As incoming email would also be arriving at the attackers' IP address, if there was multi-
+factor authentication, it would allow the attackers to obtain MFA codes to abuse. Since the
+attackers were able to access email, they could carry out additional attacks or even
+blackmail the target.
+The DNS redirection we identified occurs in multiple locations where there is no direct
+correlation of infrastructure, staff, or job routines. It also occurs in both the public and
+private sectors. Therefore, we believe it was not human error, nor a mistake by an
+administrative user within any of the impacted organisations. This was a deliberate,
+malicious attempt by the attackers to redirect DNS.
+Lebanon government redirection
+Talos identified that the Finance Ministry of Lebanon's email domain was the victim of a
+malicious a DNS redirection.
+webmail.finance.gov.lb was redirected to 185.20.187.8 on Nov. 6 06:19:13 GMT. On
+the same date at 05:07:25 a Let's Encrypt certificate was created.
+UAE government redirection
+UAE public domains were targeted, as well. We identified a domain from the Police (VPN
+and College) and the Telecommunication Regulatory Authority.
+adpvpn.adpolice.gov.ae redirected to 185.20.187.8 on Sept. 13 at 06:39:39 GMT. The
+same date at 05:37:54 a Let's Encrypt certificate was created.
+mail.mgov.ae redirected to 185.20.187.8 on Sept. 15 at 07:17:51 GMT. A Let's
+Encrypt certificate was also created at 06:15:51 GMT.
+mail.apc.gov.ae redirected to 185.20.187.8 on Sept. 24. A Let's Encrypt certificate
+was also created at 05:41:49 GMT.
+Middle East Airline redirection
+Talos discovered that Middle East Airlines (MEA), a Lebanese airline, was also the victim of
+DNS redirection.
+memail.mea.com.lb redirected to 185.20.187.8 on Nov. 14 at 11:58:36 GMT
+On Nov. 6, at 10:35:10 GMT, a Let's Encrypt certificate was created.
+This certificate contains alternative names in the subject lines, this is a feature with DNS to
+allow for multiple domains to be added to the certificate for SSL activities:
+8/12
+memail.mea.com.lb
+autodiscover.mea.com.lb
+owa.mea.com.lb
+www.mea.com.lb
+autodiscover.mea.aero
+autodiscover.meacorp.com.lb
+mea.aero
+meacorp.com.lb
+memailfr.meacorp.com.lb
+meoutlook.meacorp.com.lb
+tmec.mea.com.lb
+These domains show a clear understanding of the victims' domains, leads us to believe the
+attacker was active in these environments to understand the specific domains and
+certificates they would be required to produce.
+9/12
+Conclusion
+Our investigation discovered two events: the DNSpionage malware and a DNS redirection
+campaign. In the case of the malware campaign, we don't know the exact target, but we do
+know the attackers went after users in Lebanon and the UAE. However, as outlined above,
+we were able to uncover the targets of the redirect campaign.
+We are highly confident that both of these campaigns came from the same actor. However,
+we do not know much about the location of the actors and their exact motivations. It is
+clear that this threat actor was able to redirect DNS from government-owned domains in
+two different countries over the course of two months, as well as a national Lebanese
+airline. They were able to work from the system's point of view by using a Windows
+malware, as well as the network, by using DNS exfiltration and redirection. It is unclear if
+these DNS redirection attacks were successful, but the attackers have kept up their efforts,
+launching five attacks so far this year, including one in the past two weeks.
+Users should use these campaigns as proof that their endpoint protection as well as the
+network protection need to be as strong as possible. This is an advanced actor who
+obviously has their sights set on some important targets, and they don't appear to be letting
+up any time soon.
+Coverage
+Snort rules 48444 and 48445 will prevent DNSpionage from making an outbound
+connection.
+Additional ways our customers can detect and block this threat are listed below.
+Advanced Malware Protection (AMP) is
+ideally suited to prevent the execution
+of the malware used by these threat
+actors.
+Cisco Cloud Web Security ( CWS) orWeb
+Security Appliance (WSA) web
+scanning prevents access to malicious
+websites and detects malware used in
+these attacks.
+Email Security can block malicious
+emails sent by threat actors as part of
+their campaign.
+Network Security appliances such asNext-Generation Firewall (NGFW), Next-Generation
+Intrusion Prevention System (NGIPS), and Meraki MX can detect malicious activity
+associated with this threat.
+AMP Threat Grid helps identify malicious binaries and build protection into all Cisco
+Security products.
+10/12
+Umbrella, our secure internet gateway (SIG), blocks users from connecting to malicious
+domains, IPs, and URLs, whether users are on or off the corporate network.
+Open Source SNORTⓇ Subscriber Rule Set customers can stay up to date by downloading
+the latest rule pack available for purchase on Snort.org.
+Indicators of Compromise (IOCs)
+The following IOCs are associated with various malware distribution campaigns that were
+observed during the analysis of associated malicious activity.
+Fake job websites:
+hr-wipro[.]com
+hr-suncor[.]com
+Malicious documents:
+9ea577a4b3faaf04a3bddbfcb934c9752bed0d0fc579f2152751c5f6923f7e14 (LB submit)
+15fe5dbcd31be15f98aa9ba18755ee6264a26f5ea0877730b00ca0646d0f25fa (LB submit)
+DNSpionage samples:
+2010f38ef300be4349e7bc287e720b1ecec678cacbf0ea0556bcf765f6e073ec
+82285b6743cc5e3545d8e67740a4d04c5aed138d9f31d7c16bd11188a2042969
+45a9edb24d4174592c69d9d37a534a518fbe2a88d3817fc0cc739e455883b8ff
+C2 Server IPs:
+185.20.184.138
+185.20.187.8
+185.161.211.72
+C2 Server Domains:
+0ffice36o[.]com
+DNS Hijack Domains (pointed to 185.20.187.8):
+2018-11-14 : memail.mea.com.lb
+2018-11-06 : webmail.finance.gov.lb
+2018-09-24 : mail.apc.gov.ae
+2018-09-15 : mail.mgov.ae
+11/12
+2018-09-13 : adpvpn.adpolice.gov.ae
+Domains in the MEA certificate (on 185.20.187.8):
+memail.mea.com.lb
+autodiscover.mea.com.lb
+owa.mea.com.lb
+www.mea.com.lb
+autodiscover.mea.aero
+autodiscover.meacorp.com.lb
+mea.aero
+meacorp.com.lb
+memailr.meacorp.com.lb
+meoutlook.meacorp.com.lb
+tmec.mea.com.lb
+12/12

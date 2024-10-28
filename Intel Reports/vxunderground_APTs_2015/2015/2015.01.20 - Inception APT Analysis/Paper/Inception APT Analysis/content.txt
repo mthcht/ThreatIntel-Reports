@@ -1,0 +1,109 @@
+Reversing the Inception APT malware
+After reading the Inception paper by Snorre Fagerland and Waylon Grange, I got curious about this threat
+and did some reversing. I felt that it would be good to write a technical blog about the process - maybe it
+could be helpful or interesting for some.
+RTF file Analysis
+MD5: 4a4874fa5217a8523bf4d1954efb26ef
+Exploit: CVE-2012-0158
+As we can see in following screen shot, this is a RTF [Rich Text Format] file. Its common that attackers use
+document files such as these as bait.
+It is common that shellcode starts with a NOPsled. In following screenshot we can see that the embedded
+shellcode starts with NOP slide. NOP, or No OPeration - is a single-byte opcode that does nothing. It has
+the hex value of 0x90.
+Embedded Shellcode Analysis - First Level
+Now, to the functionality of the shellcode. We will ignore the first two prolog instructions,  and for
+remaining statements I have inserted comments to help understanding what is happening in this chunk of
+code. It’s traversing the TEB, the PEB and the Ldr structure to get the base addresses of ntdll.dll and
+kernel32.dll. It needs these to find the API addresses it requires for the rest of the infection.
+In screenshot below, Function 00120F82 is the malware's own GetProcAddress function which takes two
+parameters
+1. Base address of the system dll
+2. Hash of the API name.
+The function returns the memory address of the API.
+Functionality of function 00120F82 ( GetProcAddress)
+As shown in the next screenshot, this function parses the “export name pointer table” of the .dll [ex.
+kernel32.dll] and generates a hash for each function. It compares this with the argument API hash (Ex
+DF7D9BAD for GetFileSize, see above screenshot) using the CMP EDI, ESI instruction. Once the matching
+API is found it parses the Export Address Table and returns the respective API address to the caller in
+EAX register.
+The document contains two levels of shellcode. We are analyzing first level, and in the following code we
+can see a typical egghunting method: It attempts to open the already opened rtf file by checking file
+handles in memory. It starts with a handle with the value 4 and verifies it by doing GetFileSize on it. If this
+fails it does ADD ESI,4 again (adds 4 to the handle) until the API succeeds. When this happens it checks
+the file offset 0x8300 for the marker 0x54405450. Again, if this matches up, it allocates memory into
+which it reads the file content and jumps to the 2nd level shellcode with a JMP EBX.
+Second Level Shell Code Analysis
+Now we have landed into the second level shellcode, but it is obfuscated to evade static analysis. At the
+initial stage there are few instructions waiting to help us. This is the deobfuscation code. We can see that
+0x23B * 4 is the number of bytes obfuscated, POP EBX is the get EIP instruction and 0x5687F945 is the
+deobfuscation XOR key.
+In following code we can see the hexadecimal value that corresponds to the library name being pushed to
+the LoadLibrary function, as well as two loops to get the API addresses using “CALL 02E203E2” function.
+Here also it uses hashes to look up APIs.
+Hash
+API
+Hash
+API
+73E2D87E
+ExitProcess
+0C0397EC
+GlobalAlloc
+7CB922F6
+GlobalFree
+10FA6516
+ReadFile
+36EF7370
+GetCommandLineA
+76DA08AC
+SetFilePointer
+0E8AFE98
+WinExec
+DF7D9BAD
+GetFileSize
+E9238AD9
+_lwrite
+6DD38706
+CoUninitialize
+E88A49EA
+_lcreat
+EB9E05F5
+CoSetProxyBlanket
+5B8ACA33
+GetTempPathA
+6E26C880
+CoCreateInstance
+0FFD97FB
+CloseHandle
+7FC7A3CB
+CoInitializeEx
+In the following code it searches for the embedded VBS file inside the RTF file in memory. It checks for
+the file size in a loop, and if the size is larger than 0x2000 then it sets the file ponter to 0x8C14 to compare
+with the VBS file marker as we can see in following screenshot.
+After finding the VBS marker in memory, it decrypts the VBS file in two iterations. In the first loop it
+decrypts and in the second loop it swaps the low and high bytes of the first 0x100 16-bit words, after which
+it writes the file to a file named “Temp/ew_Rg.vbs”.
+Payload .VBS file Analysis
+The following screenshot shows a part of the .VBS payload file dropped by .RTF file. First line is the
+encrypted .dll 4th line contains Key to decrypt the .dll. Remaining part is self-explanatory.
+The instruction c = Crypt(c,k) function decrypts the encrypted dll and returns the decrypted dll. (See the
+screenshot above)
+c= encrypted dll.
+k = decryption key.
+Following function writes byte by byte to the dropped.dll file.
+Finally, the following code executes the “regsvr32” command to run the wmiprvse.dll in silent mode and
+sets the run key in registry.
+Payload “wmiprvse.dll” file Analysis
+This first level of deobfuscation in wmiprvse.dll takes around 3-4 minutes to finish. Then it allocates
+memory using VirtualAlloc and writes the unpacked code to newly allocated memory before it jumps to
+the unpacked code as shown in following screen shot.
+This dll has 3 layers of unpacking. The one above is level one,  below iyou can see level two.  We can see
+the passing of the control to the newly unpacked .dll @CALL EAX.
+It's very time-consuming to understand the functionality of the dll as it decrypts and builds its own
+runtime import table to hinder the analysis. Analyst cannot directly see which API gets called.
+Finally we can see it’s connecting to webdav.cloudme.com and cleartext credentials in following
+screenshot.
+Malware tries to communicate with the user account created at the WebDAV C&C to exfiltrate system and
+user information.
+Reference:
+https://www.bluecoat.com/security-blog/2014-12-09/blue-coat-exposes-%E2%80%9C-
+inception-framework%E2%80%9D-very-sophisticated-layered-malware

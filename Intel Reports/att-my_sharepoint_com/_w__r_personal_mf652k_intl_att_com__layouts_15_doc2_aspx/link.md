@@ -1,0 +1,1 @@
+[Link to the article](https://att-my.sharepoint.com/:w:/r/personal/mf652k_intl_att_com/_layouts/15/doc2.aspx?sourcedoc=%7B6D37A916-9B2D-4B60-9E48-3FC466511F1B%7D&file=Windows_Nimbleway_Blog.docx&action=default&mobileredirect=true&cid=5b268c61-6d5e-4de6-b31c-13c85c478d92)

@@ -1,0 +1,312 @@
+1/8
+www.welivesecurity.com
+/en/eset-research/analysis-of-two-arbitrary-code-execution-vulnerabilities-affecting-wps-office/
+Analysis of two arbitrary code execution vulnerabilities affecting
+WPS Office
+Demystifying CVE-2024-7262 and CVE-2024-7263
+Romain Dumont
+28 Aug 2024
+ • 
+, 14 min. read
+ESET researchers discovered a code execution vulnerability in WPS Office for Windows (CVE⁠-⁠2024⁠-⁠7262), as it was
+being exploited by APT-C-60, a South Korea-aligned cyberespionage group. Upon analyzing the root cause, we
+subsequently discovered another way to exploit the faulty code (CVE-2924-7263). Following a coordinated disclosure
+process, both vulnerabilities are now patched – in this blogpost, we provide technical details. 
+Key points of the blogpost:
+APT-C-60 weaponized a code execution vulnerability in WPS Office for Windows (CVE-2024-7262)
+in order to target East Asian countries.
+A root cause analysis of this vulnerability is provided along with a description of its weaponization.
+The study of the exploit led ESET researchers to the discovery of an alternative path to exploit the
+vulnerability (CVE-2024-7263).
+Overview
+While investigating APT-C-60 activities, we found a strange spreadsheet document referencing one of the group’s
+many downloader components. Our analysis led us to the discovery of a code execution vulnerability in WPS Office
+for Windows being exploited in the wild by APT-C-60 to target East Asian countries. The final payload is a custom
+backdoor we internally named SpyGlace, publicly documented by ThreatBook as TaskControler.dll.
+According to the WPS website, this software has over 500 million active users worldwide, which makes it a good
+target to reach a substantial number of individuals in the East Asia region. During our coordinated vulnerability
+disclosure process, DBAPPSecurity independently published an analysis of the weaponized vulnerability and
+confirmed that APT-C-60 has exploited the vulnerability to deliver malware to users in China.
+The malicious document (SHA-1: 7509B4C506C01627C1A4C396161D07277F044AC6) comes as an MHTML export
+of the commonly used XLS spreadsheet format. However, it contains a specially crafted and hidden hyperlink
+designed to trigger the execution of an arbitrary library if clicked when using the WPS Spreadsheet application. The
+rather unconventional MHTML file format allows a file to be downloaded as soon as the document is opened;
+therefore, leveraging this technique while exploiting the vulnerability provides for remote code execution. Figure 1
+shows how the document is displayed in WPS Spreadsheet: an image of rows and columns referencing the Coremail
+email solution, used as a decoy. The image hides the malicious hyperlink. 
+Figure 1. The exploit document embeds a picture hiding the malicious hyperlink
+Following our coordinated vulnerability disclosure policy, from the moment the weaponized document was uploaded
+to VirusTotal to the release of this blogpost, the following timeline was observed:
+2024-02-29: The exploit document for CVE-2024-7262 was uploaded to VirusTotal.
+2024-03-??: Kingsoft released an update that silently patched the CVE-2024-7672 vulnerability so that the
+2024-02-29 exploit no longer worked. This was determined retrospectively, by analyzing all accessible WPS
+2/8
+Office releases between 2024-03 and 2024-04, as Kingsoft was not especially forthcoming in providing precise
+details of its actions when attempting to repair this vulnerability.
+2024-04-30: We analyzed the malicious document from VirusTotal and discovered it was actively exploiting
+CVE-2024-7262, which was a zero-day vulnerability at the time of the document’s initial use. We also
+discovered that Kingsoft’s silent patch addressed only one part of the faulty code, and the remaining flawed
+code was still exploitable.
+2024-05-25: We contacted Kingsoft to report our findings. While the first vulnerability was already patched, we
+asked if they could create a CVE entry and/or a public statement as they had for CVE-2022-24934.
+2024-05-30: Kingsoft acknowledged the vulnerabilities and told us they would keep us updated.
+2024-06-17: We asked for an update.
+2024-06-22: Kingsoft told us the development team was still working on it and was aiming to fix this in the
+coming version.
+2024-07-31: Based on later tests, we found that CVE-2024-7263 was silently patched. We advised Kingsoft
+that we had reserved and were preparing CVE-2024-7262 and CVE-2024-7263.
+2024-08-11: DBAPPSecurity team independently published its findings.
+2024-08-15: CVE-2024-7262 and CVE-2024-7263 were published.
+2024-08-16: We asked Kingsoft for another update.
+2024-08-22: Kingsoft acknowledged it had fixed CVE-2024-7263 by the end of May, which contradicts the
+company’s claim on 2024-06-22 that its development team “are still working on it”.
+2024-08-28: Kingsoft has acknowledged both vulnerabilities and that it has patched both. However, it has
+expressed no interest in publicizing the in-the-wild exploitation of CVE-2024-7262 so we are now publishing this
+blogpost to warn Kingsoft’s customers that they should urgently update WPS Office due to in-the-wild
+exploitation and third-party disclosure of the CVE-2024-7262 vulnerability and exploit, which increase the
+chances of further exploitation.
+The CVE-2024-7262 vulnerability stemmed from the lack of sanitization of an attacker-provided file path and lack of
+validation of the plugin being loaded. After analyzing its patch, we discovered another way to exploit the vulnerability
+by leveraging a further logic bug.
+CVE-2024-7262
+This section describes the bug exploited by APT-C-60 that allows code execution via hijacking the control flow of the
+WPS Office plugin component promecefpluginhost.exe. We also explain how the vulnerability was triggered and
+weaponized in the shape of a legitimate-looking spreadsheet document.
+Root cause analysis
+When installing WPS Office for Windows, the software suite registers a custom protocol handler called ksoqing that
+allows the execution of an external application whenever a user clicks on a URL starting with the URI scheme
+ksoqing://. In the Windows operating system, the registration of a custom protocol handler is done in the registry. In
+this case, the default value under the key HKCR\ksoqing\shell\open\command directs Windows to execute C:\Users\
+<USER>\AppData\Local\Kingsoft\WPS Office\<VERSION>\office6\wps.exe with the argument /qingbangong "%1"
+where %1 is replaced with the full URL. To illustrate this, Figure 2 shows what happens when a user clicks on a
+hyperlink using the custom protocol ksoqing inside the WPS Spreadsheet application (et.exe).
+Figure 2. The WPS Spreadsheet application starts wps.exe to handle the custom protocol ksoqing
+Figure 3 provides an overview of the control flow of the exploit for CVE-2024-7262.
+3/8
+Figure 3. Overview of the exploit’s control flow
+Once launched, wps.exe loads qingbangong.dll, the component responsible for parsing and validating certain
+parameters from the hyperlink. The malicious link in the exploit file we found has the following format
+ksoqing://type=ksolaunch&cmd=<base64-encoded string>&token=<MD5
+hash>&launchname=promecefpluginhost.exe. According to our analysis and tests, this results in launching an
+application already present on the system (in this case, promecefpluginhost.exe), with the attacker-provided base64-
+encoded command line.
+The token parameter is the MD5 hash of the encoded value of the cmd parameter concatenated with the string
+_qingLaunchKey_ followed by the encoded value of the launchname parameter. The last one must be an executable
+located under C:\Users\<USER>\AppData\Local\Kingsoft\WPS Office\<VERSION>\office6\ and signed with a valid
+certificate from Kingsoft.
+After decoding the cmd parameter, we found that the command line /qingbangong -CefParentID=1 -
+JSCefServicePath=<base64-encoded file path> is passed to promecefpluginhost.exe. After some initialization, the
+library ksojscore.dll is loaded and decodes the JSCefServicePath parameter. The result is a string passed as a
+parameter to Qt’s QLibrary::load method. This file path is attacker-defined, which means that an attacker could
+achieve code execution by loading an arbitrary DLL. Figure 4 illustrates how the attacker-controlled
+JSCefServicePath parameter is processed by ksojscore.dll.
+Figure 4. Parameter JSCefServicePath is decoded (left) and used as an argument for the QLibrary::load method (right)
+Essentially, it is possible to abuse the ksoqing scheme protocol and create a hyperlink that when clicked will load a
+library from a given remote file path. APT-C-60 weaponized the vulnerability to execute its first-stage trojan
+downloader component (SHA-1: 08906644B0EF1EE6478C45A6E0DD28533A9EFC29).
+Exploiting the vulnerability
+In order to exploit this vulnerability, an attacker would need to store a malicious library somewhere accessible by the
+targeted computer either on the system or on a remote share, and know its file path in advance. The exploit
+developers of this vulnerability knew a couple of tricks that helped them achieve this.
+Leveraging the MHTML format to download remote files
+The authors of the exploit chose to leverage a specific feature of the supported MHTML file format to have their
+malicious component downloaded and stored on the system in a predictable way. This particular type of file is an
+export format offered by Microsoft Word and Excel applications to allow users to view documents in their browser. It is
+a multipart archive containing HTML, CSS, and JavaScript files that facilitate the display of the document. By
+inserting an img tag inside one of the HTML files, it is possible to make the Spreadsheet application download a
+remote file when the document is being loaded. For instance, Figure 5 shows one of our test files with the img tag
+and its src element pointing to a library stored locally.
+4/8
+Figure 5. img tag insertion
+When opening the spreadsheet document with the WPS Spreadsheet et.exe application, the remote library is
+automatically downloaded and stored on disk, as observed using ProcMon shown in Figure 6.
+Figure 6. The WPS Spreadsheet application downloads and stores our library on the system
+Finding a predictable file path
+As for the predictable file path problem, we found that the downloaded files are stored under
+%localappdata%\Temp\wps\INetCache\ and the filename is the MD5 hash of the URL encoded in UTF‑16LE. For
+instance, our URL was http://localhost/Dll1.dll for which the MD5 hash is
+914CBE6372D5B7C93ADDC4FEB5E964CD. However, when trying to set the variable JSCefServicePath to point to
+such a file path, it gets concatenated to the root directory of the WPS Office application located under
+%localappdata%\Kingsoft\WPS Office\<VERSION>\office6\. If the file cannot be found, promecefpluginhost.exe will
+try to retrieve the library from other paths, as shown in Figure 7.
+Figure 7. The file path pointed to by JSCefServicePath is appended to the root directory of WPS Office
+However, it is possible to use a relative path from the root directory of the WPS Office application, such as
+..\..\..\..\Temp\wps\INetCache\914cbe6372d5b7c93addc4feb5e964cd.
+The file extension problem
+There’s a last obstacle to overcome. An astute reader would have probably noticed that the .dll extension gets
+appended to the filename when the promecefpluginhost.exe process tries to load the library. As seen in Figure 6, the
+extension is not appended when the downloaded file is created. The authors of the exploit, once again, used their
+knowledge of the Windows API to bypass this restriction. As mentioned earlier, the QLibrary::Load method is
+responsible for loading the library which in turn calls LoadLibraryW. The documentation for the lpLibFileName
+parameter passed to this function states that adding a trailing dot character (.) prevents the function from appending
+the .dll extension. Therefore, appending this character to the relative path would allow our library to get loaded.
+Reproducing the exploit
+When putting it all together, in order to reproduce the exploit, we followed these steps:
+Host a custom library on a web server.
+Compute the MD5 hash of the URL.
+Build the corresponding hyperlink.
+Create a spreadsheet document, insert the hyperlink, and export it as an MHTML file.
+Insert an img tag inside the exported file to point to the URL.
+5/8
+Figure 8 illustrates how to build the hyperlink.
+Figure 8. Building the hyperlink
+After opening the document, a single click on the hyperlink triggered the vulnerability and our custom library was
+loaded as shown in Figure 9 and, in more detail, in Figure 10.
+Figure 9. Our custom library gets written to disk and loaded
+Figure 10. Call stack detail of our library being loaded
+When loaded, our custom library writes the PID, the presence of admin privileges, and the file path of the hosting
+process to a log file. We reproduced the exploit for different versions of WPS Office for Windows as illustrated in
+Figure 11.
+Figure 11. Log file listing for vulnerable WPS Office versions
+Since this is a one-click vulnerability, the exploit developers embedded a picture of the spreadsheet’s rows and
+columns inside the spreadsheet in order to deceive and convince the user that the document is a regular
+spreadsheet. The malicious hyperlink was linked to the image so that clicking on a cell in the picture would trigger the
+exploit, as reproduced in Figure 12.
+Figure 12. A deceptive spreadsheet embedding an image of regular
+rows and columns
+Another interesting fact about this vulnerability is that it can also be triggered via a single click in the preview pane in
+Windows Explorer, which makes it even more dangerous.
+6/8
+Affected versions
+The affected versions of WPS Office for Windows range from 12.2.0.13110, released around August 2023 until the
+release of the patch in March 2024 with version 12.1.0.16412. The weaponized document was first uploaded to
+VirusTotal in February; some malicious components, given their PE timestamp, were built in February.
+CVE-2024-7263
+This section provides an analysis of the patch for CVE-2024-7262 and the resulting discovery of another code
+execution vulnerability via hijacking the control flow of the same WPS Office plugin component:
+promecefpluginhost.exe.
+Root cause analysis
+During the process of figuring out which versions were affected by the first vulnerability, we analyzed the patch that
+was silently introduced in version 12.1.0.16412 (released around March 2024) to mitigate CVE-2024-7262.
+Essentially, additional checks were put inside the promecefpluginhost.exe and ksojscore.dll components to verify the
+attacker-controlled variable JSCefServicePath. However, a similar variable was not covered by the patch:
+CefPluginPathU8.
+The first check happens when promecefpluginhost.exe iterates over its different command line arguments. If a
+parameter has the same name (case sensitive comparison) as one of the aforementioned variables, the parameter
+is discarded as shown in Figure 13.
+Figure 13. Code checking and discarding passed parameters
+After that, it retrieves the expected file path for JSCefServicePath where jscefservice.dll is supposed to be stored.
+The real path should be %LOCALAPPDATA%\Kingsoft\WPS Office\<VERSION>\office6\addons\kcef\, as seen in
+Figure 14. The same is done for CefPluginPathU8 for which the real path should point to
+%LOCALAPPDATA%\Kingsoft\WPS Office\<VERSION>\office6\addons\cef\.
+Figure 14. Code retrieving the correct library to load
+A new command line is built with the accepted command line parameters, followed by the retrieved file paths
+identified by the named variables. promecefpluginhost.exe then loads the library ksojscore.dll and its export
+CefRenderEntryPoint is called with the rebuilt command line. Both named variables are checked but this time the
+comparison is case insensitive (see line 2 in Figure 15).
+Figure 15. The first case-insensitive occurrence of the variable is taken
+Here lies the first logic flaw. If at least one letter of the named variables is changed to its uppercase or lowercase
+counterpart, the first (case-sensitive) check will not result in the attacker-specified parameter being rejected, and the
+command line will look like the following (for example):
+-JSCEfServicePath=<ATTACKER_CONTROLLED> <OTHER_PARAMETERS> -JSCefServicePath=<REAL_PATH>
+(notice the case change in the first variable name for the first letter E).
+When such a command line is passed to ksojscore.dll, it will only take the first occurrence of the variable and the
+attacker-controlled variable is always placed before the valid ones.
+7/8
+However, before loading the library given by the JSCefServicePath file path, a second check was introduced. The
+function krt::ksafe::KProcess::verifyZhuHaiKingsoftCertSigner is called to check the certificate of the library and make
+sure that it is a library belonging to Kingsoft, as shown in Figure 16. So, an attacker cannot load any arbitrary library.
+Figure 16. Checking the signature of the library being loaded
+However, the CefPluginPathU8 variable is not checked correctly. Here lies the second flaw. After verifying the
+JSCefServicePath file path, the library jscefservice.dll is loaded and calls LoadLibraryExW with the file path provided
+by CefPluginPathU8 concatenated with the string \libcef.dll without checking its signature.
+If at least one letter of the variable CefPluginPathU8 is changed, jscefservice.dll will try to load the libcef.dll library
+stored under the attacker-controlled file path given by the variable, as observed in Figure 17.
+Figure 17. The library jscefservice.dll loads the library pointed to by the attacker-defined path
+without checking its signature
+Exploiting the vulnerability
+The main constraint of this vulnerability is the string libcef.dll that is appended to the file path. As of the writing of this
+blogpost, we haven't found a way to download a file and choose its filename. However, on a local network, hosting a
+library on a share and having the variable CefPluginPathU8 point to it works because LoadLibraryExW allows
+network paths to be specified. The screenshot shown in Figure 18 illustrates how the control flow of
+promecefpluginhost.exe (version 12.2.0.16909 released late April 2024) was hijacked using a network path.
+Figure 18. Procmon’s stack view showing the loading of our custom library
+Affected versions
+The affected versions of WPS Office for Windows range from 12.2.0.13110, released around August 2023, until the
+release of the patch at the end of May 2024 with version 12.2.0.17119.
+Conclusion
+As WPS Office is a software suite mostly distributed in Asia, APT-C-60 demonstrated just how much it is determined
+to compromise targets in East Asian countries. Whether the group developed or bought the exploit for CVE-2024-
+7262, it definitely required some research into the internals of the application but also knowledge of how the Windows
+loading process behaves. The exploit is cunning as it is deceptive enough to trick any user into clicking on a
+8/8
+legitimate-looking spreadsheet while also being very effective and reliable. The choice of the MHTML file format
+allowed the attackers to turn a code execution vulnerability into a remote one.
+Additionally, our discovery of CVE-2024-7263 underlines the importance of a careful patch verification process and
+making sure the core issue has been addressed in full.
+We strongly advise WPS Office for Windows users to update their software to the latest release.
+For any inquiries about our research published on WeLiveSecurity, please contact us at
+threatintel@eset.com. 
+ESET Research offers private APT intelligence reports and data feeds. For any inquiries about this
+service, visit the ESET Threat Intelligence page.
+IoCs
+A comprehensive list of indicators of compromise (IoCs) can be found in our GitHub repository.
+Files
+SHA-1
+Filename
+Detection
+Description
+7509B4C506C01627C1A4
+
+C396161D07277F044AC6
+input.htm
+HTML/Agent.HQ
+MHTML-formatted WPS
+Spreadsheet exploit –
+CVE‑2024‑7262.
+08906644B0EF1EE6478C
+
+45A6E0DD28533A9EFC29
+WPS_TEST_DLL.dll
+Win32/TrojanDownloader.
+
+Agent.HRP
+Downloader component.
+Network
+IP
+Domain
+Hosting
+provider
+First seen Details
+162.222.214[.]48
+131.153.206[.]231
+rammenale[.]com
+PhoenixNAP
+2024⁠-⁠03⁠-⁠08
+C&C server
+hosting next
+stages.
+MITRE ATT&CK TECHNIQUES
+This table was built using version 15 of the MITRE ATT&CK framework.
+Tactic
+ID
+Name
+Description
+Resource
+Development
+T1583.001
+Domains
+APT-C-60 acquired a domain name
+for its C&C server.
+T1583.004
+Server
+APT-C-60 acquired a server for its
+C&C.
+T1608.001
+Upload Malware
+APT-C-60’s next stages were
+uploaded to its C&C server.
+T1587.004
+Exploits
+APT-C-60 developed or purchased
+an exploit for CVE-2024-7262.
+Execution
+T1203
+Exploitation for
+Client Execution
+APT-C-60 exploited CVE-2024-7262
+to achieve execution.
+T1204.001
+Malicious Link
+The exploit used by APT-C-60
+requires a click on a hyperlink.

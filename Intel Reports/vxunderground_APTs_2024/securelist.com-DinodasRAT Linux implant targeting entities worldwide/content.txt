@@ -1,0 +1,214 @@
+1/6
+securelist.com
+/dinodasrat-linux-implant/112284/
+DinodasRAT Linux implant targeting entities worldwide
+Authors
+
+Anderson Leite
+
+Lisandro Ubiedo
+DinodasRAT, also known as XDealer, is a multi-platform backdoor written in C++ that offers a range of capabilities.
+This RAT allows the malicious actor to surveil and harvest sensitive data from a target’s computer. A Windows
+version of this RAT was used in attacks against government entities in Guyana, and documented by ESET
+researchers as Operation Jacana.
+In early October 2023, after the ESET publication, we discovered a new Linux version of DinodasRAT. Sample
+artifacts suggest that this version (V10 according to the attackers’ versioning system) may have started operating in
+2022, although the first known Linux variant (V7), which has still not been publicly described, dates back to 2021. In
+this analysis, we’ll discuss technical details of one Linux implant used by the attackers.
+Initial infection overview
+The DinodasRAT Linux implant primarily targets Red Hat-based distributions and Ubuntu Linux. When first executed,
+it creates a hidden file in the same directory as the executable, following the format “.[executable_name].mu”. This file
+is used as a sort of mutex in order to ensure the implant only runs one instance and only allows it to proceed if it is
+able to successfully create this file.
+The backdoor maintains persistence and is launched as follows:
+2/6
+Backdoor main code
+The backdoor establishes persistence and starts with the following steps:
+1. Direct execution without arguments;
+It first executes without any arguments, which makes it run in the background by calling the “daemon”
+function from Linux.
+2. Establishing persistence on the infected system by utilizing SystemV or SystemD startup scripts (detailed in the
+next section).
+3. Executing itself again with the parent process ID (PPID) as an argument;
+The newly created process (child) continues the backdoor infection while the parent process waits.
+This technique not only gives Dinodas the ability to verify that it has executed correctly, but also makes it
+harder to detect with debugging and monitoring tools.
+Victim ID generation and persistence
+Before establishing contact with the C2 server, the backdoor gathers information about the infected machine and
+infection time to create a unique identifier for the victim’s machine. Notably, the attackers do not collect any user-
+specific data to generate this UID. The UID typically includes:
+Date of infection;
+MD5 hash of the dmidecode command output (a detailed report of the infected system’s hardware);
+Randomly generated number as ID;
+Backdoor version.
+The unique identifier has the format: Linux_{DATE}_{HASH}_{RAND_NUM}_{VERSION}.
+Machine unique identifier generation
+Next, the implant stores all the local information about the victim’s ID, privilege level, and any other relevant details in
+a hidden file called “/etc/.netc.conf“. This profile file contains the current collected metadata of the backdoor. If the file
+does not exist, Dinodas will create it, adhering to the Section and Key:Value structure.
+3/6
+DinodasRAT profile configuration
+It also ensures that any access to this file or to itself (when reading its own filepath) does not update the “access”
+time in the stat structure, which contains the access timestamp of a given file in the file system. It does this by using
+the “touch” command with the “-d” parameter to modify this metadata.
+Replacing the original file access time code
+Modified access time in the backdoor executable
+The DinodasRAT Linux version takes advantage of the two versions of Linux service managers to establish
+persistence on an affected system: Systemd and SystemV. When the malware is launched, a function is called to
+determine the type of Linux distribution the victim is running. There are currently two flavors of distros that the implant
+targets based on its readings of “/proc/version” – RedHat and Ubuntu 16/18. However, the malware could infect any
+distro that supports either of the above versions of system service managers. Once the system is recognized, it
+installs a suitable init script that provides persistence for the RAT. This script is executed once the network setup is
+complete and launches the backdoor.
+SystemD service registration
+For RedHat, RedHat-based systems and Ubuntu, the service initiation scripts used for persistence check for the
+presence of the chkconfig binary. This is a way to indicate that the initialization is done with SysV instead of Systemd.
+If it doesn’t exist, the implant will open or create the script file “/etc/rc.d/rc.local” and append itself to the execution
+chain that runs the backdoor during system initialization. If it exists, the SysV route is implied and the malware
+creates the persistence scripts in “/etc/init.d”.
+C2 Communication
+The Linux version of DinodasRAT communicates with the C2 in the same way as the Windows version. It
+communicates over TCP or UDP. The C2 domain is hard-coded into the binary:
+4/6
+C2 server and port are hard-coded into the implant
+DinodasRAT has a timed interval for sending the information back to the C2, although it is not a fixed interval for all
+users or all connections. If the user executing the implant is root (EUID = 0), the implant doesn’t wait to send the
+information back to the C2. In the case of a non-superuser with the configuration set to checkroot, it will wait two
+minutes for a “short” wait (default) and 10 hours for a “long” wait. The “long” wait is triggered when there’s a remote
+connection to the infected server coming from one of the C2-configured IP addresses.
+To communicate with the C2 server and send any information, the implant follows a network packet structure with
+many fields, but here are the relevant fields of the structure:
+Simplified version of Dinodas network packet
+Here’s a list of C2 commands that DinodasRAT recognizes:
+ID
+Function
+Command
+0x02
+DirClass
+List the directory content.
+0x03
+DelDir
+Delete directory.
+0x05
+UpLoadFile
+Upload a file to the C2.
+0x06
+StopDownLoadFile
+Stop file upload.
+0x08
+DownLoadFile
+Download remote file to system.
+0x09
+StopDownFile
+Stop file download.
+0x0E
+DealChgIp
+Change C2 remote address.
+0x0F
+CheckUserLogin
+Check logged-in users.
+0x11
+EnumProcess
+Enumerate running processes.
+0x12
+StopProcess
+Kill a running process.
+0x13
+EnumService
+Use chkconfig and enumerate all available services.
+0x14
+ControlService
+Control an available service. If 1 is passed as an argument, it will
+start a service, 0 will stop it, while 2 will stop and delete the
+service.
+0x18
+DealExShell
+Execute shell command and send its output to C2.
+0x19
+ExecuteFile
+Execute a specified file path in a separate thread.
+0x1A
+DealProxy
+Proxy C2 communication through a remote proxy.
+0x1B
+StartShell
+Drop a shell for the threat actor to interact with.
+0x1C
+ReRestartShell
+Restart the previously mentioned shell.
+0x1D
+StopShell
+Stop the execution of the current shell.
+0x1E
+WriteShell
+Write commands into the current shell or create one if necessary.
+0x27
+DealFile
+Download and set up a new version of the implant.
+0x28
+DealLocalProxy
+Send “ok”.
+0x2B
+ConnectCtl
+Control connection type.
+0x2C
+ProxyCtl
+Control proxy type.
+0x2D
+Trans_mode
+Set or get file transfer mode (TCP/UDP).
+5/6
+0x2E
+Uninstall
+Uninstall the implant and delete any artifacts from the system.
+Command to uninstall itself from the
+infected system
+Encryption
+The Linux version of DinodasRAT also shares encryption characteristics with the Windows version. For encryption
+and decryption of communication between the implant and the C2, as well as encryption of data, it uses Pidgin’s libqq
+qq_crypt library functions. This library uses the Tiny Encryption Algorithm (TEA) in CBC mode to cipher and decipher
+the data, which makes it fairly easy to port between platforms. The Linux implant also shares two of the keys used in
+the Windows version:
+1
+2
+For C2 encryption:   A1 A1 18 AA 10 F0 FA 16 06 71 B3 08 AA AF 31 A1
+For name encryption: A0 21 A1 FA 18 E0 C1 30 1F 9F C0 A1 A0 A6 6F B1
+Infrastructure
+Domain
+IP
+First seen
+ASN
+Registrar
+update.centos-yum[.]com
+199.231.211[.]19
+May 4, 2022
+18978
+Name.com, Inc.
+The infrastructure currently in use by the Linux versions of DinodasRAT appeared to be up and running at the time
+this implant was being analyzed. We identified one IP address resolving for both the Windows and Linux variants’ C2
+domains. The Windows version of DinodasRAT uses the domain update.microsoft-settings[.]com, which resolves to
+the IP address 199.231.211[.]19. This IP address also resolves to update.centos-yum[.]com, which (interestingly
+enough) uses the same pattern of operating system update subdomain and domain.
+Victims
+In our telemetry data and continuous monitoring of this threat since October 2023, we’ve observed that the most
+affected countries and territories are China, Taiwan, Turkey and Uzbekistan.
+All Kaspersky products detect this Linux variant as HEUR:Backdoor.Linux.Dinodas.a.
+Conclusion
+In October 2023, ESET published an article about a campaign dubbed Operation Jacana targeting Windows users.
+As part of our ongoing monitoring efforts, we discovered that the Jacana operators possess and act on their ability to
+infect Linux infrastructure with a new and previously unknown and undetected Linux DindoasRAT variant, whose
+code and networking indicators of compromise overlap with the Windows samples described by ESET. They do not
+collect user information to manage infections. Instead, hardware-specific information is collected and used to
+generate a UID, demonstrating that DinodasRAT’s primary use case is to gain and maintain access via Linux servers
+rather than reconnaissance.
+The backdoor is fully functional, granting the operator complete control over the infected machine, enabling data
+exfiltration and espionage.
+A more detailed analysis of the latest DinodasRAT versions is available to customers of our private Threat
+Intelligence reports. If you have any questions, please contact crimewareintel@kaspersky.com.
+Indicators of compromise
+Host-based:
+8138f1af1dc51cde924aa2360f12d650
+decd6b94792a22119e1b5a1ed99e8961
+6/6
+Network-based:
+update.centos-yum[.]com (199.231.211[.]19)

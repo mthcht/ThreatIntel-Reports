@@ -1,0 +1,287 @@
+1/18
+www.fortinet.com
+/blog/threat-research/wintapix-kernal-driver-middle-east-countries
+WINTAPIX: A New Kernel Driver Targeting Countries in The
+Middle East
+⋮ 5/22/2023
+Affected platforms: Windows
+
+Impacted parties: Windows Users
+
+Impact: Allows remote code execution and persistent access to the host (backdoor) and the rest of the
+network (proxy)
+
+Severity level: Medium
+
+At Fortinet, we monitor suspicious executables that make use of open-source tools and frameworks. One
+of the things that we keep an eye out for is tools that use the Donut project. Donut is a position-
+independent shellcode that loads .NET Assemblies, PE files, and other Windows payloads from memory
+and runs them with parameters. During our daily threat-hunting process in early February, we
+encountered a kernel driver that used the Donut tool and caught our attention for further analysis.  
+The sample that triggered our rule was a driver called WinTapix.sys (which is why we named it
+WINTAPIX). Since it uses Donut, we decided to analyze it further. It turned out to be a very interesting
+sample that we believe is being used in targeted attacks against countries in the Middle East.
+This captured sample was compiled in May 2020 but was only uploaded to Virus Total in February of this
+year. Pivoting from this sample, we found another variant of this driver with the same name that was
+compiled around the same time, but it was uploaded to Virus Total in September 2022. Pivoting again
+from the used certificates, we found another variant of the WINTAPIX driver with the SRVNET2.SYS
+name. This sample was compiled in June 2021 and was first observed in the wild in December 2021. 
+Based on the information we have collected so far, we now believe that this driver has been active in the
+wild since at least mid-2020 and, to the best of our knowledge, has not been reported before.
+Observed telemetry shows that 65% of the lookups for this driver were from Saudi Arabia, indicating it
+was a primary target. This same telemetry shows a considerable increase in the number of lookups for
+this driver in August and September 2022 and again in February and March 2023. This may indicate that
+the actor(s) behind this driver was operating major campaigns on these dates.
+However, we still do not have enough information about how this driver has been distributed and who
+was behind these operations. Based on the victimology, we suspect an Iranian threat actor developed
+this driver. Observed telemetry shows that while this driver has primarily targeted Saudi Arabia, it has
+also been detected in Jordan, Qatar, and the United Arab Emirates, which are the classic targets of
+Iranian threat actors.
+Since Iranian threat actors are known to exploit Exchange servers to deploy additional malware, it is also
+possible that this driver has been employed alongside Exchange attacks. To that point, the compilation
+2/18
+time of the drivers is also aligned with times when Iranian threat actors were exploiting Exchange server
+vulnerabilities. 
+The attribution process of this driver is still ongoing, and we will provide additional info when we have a
+better idea about the identity of the threat actor or group.
+In this blog post, we provide a comprehensive analysis of this driver.
+Analysis Summary
+We analyzed the sample with the SHA-256 hash of
+8578bff36e3b02cc71495b647db88c67c3c5ca710b5a2bd539148550595d0330, also known as
+Wintapix.sys. As the file extension suggests, this is a Windows Kernel Driver. Figure 1 shows some of its
+attributes.
+Figure 1. Attributes of Wintapix.sys.
+Its digital signature is invalid, meaning the threat actor might first need to load a vulnerable (but
+legitimate) driver and exploit that to load the Wintapix.sys. But once the driver is loaded, the following
+execution chain runs:
+1. Wintapix.sys is loaded in the kernel.
+2. Wintapix.sys injects an embedded shellcode into a suitable process local system privilege.
+3. The injected shellcode loads and executes an encrypted .NET payload.
+We will look at these artifacts in more detail in the rest of the analysis.
+3/18
+Figure 2. Process of unpacking the final payload.
+Wintapix Kernel Driver
+Wintapix.sys is partially protected by VMProtect, a software protection tool that uses virtualization to
+protect software applications from reverse engineering and unauthorized usage. It transforms the original
+executable file into a virtualized code executed in a protected environment, making it difficult to analyze
+and tamper with.
+However, not all functions in the driver are protected, including the code that creates the next stage of the
+attack, which is the focus of the analysis.
+Shellcode Injection
+Wintapix.sys is essentially a loader. Thus, its primary purpose is to produce and execute the next stage of
+the attack. This is done using a shellcode. Interestingly, the shellcode (Figure 3) is hardcoded in the
+binary without any obfuscation.
+4/18
+
+Figure 3. Shellcode
+hardcoded in Wintapix.sys.
+This defeats the purpose of protecting most of the binary with VMProtect since most Anti-Virus engines
+can identify the embedded shellcode.
+To inject the shellcode, the driver must first find a suitable target process. The requirements for the target
+process are as follows:
+The process runs with a Local System account.
+The process is 32-bit.
+The process name is not on the block list, which is ‘wininit.exe, csrss.exe, smss.exe, services.exe,
+winlogon.exe, and lsass.exe.’
+
+Figure 4. Checking
+the process name block list.
+Once a suitable process is found, it is opened with ZwOpenProcess(), and memory is allocated in the
+target process’s memory with ZwAllocateVirtualMemory(). Finally, NtWriteVirtualMemory() injects the
+5/18
+embedded shellcode into the target process (Figure 5). The address of NtWriteVirtualMemory() is
+recovered in runtime, helping to hide the function call from static analyzers.
+Figure 5. Injecting into the target process with NtWriteVirtualMemory().
+Persistence
+Another important function of Wintapix.sys is to set up persistence. This is first done by creating register
+keys at the following places:
+\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Services\\WinTapix
+\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SafeBoot\\Minimal\\WinTapix.sys
+\\REGISTRY\\MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SafeBoot\\Network\\WinTapix.sys
+The service for the driver is then created, as shown in Figure 6.
+Figure 6. Creating a service for the driver.
+Interestingly, the driver is set to load in Safe Boot. Safe Boot, also known as Safe Mode, is a diagnostic
+startup mode in Windows that launches the system with minimal drivers and services. It is designed to
+help users troubleshoot and resolve software or driver-related issues that might prevent the system from
+starting normally. Loading the driver in Safe Boot also adds another layer of persistence to the mix.
+All created registry keys are monitored using the ZwNotifyChangeKey(). This Windows kernel-mode
+function allows monitoring changes to a specified registry key. The function notifies the caller of any
+changes to the registry key by signaling the event or invoking the APC (asynchronous procedure call)
+routine. This makes it useful for applications that need to react to registry modifications in real time. This
+allows the malware to reset itself in the registry after it has been removed.
+It also starts a new thread with PsCreateSystemThread() to monitor the file location of Wintapix.sys. It
+uses NtNotifyChangeDirectoryFile() to monitor changes in the file. Should Wintapix.sys be deleted, it will
+write it back to the same location.
+6/18
+Figure 7. Monitoring changes of the file on disk.
+Injected Shellcode
+Fortunately, the embedded shellcode can be dumped from Wintapix.sys and analyzed separately. It
+quickly revealed that the shellcode was created using the Donut project.
+Donut allows you to convert any .NET assembly or shellcode file into position-independent shellcode,
+which can then be injected into a target process using techniques like process hollowing or thread
+hijacking. The generated shellcode is self-contained and does not rely on any external dependencies.
+This means that the primary goal in our analysis should be to extract the next attack stage, which should
+be a .NET assembly.
+The .NET payload can be extracted from the Donut shellcode by identifying and breaking the decryption
+function in a debugger. After decryption runs, the .NET assembly can be dumped from memory.
+.NET Payload
+Once the payload is saved into a file, we analyzed it as a stand-alone .NET executable. Of course, one of
+the advantages of .NET binaries (from a reverse engineering point of view) is that they can be easily
+decompiled into source code. This, of course, is a tremendous help in understanding the binary’s goals
+and capabilities. Detect It Easy (Figure 8), however, tells us that this executable has been protected by
+multiple obfuscators, particularly Smart Assembly and Eazfuscator. Because of this, the deobfuscator
+tools did not help much, and we just had to live with the challenge.
+7/18
+Figure 8. Detect It Easy shows multiple obfuscators applied on the .NET payload
+Initialization
+The program's main function first decodes two arrays using the GetListUrls() function (Figure 9),
+suggesting that the results contain URLs.
+8/18
+
+Figure 9. Resolving encoded
+strings
+The array called ‘input’ contains the following decoded values:
+9/18
+"accidents_"
+"js-"
+"aspnet_client_"
+"js_search-"
+"_book"
+"library-"
+"subject_"
+"lookup_data-"
+"_toj_web"
+"mng_data_bank_"
+"transactions-"
+"_models"
+"trn_fitness-"
+"news_"
+"update-"
+"_omrvision"
+"user_accounts-"
+"popup_"
+"violation-"
+"_program_steps"
+"workflow-"
+Copy
+The array called ‘input2’ contains the following values:
+"programs_skill_"
+"competences-"
+"properties_"
+"-content"
+"_report"
+"evaluation-"
+"expert_data_"
+"css-"
+"_expert_form"
+"img-"
+"-field"
+"educat_"
+"reports-"
+"_employee"
+"-scales"
+"files_"
+"scripts-"
+"_fonts"
+10/18
+"-skill"
+"helpes_"
+Copy
+These values are used to construct URLs. However, the malware is looking for Microsoft Internet
+Information Services (IIS) characteristics to build them. This means that this malware only targets IIS
+servers. On machines without IIS installed, it will simply crash. Given the IIS characteristics shown in
+Figure 10, the malware extracts the sites hosted by the IIS server. And using that and the strings listed
+above, it constructs a list of URL templates that it will listen on.
+Figure 10. Building a list of URL templates.
+These URL lists are used in the two main functionalities of the payload:
+Backdoor
+Proxy
+Backdoor Functionality
+The list named ‘input2’ is used for the backdoor functionality. It starts an HTTP listener on these URLs
+and uses the Program.HandleRequest() function to handle any incoming requests, which then refers to
+RequestHandler.Execute()(Figure 11).
+11/18
+Figure 11. Evaluating incoming requests in RequestHandler.Execute().
+Let’s start from the end. If the incoming request contains the string ‘wOxhuoSBgpGcnLQZxipa’, then the
+string ‘UsEPTIkCRUwarKZfRnyjcG13DFA’ is sent back. This seems to be a kind of heartbeat
+implementation.
+Command Execution
+If the request has a ‘Jet’ or ‘<space>Ver’ parameter, their values are base64-decoded and used to build a
+command using cmd /c <command>. This is then passed to the RunCommand() function, which executes
+them with Process.start(). Their output will be sent back in the response to the request.
+And finally, if the request has a body, then the RunData() function (Figure 12) is called.
+12/18
+Figure 12. RunData() function.
+RunData() decrypts the body of the request and, depending on the message type, implements the
+following actions:
+Command Execution: as before, it executes the commands in the request body
+File Upload: writes the file content from the request into a file on the filesystem
+File Download: sends the requested file in the HTTP response
+Encryption
+Encryption is implemented for both incoming and outgoing messages. The attribute PrivateKey (Figure
+13) suggests that it implements some kind of asymmetric encryption algorithm. However, after looking
+further into the code, we discovered that calling it a ‘PrivateKey’ is just an exaggeration. In reality, there is
+nothing asymmetric about it, the program implements a simple XOR encoding (Figure 14) as decryption
+and encryption using the ‘PrivateKey’ as a key.
+13/18
+
+Figure 13.
+'PrivateKey' used for encryption and decryption.
+
+Figure 14. XOR
+based decryption function.
+Proxy Functionality
+The values from the list ‘input’ are used to start proxy listeners with Proxy.HandleRequest() on those
+URLs. This part of the program can handle a variety of data streams. If it’s just data, it will act as a simple
+proxy, sending and receiving data between the two sides of the proxy.
+However, it can also accept RDP configuration data (Figure 15).
+14/18
+Figure 15. Parsing the RDPConfig.
+Using this RDP data, it can open a connection to the target RPD server and proxy it to the threat actor.
+Conclusion
+This blog provided a detailed analysis of a driver named WinTapix, which we identified in early Feb of this
+year. The driver uses a Donut open-source payload to inject its shell code. It seems to be primarily
+targeting Saudi Arabia. The attribution process of this driver is still ongoing, but based on the victims, we
+assess with low confidence that this is a work of an Iranian threat actor.
+Fortinet Protections
+Fortinet customers are already protected from these APT and cyber-crime campaigns through
+FortiGuard’s AntiVirus, FortiMail, and FortiClient services, as follows:
+ The following (AV) signatures detect the malicious documents mentioned in this blog:
+W32/PossibleThreat
+
+W64/AI.Native.Suspicious.AVEN
+
+W32/GenCBL.BAK!tr
+
+FortiEDR natively detects and blocks the malicious executables identified in the report based on their
+behavior. The following image shows how FortiEDR detects the suspicious driver load and flags the
+driver as malicious.
+15/18
+If you think this or any other cybersecurity threat has impacted your organization, contact our Global
+FortiGuard Incident Response Team.
+
+IOCs
+Filename
+Sha256
+SRVNET2.SYSf6c316e2385f2694d47e936b0ac4bc9b55e279d530dd5e805f0d963cb47c3c0d
+WinTapix.sys 1485c0ed3e875cbdfc6786a5bd26d18ea9d31727deb8df290a1c00c780419a4e
+WinTapix.sys 8578bff36e3b02cc71495b647db88c67c3c5ca710b5a2bd539148550595d0330
+Injected
+Shellcode
+aae9c8bd9db4e0d48e35d9ab3b1a8c7933284dcbeb344809fed18349a9ec7407
+.Net payload
+27a6c3f5c50c8813ca34ab3b0791c08817c803877665774954890884842973ed
+ 
+MITRE ATT&CK Matrix
+The following MITRE ATT&CK overlay contains TTPs associated with the deployment, installation and
+execution of the WinTapix driver and assocaited backdoor identified by FortiGuard Labs.
+16/18
+Attack Flow
+In this section we are releasing the attack flow of Wintapix driver. The attack flow shows the actions that
+have been executed by this Driver based on Mitre TTPs.
+Attack Flow is a language that explains how threat actors combine and sequence various techniques and
+toolsets to accomplish their objectives.  This language can help defenders to move from tracking
+individual adversary behaviors to monitoring the series of actions that adversaries utilize to achieve their
+objectives. 
+17/18
+18/18

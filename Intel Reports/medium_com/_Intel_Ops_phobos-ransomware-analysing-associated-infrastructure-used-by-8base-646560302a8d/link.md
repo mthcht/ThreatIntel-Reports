@@ -1,0 +1,1 @@
+[Link to the article](https://medium.com/@Intel_Ops/phobos-ransomware-analysing-associated-infrastructure-used-by-8base-646560302a8d)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/content/dam/trendmicro/global/en/research/24/c/unveiling-earth-kapre-aka-redcurl-cyberespionage-tactics-with-trend-micro-mdr-threat-intelligence/Earth%20Kapre%20IOCs.txt)

@@ -1,0 +1,1 @@
+[Link to the article](https://medium.com/mitre-engenuity/technical-deep-dive-understanding-the-anatomy-of-a-cyber-intrusion-080bddc679f3)

@@ -1,0 +1,1 @@
+[Link to the article](https://www.paloaltonetworks.com/blog/security-operations/through-the-cortex-xdr-lens-uncovering-a-new-activity-group-targeting-governments-in-the-middle-east-and-africa/#post-296259-_t9yewnvksov5)

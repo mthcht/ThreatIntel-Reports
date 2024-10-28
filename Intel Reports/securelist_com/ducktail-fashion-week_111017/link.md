@@ -1,0 +1,1 @@
+[Link to the article](https://securelist.com/ducktail-fashion-week/111017/)

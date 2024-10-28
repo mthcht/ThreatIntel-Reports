@@ -1,0 +1,162 @@
+1/7
+www.trendmicro.com
+/en_us/research/24/d/earth-freybug.html
+Earth Freybug Uses UNAPIMON for Unhooking Critical APIs
+⋮ 4/2/2024
+APT & Targeted Attacks
+This article provides an in-depth look into two techniques used by Earth Freybug actors: dynamic-link library (DLL)
+hijacking and application programming interface (API) unhooking to prevent child processes from being monitored via
+a new malware we’ve discovered and dubbed UNAPIMON.
+By: Christopher So
+April 02, 2024
+Read time: 6 min (1633 words)
+In the past month, we investigated a cyberespionage attack that we have attributed to Earth Freybug (also known as
+a subset of APT41). Earth Freybug is a cyberthreat group that has been active since at least 2012 that focuses on
+espionage and financially motivated activities. It has been observed to target organizations from various sectors
+across different countries. Earth Freybug actors use a diverse range of tools and techniques, including LOLBins and
+custom malware. This article provides an in-depth look into two techniques used by Earth Freybug actors: dynamic-
+link library (DLL) hijacking and application programming interface (API) unhooking to prevent child processes from
+being monitored via a new malware we’ve discovered and dubbed UNAPIMON.
+Background of the attack flow
+The tactics, techniques, and procedures (TTPs) used in this campaign are similar to the ones from a campaign
+described in an article published by Cybereason. In this incident, we observed a vmtoolsd.exe process that creates a
+remote scheduled task using schtasks.exe. Once executed, this launches a pre-deployed cc.bat in the remote
+machine.
+2/7
+Figure 1. Earth Freybug attack chain
+download
+vmtoolsd.exe is a component of VMware Tools called VMware user process, which is installed and run inside a guest
+virtual machine to facilitate communication with the host machine. Meanwhile, schtasks.exe is a component of
+Windows called Task Scheduler Configuration Tool, which is used to manage tasks in a local or remote machine.
+Based on the behavior we observed from our telemetry, a code of unknown origin was injected in vmtoolsd.exe that
+started schtasks.exe. It’s important to note that both vmtoolsd.exe and schtasks.exe are legitimate files. Although the
+origin of the malicious code in vmtoolsd.exe in this incident is unknown, there have been documented infections
+wherein vulnerabilities in legitimate applications were exploited via vulnerable external-facing servers.
+Figure 2. Command line for executing the Task Scheduler Configuration Tool.
+download
+First cc.bat for reconnaissance
+Once the scheduled task is triggered, a previously deployed batch file, %System%\cc.bat, is executed in the remote
+machine. Based on our telemetry, this batch file launches commands to gather system information. Among the
+commands executed are:
+powershell.exe  -command "Get-NetAdapter |select InterfaceGuid"
+arp  -a
+3/7
+ipconfig  /all
+fsutil  fsinfo drives
+query  user
+net  localgroup administrators
+systeminfo
+whoami
+netstat  -anb -p tcp
+net  start
+tasklist  /v
+net  session
+net  share
+net  accounts
+net  use
+net  user
+net  view
+net  view /domain
+net  time \\127.0.0.1
+net  localgroup administrators /domain
+wmic  nic get "guid"
+The system information gathered via these commands is gathered in a text file called %System%\res.txt.
+Once this is done, another scheduled task is set up to execute %Windows%\Installer\cc.bat in the target machine,
+which launches a backdoor.
+Second cc.bat hijacking for DLL side-loading
+The second cc.bat is notable for leveraging a service that loads a nonexistent library to side-load a malicious DLL. In
+this case, the service is SessionEnv. A detailed technical description of how this technique works can be found here.
+In this technique, this second cc.bat first copies a previously dropped %Windows%\Installer\hdr.bin to
+%System%\TSMSISrv.DLL. It then stops the SessionEnv service, waits for a few seconds, then restarts the service.
+This will make the service load and execute the file %System%\TSMSISrv.DLL.
+Two actions of interest done by TSMSISrv.DLL are dropping and loading a file named Windows%\_{5 to 9 random
+alphabetic characters}.dll and starting a cmd.exe process in which the same dropped DLL is also injected. Based on
+telemetry data, we noticed that this instance of cmd.exe is used to execute commands coming from another machine,
+thus turning it into a backdoor. We dubbed the dropped DLL loaded in both the service and cmd.exe as UNAPIMON.
+Introducing UNAPIMON for defense evasion
+An interesting thing that we observed in this attack is the use of a peculiar malware that we named UNAPIMON. In its
+essence, UNAPIMON employs defense evasion techniques to prevent child processes from being monitored, which
+we detail in the succeeding sections.
+Malware analysis
+UNAPIMON itself is straightforward: It is a DLL malware written in C++ and is neither packed nor obfuscated; it is not
+encrypted save for a single string.
+At the DllMain function, it first checks whether it is being loaded or unloaded. When the DLL is being loaded, it
+creates an event object for synchronization, and starts the hooking thread.
+As shown in Figure 3, the hooking thread first obtains the address of the function CreateProcessW from kernel32.dll,
+which it saves for later use. CreateProcessW is one of the Windows API functions that can be used to create a
+4/7
+process. It then installs a hook on it using Microsoft Detours, an open-source software package developed by
+Microsoft for monitoring and instrumenting API calls on Windows.
+Figure 3. Hooking thread disassembly
+download
+This mechanism redirects any calls made to CreateProcessW from a process where this DLL is loaded to the hook.
+The hook function calls the original CreateProcessW using the previously saved address to create the actual process
+but with the value CREATE_SUSPENDED (4) in the creation flags parameter. This effectively creates the process,
+but whose main thread is suspended.
+Figure 4. Calling “CreateProcessW” with “CREATE_SUSPENDED”
+download
+It then walks through a list of hardcoded DLL names as shown in Figure 5.
+5/7
+Figure 5. List of DLL names
+download
+For each DLL in the list that is loaded in the child process, it creates a copy of the DLL file to %User Temp%\_{5 to 9
+random alphabetic characters}.dll (hereafter to be referred to as the local copy), which it then loads using the API
+function LoadLibraryEx with the parameter DONT_RESOLVE_DLL_REFERENCES (1). It does this to prevent a
+loading error as described in this article.
+Figure 6. Copy and load DLL
+download
+After the local copy of the DLL has been loaded, it then proceeds to create a local memory copy of the loaded DLL
+image with the same name in the child process. To ensure that the two DLLs are the same, it compares both the
+values of the checksum field in the headers and the values of the number of name pointers in the export table.
+Once verified to be identical, it walks through all exported addresses in the export table. For each exported address, it
+checks to ensure that the address points to a code in an executable memory page, and that the starting code has
+been modified. Specifically, it checks if the memory page protection has the values PAGE_EXECUTE (0x10),
+PAGE_EXECUTE_READ (0x20), or PAGE_EXECUTE_READWRITE (0x40). Modifications are detected if the first
+byte in the exported address is either 0xE8 (CALL), 0xE9 (JMP), or if its first two bytes are not equal to the
+corresponding first two bytes in the loaded local copy. Additionally, it also verifies that the name of the exported
+address is not RtlNtdllName, which contains data instead of executable code.
+6/7
+Figure 7. Exported address checking
+download
+If an exported address passes these tests, it is added to a list for unpatching.
+Once all the DLL names in the list have been processed, it walks through each of the addresses in the unpatching
+list. For each address, it copies 8 bytes from the loaded local copy (the original) to the remote address, which has
+been previously modified. This effectively removes any code patches applied to an exported address.
+Figure 8. Unpatching loop
+download
+Finally, it unloads and deletes the randomly named local copy of the DLL and resumes the main thread. When the
+malware is unloaded, it removes the hook from CreateProcessW.
+Impact
+Looking at the behavior of UNAPIMON and how it was used in the attack, we can infer that its primary purpose is to
+unhook critical API functions in any child process. For environments that implement API monitoring through hooking
+such as sandboxing systems, UNAPIMON will prevent child processes from being monitored. Thus, this malware can
+allow any malicious child process to be executed with its behavior undetected.
+A unique and notable feature of this malware is its simplicity and originality. Its use of existing technologies, such as
+Microsoft Detours, shows that any simple and off-the-shelf library can be used maliciously if used creatively. This also
+displayed the coding prowess and creativity of the malware writer. In typical scenarios, it is the malware that does the
+hooking. However, it is the opposite in this case.
+Security recommendations
+In this specific Earth Freybug attack, the threat actor used administrator accounts, which means that the threat actors
+knew the admin credentials, rendering group policies useless. The only way to prevent this from happening in an
+environment is good housekeeping, which involves frequent password rotation, limiting access to admin accounts to
+actual admins, and activity logging.
+In this incident, data exfiltration was done using a third-party collaborative software platform over which we do not
+have control. Even if the write permissions were revoked for affected folders that could be accessed through the
+collaborative software, the threat actor could just simply override it, since the threat actor is the admin from the
+system’s point of view.
+Users should restrict admin privileges and follow the principle of least privilege. The fewer people with admin
+privileges, the fewer loopholes in the system malicious actors can take advantage of.
+Conclusion
+
+Earth Freybug has been around for quite some time, and their methods have been seen to evolve through time. This
+was evident from what we observed from this attack: We concluded that they are still actively finding ways to improve
+their techniques to successfully achieve their goals.
+7/7
+This attack also demonstrates that even simple techniques can be used effectively when applied correctly.
+Implementing these techniques to an existing attack pattern makes the attack more difficult to discover. Security
+researchers and SOCs must keep a watchful eye not only on malicious actors’ advanced techniques, but also the
+simple ones that are easily overlooked.
+Indicator of compromise
+Hash
+Detection name
+62ad0407a9cce34afb428dee972292d2aa23c78cbc1a44627cb2e8b945195bc2 Trojan.Win64.UNAPIMON.ZTLB

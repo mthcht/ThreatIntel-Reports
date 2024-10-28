@@ -1,0 +1,1 @@
+[Link to the article](https://www.elastic.co/security-labs/netwire-dynamic-configuration-extraction?ultron=esl:_threat_research%2Besl_blog_post&blade=twitter&hulk=social&utm_content=8787629064&linkId=199502402)

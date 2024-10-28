@@ -1,0 +1,378 @@
+1/13
+doubleagent.net
+/fastcash-for-linux/
+FASTCash for Linux
+haxrob ⋮ ⋮ 10/13/2024
+Linux
+ Featured
+Analysis of a newly discovered Linux based variant of the DPRK attributed FASTCash malware along with
+background information on payment switches used in financial networks.
+haxrob
+Oct 13, 2024
+• 19 min read
+FASTCash for Linux
+Introduction
+2/13
+This post analyzes a newly identified variant of FASTCash "payment switch" malware which specifically targets the
+Linux operating system. The term 'FASTCash' is used to refer to the DPRK attributed malware that is installed on
+payment switches within compromised networks that handle card transactions for the means of facilitating the
+unauthorized withdrawal of cash from ATMs.
+In this example, 'FASTCash for Linux' has intercepted, added funds and and approved a failed card before reaching the acquirer.
+Discovery of a Linux variant adds to the list of operating systems that this malware has been compiled for, with prior
+samples known to target IBM AIX (FASTCash for UNIX) and Microsoft Windows (FASTCash for Windows). As per an
+updated amended to CISA's 2018 advisory for the Windows variant:
+Since the publication of the in October 2018, there have been two particularly significant developments in
+the campaign: (1) the capability to conduct the FASTCash scheme against banks hosting their switch
+applications on Windows servers, and (2) an expansion of the FASTCash campaign to target interbank
+payment processors.
+The first submission of 'FASTCash for Windows' to VT was during September 2019, and first was publicly referenced
+by CISA in 2020. During the author's discovery of the Linux variant, additional Windows samples have been identified
+which were submitted to VT within the month of June 2023, overlapping in time with the Linux variant submission.
+(Notably, the most recent Windows variant with a previously unreported hash was submitted is in the month of
+September 2024)
+💡
+Both the identified Linux and Windows variants work in the currency of Turkish Lira as opposed to Indian Rupee in
+the AIX variant.
+Newly unattributed Windows samples have some detections (likely) due to the process injection methods used,
+although the Linux sample that is the primary focus of this post, has no detections as of writing:
+IoCs can be found and the end of this post.
+Based on analysis of CISA's reported Windows sample against the Linux sample, both are are targeting very similar
+or the same payment infrastructure (bank or interbank network) within the same country - this assertion is made
+based on the unique properties of the fraudulent transaction responses that both variants share. Further details on
+this attribution can be found in the technical analysis later in this post.
+The Linux sample that is of primary focus here is has been compiled for Ubuntu Linux 20.04 and developed
+sometime after April 21 2022 (based on compiler version), most likely developed in a Virtual Machine using the
+VMware hypervisor.
+The Linux variant has slightly reduced functionality compared to its Windows predecessor, although it still retains key
+functionality: intercepting declined (magnetic swipe) transactions messages for a predefined list of card holder
+3/13
+account numbers and then authorizing the transaction with a random amount of funds in the currency of Turkish Lira.
+The FASTCash for Windows sample (switch.dll) reported in CISA/DHS MAR-10257062-1.v2, which cites
+attribution to HIDDEN COBRA.
+💡
+Other overlapping (financially motivated) intrusion set names within the "Lazarus group" umbrella may include APT38
+(Mandiant), Stardust Chollima (CrowdStrike), BeagleBoyz (CISA/DHS), BlueNoroff (Kaspersky Lab) and Diamond
+Sleet (Microsoft) and more.
+Analysis done between the AIX and the original Windows variant by Kevin Perlow presented in his Blackhat 2021 talk
+and related related paper. As such, this post will specifically focus the newly identified Linux variant and its relation to
+the original Windows variant.
+The next section of this post will attempt to explore in detail the terminology and technology related to card
+transactions processing systems. The intention of this section is to help facilitate the understanding of concepts
+fundamental to card transaction platforms.
+Skip to Part 2 around midway in this post if you would rather head straight into the analysis of the Linux variant.
+Part 1 - Terminology and Technology
+Parties involved
+First we start with terms used to refer to parties which may participate in a (credit or debit) card transaction:
+The acquirer (or merchant acquirer, or acquiring bank) enables a merchant to accept payment to a cardholder.
+For example, this is the bank a retail shop uses to enable their customers to make payments. The acquiring
+bank owns the ATM/PoS terminals and associated switch software and interchange connectivity.
+Issuer - The bank or financial institution that provides the credit or debit card to a customer. Within the context
+of the switch system, the issuer is the one that responds to acquirers with an approval or rejection message for
+a transaction. An issuer can be the acquiring bank.
+Card Scheme / Card Network such as Visa, Mastercard etc. In these examples, the card scheme is an
+intermediate party between the acquirer and issuer. There are exceptions, for example AMEX could also be the
+issuer. The issuing bank is a member of the card scheme.
+To illustrate better, the following diagram assumes the card holder makes a purchase on a credit card. The shop
+terminal reads the card data and sends it to the shop merchant's acquiring bank. Since the card holder belongs to a
+different bank, the request is sent to the card network (Visa, Mastercard etc.). The card issuing bank (the bank of the
+shopper) then does balance checks and so forth.
+Example flow of an authorization request for a purchase with a credit card
+Payment switch
+A "Switch" is an intermediary routing system for the card transaction messages. They may connect multiple endpoints
+(ATM/POS terminals) to bank Hosts or provide a transit between parties such as interbank networks to perform duties
+such as routing of transactions, protocol conversion, and reporting/logging. Here "Host" may refer to a financial
+institution's core banking systems that perform the actual financial transaction against the card holder's account.
+FASTCash malware which tampers with transaction messages could happen within a userspace process on a
+compromised switch where the message digest code either missing or not validated. The following diagram helps
+illustrate the role and placement of payment switches or ATM controllers.
+4/13
+In the above diagram we have an assortment of ATMs and PoS terminals speaking a mixture of protocols. The
+switches are also speaking different dialects of ISO8583 for interoperability between payment networks. The core
+banking systems (Centralized Online Real-time Environment) handles the actual transaction processing for the card
+holder (for example, depositing or withdrawal of funds from their account. The cardholders PIN used to authorize the
+transactions will be encrypted in a HSM)
+Protocols and Interfaces
+Central to all of this is the ISO8583 message format. The standard, known as "Financial Transaction Card-Originated
+Messages — Interchange Message Specifications", details the format and standard for debit and credit card
+transactions: actions such as checking a balance, withdrawing cash from an ATM or making a purchase from a Point
+of Sale terminal at a retail store. The fields are called "data elements" and are referenced by an integer number.
+Proprietary platforms or payment networks that process these messages will detail the meaning and format of data
+elements specific to their implementation. These specifications can get quite lengthy, often spanning many hundreds
+of pages in length.
+💡
+The first version of ISO8583 was released in the 80's - ISO8583:1987, established upon an older standard by ANSI,
+X.92. Before the ANSI standard gained adoption starting within the early 1980s, financial institutions used their own
+developed protocols and message structures. A newer (and generic standard, not just limited to card transactions) is
+ISO20022 that is represented in XML or encoded in ASN.1. Again, different payment networks or even countries
+may have their own derivates based upon ISO8583. For example, in Australia this is known as AS2805 which is
+used for EFTPOS transactions.
+While the standard does not define the transport protocol, these days it is common for TCP/IP to be used between
+Switches. Predating the Internet as we know it, many public and private packet switched networks were X.25 based
+and often used in financial networks - and quite possibly still is in some places. Remnants of X.25 still apply to today
+when referring to card transactions - the ISO8583 standard does not specify how to route the messages over the
+network, and as such, a TPDU (Transaction Protocol Data Unit) was often used. The TPDU may include the origin and
+destination addresses (e.g. terminal and national network) and a message length. Once upon a time, hardware
+routers existed that supported these messages over X.25 packet switched networks and within HDLC/SDLC links. In
+addition to a TPDU, a 16 bit unsigned integer is often prefixed before the PDU to indicate the message length
+(including the PDU length of 5 bytes).
+5/13
+Vanguard Networks TPDU Protocol, page 4
+We will see later that linux.fastcash (and the Windows variants) expects ISO8583 messages to include both a 2
+byte message length and TPDU prefixed before the ISO8583 message.
+Terminals
+Automatic Teller Machines
+ATMs are often connected to a network via dial-up/ASDL or leased lines. While most modern ATMs support TCP/IP,
+supposedly, the 1960's IBM BSC / Bisync protocol may still be used in old ATMs, such as BSC3270. ATM vendors
+often have have their own proprietary protocol such as NDC/NDC+ (NCR Direct Connect), DDC (Diebold Direct
+Connect) and Triton. While not published in the public domain, documents related to these standards can be found on
+the Internet. At some point a global standard, CEN/XFS was introduced which relieved the "vendor lock-in" in regards
+to mandating a specific ATM vendor's supported controller/switch product.
+Point of Service
+These days we often spot PoS terminals using connectivity over a telecom network or twisted pair over the PSTN.
+Older PoS terminal devices may have required a POS concentrator. Taking an example - a very early proprietary PoS
+protocol (like many, based on ISO8583) is called HPDH (Hypercom POS Device Handler). Specification documents
+(again, found by an Internet search) details a HDLC frame which includes a 5 byte TPDU with a fixed ID number 0x60
+which corresponds to the message type "Transactions":
+Hypercom HDLC frame including TPU and ISO8583 message
+The use of 0x60 in a PoS TPDU appears common across different vendors and and implementations, perhaps
+inherited from Hypercom. The Windows and Linux FASTCash variants use very specific values in the TPDU header
+which could possibly provide pointers what kind of systems the infected switch(s) are interfacing with. More in this
+later.
+More on ISO8583
+Let's take a look at some of the fields within the standard:
+MTI - Four digits that indicate the source and function of the message. linux.fastcash (and the other
+related variants) support 100/110 (balance enquiry) and 200/210 (financial transaction). Balance checks
+(MTI 100) are likely used to verify that the malware is working by verifying that the card holder has fraudulent
+amount of funds in their account.
+6/13
+MTI table, page 2 from jPOS Common Message Format
+Bitfield - A bitmap that marks which fields are present in the message. The position of the bit represents the
+data element ID number.
+Data Element - The actual field that contains the information for a transaction. The standard specifies the
+meaning and format of many of these fields, but not all. We will come across custom formats with the
+FASTCash malware which is likely specific to the target's network or Switch implementation. When we refer to
+data elements, the convention DE will be prefixed with the element number.
+A description of some fields:
+DE2 (Primary Account Number) - The PAN, or customer account number
+DE3 (Processing Code) - The response code. FASTCash checks this code to determine if "insufficient funds" is
+being returned from the issuer for a transaction.
+DE4 (Transaction Amount) - Typically the value of the funds, for example, amount being requested to be
+withdrawn. linux.fastcash uses a different field for this.
+DE22 (Point of Service Entry Mode) - The mode and PIN availability. Here FASTCash looks for Magnetic Swipe
+mode.
+DE49 (Transaction Currency Code) - The currency code (as per ISO4217) of the funds. linux.fastcash and
+it's Windows equivalent specifies TRY and a prior AIX variant can be found to use INR.
+DE52 (PIN) - Encrypted PIN which might be omitted if a PIN was not used (e.g. customer signed). In the case
+of linux.fastcash and it's prior Windows variant, the malware explicitly removed this field and the
+associated DE53 (Bin Block) fields.
+A valuable reference document is "jPOS Common Message Format".
+Integrity and Encryption
+FASTCash malware targets systems that ISO8583 messages at a specific intermediate host where security
+mechanisms that ensure the integrity of the messages are missing, and hence can be tampered. If the messages
+were integrity protected, a field such as DE64 would likely include a MAC (message authentication code). As the
+standard does not define the algorithm, the MAC algorithm is implementation specific.
+💡
+One example of the secret that is used in a MAC algorithm is the encrypted TSK (Terminal Session Key) from a
+commonly used Master/Session key management scheme used in ATM/PoS devices (MK/SK is being replaced by
+DUKPT) and many vendors support both). PCI standards publishes a list of approved PTS (PIN Transaction Security)
+devices which gives an idea of the symmetric key algorithms and key management schemes employed here). In an
+ATM, a device here is the actual "PIN keyboard" which encrypts the PIN very early on - and hence the ATM O/S
+(often running Microsoft Windows) is never exposed to the customer's (plain-text) PIN number.
+FASTCash malware modifies transaction messages in a point in the network where tampering will not cause
+upstream or downstream systems to reject the message. A feasible position of interception would be where the
+ATM/PoS messages are converted from one format to another (For example, the interface between a proprietary
+protocol and some other form of an ISO8583 message) or when some other modification to the message is done by
+a process running in the switch.
+Operating systems and platforms
+7/13
+linux.fastcash sample was compiled for Ubuntu Linux 22.04 (Focal Fossa) with GCC 11.3.0. ATM switch
+software running on Ubuntu Linux though? Let's dig a bit further into the ecosystem to see if this fits. It goes without
+saying that performance (fast I/O) and high availability is paramount in core banking infrastructure. Examples of well
+known companies that develop switch software for banks include ATOS, ACI (Base 24) and BCP (SmartVista). This
+type of software could be found supported to run on "mainframe" or equivalent fault tolerant type platforms
+manufactured by IBM, HP and others.
+💡
+It has been speculated that the (IBM) AIX variant of the FASTCash malware targeted BCP SmartVista Front End
+software (See "Operation Fast Cash - Hidden Cobra‘s AIX PowerPC malware dissected").
+A Google search away reveals documentation and commercial presentations for traditional ATM switch software
+vendors which mostly advertise support for proprietary UNIX-like systems and Microsoft Windows. For example, in
+addition to AIX and Windows, BCP has advertised that it had supported being run on Redhat Linux. More recently,
+companies have emerged on the scene with their switch software running in the cloud (e.g. AWS) and in containers.
+There are switch software vendors that do advertise generic support for Linux, although their names will be omitted
+here to avoid possible confusion/mistaken attribution.
+💡
+At risk of going off track a bit here, let's take a brief look at central switches which are in a different class of their own -
+These switches, run by interbank (ATM) networks and card schemes such as Visa and Mastercard, mandate high
+transaction rates on fault tolerant platforms. In instances this could be custom software written to be run on
+'mainframe' type platforms such as the the IBM Z series.
+Visa state that a maximum capacity of 65,000 transactions per second: That's actually a very high number in respect
+to financial transactions. At least historically, central switch software likely was developed in-house and written in
+assembly for the z/TPF. To give an idea of the scale of this transaction processing capability, for reference, a
+commercial presentation dated 2010 found on the Internet describes a load test simulation with 17,000 ATMs and
+27,000 trade terminals resulting to 650 transactions per second loading a (now dated) HP Integrity Superdome 2
+(Itanium 9350 w/64 cores) running HP-UX at 75% CPU usage.
+On the topic of HP, in the 1970s, a primary competitor to IBM's mainframes was Tandem, a "dominant manufacturer
+of fault-tolerant computer systems for ATM networks, banks, stock exchanges". Tandem's NonStop fault tolerant
+system exist today in a different form, absorbed (or died off) within HP Enterprise. Here is a relatively recent article on
+Tandem and fault tolerant systems which makes for an informative read.
+To summarize this section, at least traditionally, does not really fit into core bank system infrastructure. With the
+increased adoption of opensource, it's certainly likely that other commercially supported Linux distributions could be
+found elsewhere in payment networks on systems that handle card transaction messages. On the topic of
+opensource, jPOS is a well known open source payment switch software - with numerous newsgroup discussions
+revealing developers discussing integration into both ATM and PoS related platforms. Someone has even driver
+available for jPOS which adds support for the proprietary NDC ATM protocol.
+Another theory on the Ubuntu Linux connection is that the malware developer was just using this as a base O/S for
+development purposes and planned on compiling it for a different platform at a later time.
+Part 2 - FASTCash for Linux Analysis
+Attribution
+CISA's report "North Korean Remote Access Tool: FASTCASH for Windows" references a malware sample that
+manipulates ISO8583 transaction messages in the same manner. Both the Windows and this Linux sample:
+Generate a random amount of Turkish Lira to be fraudulently added to the authorization response messages.
+ISO4217 value of 949 representing Turkish Lira is specified in DE54 (Additional amounts).
+DE48 ("Additional data, private) uses the same custom value of 0387T which is likely specific to it's target
+payment processing systems. Think ofDE48 as a custom field - meaning is dependent on what is specified for a
+specific network. The meaning of 0387T might be very specific to a specific software vendor, or it could be a
+localized customization.
+Both samples strip out 14 specific data elements when tampering with the authorization response message.
+Many of the elements are marked "Reserved for private" as per the ISO8583 standard. It is unknown why this
+was done.
+There are some similarities in the relevant code segments on the Windows (switch.dll) and Linux "libMyFc.so"
+variants in how the response message is constructed. The format string for currency format and the additional data
+8/13
+elements match. "Additional Data - Private" could be considered a "free text field" as per the ISO8583 standard, and
+is assumed to be implementation specific.
+The range for the random funds amount generated per fraudulent transaction is the same (12000 to 30000):
+Also similar is the hooking into the recv call of a target process, validating the transaction type (MTI 1xx,2xx) to
+ensure that the transaction was from a magnetic swipe.
+Both samples expect packets with a 2 byte message length, followed by a 5 byte TPDU. Both samples also add a
+constant value of 0x06 in the first byte and 0x00 in the last byte of the of the TPDU. It is unclear why this is done
+without knowledge of the downstream system(s) that will receive the fraudulent response message.
+injected responses have the same header
+linux.fastcash has reduced functionality compared to its Windows and AIX variants. For example hardcoded IP
+checks and incorrect PIN handling is not present.
+In respect to the ISO8583 message response message validation, there is a slight difference: The DE3 (processing
+code) response values that are checked to match a balance enquiry or withdrawal differ in the their integer value
+(although the implementation of how the messages are tampered is the same). This difference may reflect that the
+Linux version runs on switch software that interfaces with a slight deviation in the representation of the processing
+code data element. That said, the subsequent tampering in both the balance enquiry and withdrawal are the same.
+Implementation
+Unlike other prior samples, the Linux variant is mostly written in object orientated C++ and was not stripped,
+maintaining global variables and class names. The purpose of each member function of the MyFc class is self
+evident:
+Exported class member functions
+9/13
+It is likely that GCC 11.3.0 was used to compile the source on Ubuntu Linux 22.04:
+Detect It Easy
+One identified sample was partially packed with UPX version 4.02. It is unlikely that this was used, as UPX is not
+compatible with ELF shared libraries. Notably, not all sections were successfully packed:
+Here the AES IV and key are present in plaintext in the packed sample
+Initialization
+The malware is implemented as a shared library, intended to be injected into a existing running process by utilizing
+ptrace. Code is likely taken from process_injection_example to invoke ptrace which then relies on
+subhook to setup the hook into glibc's recv
+If the address of recv cannot be found, an empty file with the name GetSymbolFailed is written to the current
+working directory.
+The /mnt/hgfs path points to the VMsare hypervisor possibly being used during development.
+/mnt/hgfs VMware uses hgfs file system for mounting volumes between host and VM
+The initial entry point to SoMain is invoked upon loading the shared library, with the address of the function being an
+entry in the .init_array section. Likely with the original source having been decorated with the
+__attribute__(constructor))).
+SoMain attempts to decrypt the configuration file by calling the Initialize constructor of the FcCfg class, and
+then if successful resolves and hooks into glibc's recv function in order to parse incoming packets from the hooked
+processes' network socket(s).
+The configuration file located at /tmp/info.dat contains a list of PANs (Personal Account Numbers) which is
+encrypted with AES128 CBC using the opensource library "Tiny AES in C". The decryption routine uses the key
+W7SLFSG4OPBJNAA8 and initialization vector GXCR7299I9MOWS97.
+10/13
+PAN file encrypted with 128 bit AES - CBC
+Interception of packets
+MyFc::recv maintains a "state" of incoming ISO8583 messages for a transaction which is initialized when the
+target process expects to receive exactly two bytes. This is the TPDU header expected to contain a 16 bit unsigned
+integer corresponding to a ISO8535 message size in bytes.
+The hooked recv routine parses the message size from the first 2 bytes, then calls recvall until that length of data
+has been received, copies it into a buffer then unpacks into an ISO8583 message for parsing. Note the 5 byte offset
+passing in the received buffer to DL_ISO8583_MSG_Unpack. This corresponds to a 5 byte TPDU.
+approximate representation of the injected recv() implementation
+As with other variants, the "Oscar-ISO8583" C library has been used to parse and repack the ISO8583 messages.
+On receiving a valid ISO8583 message, MTI (Message Type Indicator) Message subclass is checked to see the
+origin is from the acquirer with an authorization (x100) or financial (x200) request.
+MTI, PAN, Point of Service
+11/13
+MTI 100 or 200 matched
+The DE22 (Point of Service entry mode) is checked to be a magnetic swipe read. The initial value in the field is
+expected to be three digits in BCD format. It is converted to an integer with stoi then divided by 100, effectively
+retaining the first digit that is then compared to the value of 9 - Magnetic Swipe. By discarding the other digits, the
+"PIN capability" (how the PIN was obtained) is not considered.
+Entry mode containing 9.
+PAN in the message is then matched against the list in the decrypted configuration file. If there is a match, the the
+following fields are verified to be populated:
+Processing code (DE3)
+Transaction amount (DE4)
+System trace audit number (DE11)
+Currency (DE49)
+The PAN, transaction amount and currency is then logged to the file /tmp/trans.dat
+Generating fraudulent responses
+The real magic happens in the appropriately named MyFC::Hack. A random amount set between 12000 and 30000
+(April 2022 TRY/USD exchange rate this would equate to approximately 800USD to 2,000 USD... Due to inflation
+Türkiye, at the time of writing, the value to the USD is less then half this. One has to wonder if the threat actor
+updated the figures in the malware at any stage to accommodate..) The 3rd byte in the MTI is set to 1 which
+represents a message response.
+DE3 (processing code) is checked against two error codes: 51 (Insufficient Funds) or 48 which is "Reserved for ISO
+use", here likely representing a balance check.
+51 - Insufficient Funds
+In the case of 51, insufficient funds, DE38 (approval code) is overwritten with whitespace and DE39 (Action code) set
+to "approve" by the Approve function.
+The fraudulent balance is specified in a string of format AA VV CCC X NNNN... which is set in DE54 (Additional
+amounts).
+According to the standard, the format is:
+AA is the account type
+VV is the type of amount (here 02, meaning available account balance)
+CCC is the currency code (here 949, meaning TRY)
+X is either positive or negative (with C meaning positive, D represents negative)
+12/13
+NNNN.. is the amount (here the random amount multiplied by 100). It is possible that this amount is specified
+in Kuruş.
+48 - Reserved for use (assumed balance check)
+If a processing code of 48 is received instead of 58 (Insufficient funds), the DE38 (Approval code) is populated with
+the random fund amount which effectively is multiplied by 1.3 (the multiplication and division) and then is constrained
+to 6 digits via the modulo operation. Additionally, as with the prior, a very specific string 0387T is set in DE48
+(Additional data, private) as is done in the "insufficient funds" routine. At the time of writing, the meaning of this string
+is undetermined.
+Processing code "48" approximation
+This is likely to occur for MTI response 110 for a balance enquiry.
+After the relevant processing code has been handled, there are additional modifications to remove 14 specific fields:
+Data elements removed when assembling the fraudulent message
+A header is assembled which contains the total length (including the header size of 5 bytes), followed by a hardcoded
+value of 6 which may correspond to the ID field in a TPDU header. The function PlatformSocketSend calls the
+send system call for the fraudulent message to be sent onwards to the acquirer.
+13/13
+Detection and prevention
+Discovery of the Linux variant further emphasizes the need for adequate detection capabilities which are often lacking
+in Linux server environments. The process injection technique employed to intercept the transaction messages
+should be flagged by any commercial EDR or opensource Linux agent with the appropriate configuration to detect
+usage of the ptrace system call. As they say, prevention is better then the cure, and the recommendation are best
+summarized by CISA:
+- Implement chip and PIN requirements for debit cards.
+
+- Require and verify message authentication codes on issuer financial request response messages.
+
+- Perform authorization response cryptogram validation for chip and PIN transactions.
+Indicators of Compromise
+SHA-256 hashes
+FASTCash for Linux
+f34b532117b3431387f11e3d92dc9ff417ec5dcee38a0175d39e323e5fdb1d2c
+7f3d046b2c5d8c008164408a24cac7e820467ff0dd9764e1d6ac4e70623a1071 (UPX)
+FastCash for Windows
+afff4d4deb46a01716a4a3eb7f80da58e027075178b9aa438e12ea24eedea4b0
+
+f43d4e7e2ab1054d46e2a93ce37d03aff3a85e0dff2dd7677f4f7fb9abe1abc8
+5232d942da0a86ff4a7ff29a9affbb5bd531a5393aa5b81b61fe3044c72c1c00
+
+2611f784e3e7f4cf16240a112c74b5bcd1a04067eff722390f5560ae95d86361
+c3904f5e36d7f45d99276c53fed5e4dde849981c2619eaa4dbbac66a38181cbe
+609a5b9c98ec40f93567fbc298d4c3b2f9114808dfbe42eb4939f0c5d1d63d44
+078f284536420db1022475dc650327a6fd46ec0ac068fe07f2e2f925a924db49 (RAR)
+Previously identified / attributed (2018 to 2020)
+129b8825eaf61dcc2321aad7b84632233fa4bbc7e24bdf123b507157353930f0 (Windows)
+10ac312c8dd02e417dd24d53c99525c29d74dcbc84730351ad7a4e0a4b1a0eba (AIX)
+3a5ba44f140821849de2d82d5a137c3bb5a736130dddb86b296d94e6b421594c (AIX)

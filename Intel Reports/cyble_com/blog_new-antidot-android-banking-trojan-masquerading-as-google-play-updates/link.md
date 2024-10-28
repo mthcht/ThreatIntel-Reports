@@ -1,0 +1,1 @@
+[Link to the article](https://cyble.com/blog/new-antidot-android-banking-trojan-masquerading-as-google-play-updates/)

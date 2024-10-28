@@ -1,0 +1,1 @@
+[Link to the article](https://habr.com/ru/companies/f_a_c_c_t/news/792672/)

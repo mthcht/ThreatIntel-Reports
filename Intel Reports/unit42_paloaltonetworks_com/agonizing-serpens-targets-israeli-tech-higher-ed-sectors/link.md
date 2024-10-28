@@ -1,0 +1,1 @@
+[Link to the article](https://unit42.paloaltonetworks.com/agonizing-serpens-targets-israeli-tech-higher-ed-sectors/)

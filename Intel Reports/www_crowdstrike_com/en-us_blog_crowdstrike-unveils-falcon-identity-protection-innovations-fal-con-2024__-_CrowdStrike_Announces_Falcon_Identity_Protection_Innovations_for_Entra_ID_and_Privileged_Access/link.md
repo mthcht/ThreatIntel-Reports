@@ -1,0 +1,1 @@
+[Link to the article](https://www.crowdstrike.com/en-us/blog/crowdstrike-unveils-falcon-identity-protection-innovations-fal-con-2024/ - CrowdStrike Announces Falcon Identity Protection Innovations for Entra ID and Privileged Access)

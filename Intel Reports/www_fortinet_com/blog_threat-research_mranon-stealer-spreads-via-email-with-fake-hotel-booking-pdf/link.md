@@ -1,0 +1,1 @@
+[Link to the article](https://www.fortinet.com/blog/threat-research/mranon-stealer-spreads-via-email-with-fake-hotel-booking-pdf)

@@ -1,0 +1,191 @@
+1/18
+bbs-360-cn.translate.goog
+/thread-14959110-1-1.html
+Spy Tracker: The world's first UEFI motherboard BIOS Trojan
+analysis
+This post was last edited by Airplane at 2017-5-3 17:06
+ 
+▌ 0x00 Introduction
+
+Not long ago, Mr. Li, a netizen in Guangzhou, asked the 360 ​​Security Center for help, and reported
+that his computer system automatically created an unfamiliar account named aaaabbbb, and the
+antivirus software repeatedly reported the virus, and even reinstalling the system still could not
+remove the virus.
+After the preliminary judgment of 360 engineers' remote assistance, Mr. Li's computer motherboard
+BIOS is likely to be infected with malicious code. To this end, we asked Mr. Li to mail the
+motherboard to the Beijing headquarters of 360 Company for analysis, and found that this is a new
+type of BIOS BOOTKIT that has never been seen before. Since it will set up a spy account in the
+system for remote control, we named it Spy Shadow Trojan.
+Compared with the previous BIOS malicious code, Spy Shadow Trojan has stronger compatibility
+and higher technical level:
+1. The world's first real attack to infect UEFI motherboards. Spy Shadow Trojan supports a lot of
+BIOS versions, and it is the only known Trojan that can infect UEFI motherboards. The Spy
+Shadow Trojan will infect the BIOS boot module in UEFI compatibility mode, and UEFI+GPT mode
+will not be affected. The BMW BIOS Trojan (named Mebromi by foreign manufacturers) that
+appeared in 2011 only supports the infection of a specific Award BIOS;
+2/18
+2. Strong system compatibility, supports all mainstream 32-bit and 64-bit Windows platforms,
+including the latest 64-bit Win10.
+ 
+Figure: 64-bit Win10 infected spyware Trojan triggers Microsoft PATCH GUARD, causing repeated
+blue screen [/i]
+It is understood that Mr. Li purchased this second-hand motherboard from an online store.
+According to the phenomenon of Internet search for spyware Trojans, Mr. Li's experience is not an
+exception. It is speculated from the existing samples that the malicious code may be flashed into
+the motherboard BIOS by the programmer, and sold and circulated through e-commerce channels.
+In view of the complexity and particularity of the motherboard structure, at this stage, only by re-
+flashing the BIOS can completely remove the Spy Shadow Trojan. The following is a detailed
+analysis of the technical principles of the Spy Shadow Trojan.
+▌ 0x01 BIOS and UEFI
+BIOS is an acronym for English \Basic Input Output System\, and the Chinese name after literal
+translation is \Basic Input Output System\. In fact, it is a set of programs that are solidified on a
+ROM chip on the motherboard of the computer. It saves the most important basic input and output
+programs of the computer, system setting information, self-checking programs after booting, and
+system self-starting programs. Executes prior to the operating system and is responsible for
+loading and executing the MBR code. Its main function is to provide the computer with the lowest-
+level, most direct hardware settings and control.
+3/18
+UEFI (Unified Extensible Firmware Interface) stands for "Unified Extensible Firmware Interface". It
+is a new motherboard boot item. It is being regarded as the successor of BIOS with a history of
+more than 20 years. Since Win8, it has been promoted by Microsoft. push. UEFI claims to be able
+to resist Bootkit attacks by protecting the pre-boot or pre-boot process, and has higher security
+than BIOS.
+▌ 0x02 Technical Analysis
+2.1 CSM module analysis
+The Trojan is located in the BIOS file
+ 
+The motherboard is B85M-G-ASUS-0904 from ASUS. Different from the normal BIOS, the
+CSMCORE module on the Ma motherboard is larger than the normal one. Should only work in
+LEGACY MODE, booting via UEFI should not work. (CSM (Compatibility support Module) means
+compatibility module, this option is specially set for compatibility with devices that can only work in
+legacy mode and operating systems that do not support or fully support UEFI.)
+ 
+The Trojan adds its own functions to the BIOS module and hooks the normal functions of the
+system to execute.
+The normal function is as follows:
+4/18
+ 
+The Trojan hooked this function to:
+ 
+Change the first instruction of the original function to CALL to get an execution opportunity:
+5/18
+ 
+After that, it will judge whether the content of the R9 register is 3, which may be a sign of the
+successful initialization of the BIOS, and then search for the BIOS internal feature code CD 19 B8
+00 80 CB 00
+It should be the code executed by calling interrupt INT19H to load the first sector MBR of the hard
+disk after the internal initialization of the BIOS. Then modify the data at 0X413, reserve 40KB
+space to store the Trojan code, and copy the code in the BIOS to the reserved space. And after the
+internal initialization of the BIOS found earlier, call the interrupt INT19H to load the code executed
+by the MBR of the first sector of the hard disk, and call the code of the Trojan horse itself instead.
+6/18
+ 
+2.2 INT15 hook analysis
+Then, return to continue execution. When the BIOS is initialized and ready to load the MBR code
+of the disk, the code of the Trojan will be executed. At this time, the Trojan will hook the INT15H
+interrupt, and then resume the execution of the original code, so that the hook is completed. The
+follow-up is similar to the MBR Trojan of the Dark Cloud series. It hooks the memory step by step
+by hooking INT15H and loads itself.
+ 
+7/18
+In this way, when the system MBR is executed, the Trojan has already hung the HOOK of INT15h
+in the memory. After that, it will HOOK bootmgr!Archx86TransferTo64BitApplicationAsm to get the
+next execution opportunity, and then HOOK winload!OslArchTransferToKernel, and then HOOK
+when the kernel is loaded. ZwCreateSection , thus cutting into the kernel to run, and then setting
+the thread callback.
+2.3 Thread callback hook
+Next, the thread callback PsSetCreateThreadNotifyRoutine and the process callback
+PsSetCreateProcessNotifyRoutine will be set. In the process callback, only \Process %d Create
+%d\\n\ is printed, and the thread callback is the key content.
+ 
+In the thread callback, the Trojan determines whether it is the csrss.exe process. If it is not, it skips
+it. If it is, it creates a system thread and inserts a worker thread to erase its own thread callback.
+8/18
+ 
+2.4 Kernel thread network download code
+In the created system thread, it will wait for 1 minute to wait for the network to be ready.
+ 
+9/18
+Then it will try to use two methods to download malicious code to the kernel for execution, firstly try
+UDP DownLoadShellCodeByUDP, the function is to resolve [url=]www.XXXX.top [/url] [/i] domain
+name. Using 0xDEDE43D0 0x8080808, the two sets of DNS domain names are converted, namely
+(222.222.67.208 8.8.8.8) and [url=]www.XXXXtop [/url] [/i] The communication port is 0x801F,
+which is port 8064.
+First use 0x3500, namely port 53, to request the domain name service, and get the address
+corresponding to the [url=]www.XXXX.top[/url] [/i] domain name.
+ 
+First request the server, ask the Shellcode length fragment size, then process the fragments one
+by one, and finally splicing them together.
+The send packet is 0x10 in length.
+ 
+Accept packets as:
+10/18
+ 
+The total length is 0x28, the header length is 0x10, the data part length is 0x18, and the checksum
+is 0xd845672a.
+Shellcode length is 0x1a32d, there are 0xd2 shards in total, and each shard is 0x200 in size.
+When using UDP to send and receive data, the data part will be checked.
+ 
+If the verification is successful, they will be spliced ​​together, otherwise discarded, and then apply
+for non-paged memory.
+11/18
+Copy and execute the previous memory code, passing in the NT base address as a parameter.
+ 
+2.5 Decrypt malicious code and deliver APC
+Only the header of the downloaded code can be executed, and the latter part is encrypted data,
+which needs to be decrypted and executed. The calling function is RtlDecompressBuffer, the size
+after decryption is 150728, and the decryption method is OMPRESSION_FORMAT_LZNT1.
+ 
+Then the populate import table is called:
+12/18
+ 
+Then call PsCreateSystemThread to create the injection thread.
+In thread:
+ 
+The first to find system process injection is spoolsv.exe.
+13/18
+ 
+Then kill the soft process:
+ 
+Apply for memory copy injection:
+14/18
+ 
+Insert APC injection:
+ 
+2.6 Execute user-level malicious download code
+After injection, it is executed from the application layer. The code contains a DLL file, and the
+execution function is to apply for the memory base address.
+15/18
+ 
+Then get the base address of the Kernel32 module, follow LoadLibraryA GetProcAddress
+VirtualAlloc, fill the PE file import table in the memory, and execute the DllMain function after filling.
+ 
+A thread will be created in DllMain, the download will be executed and run, and related services
+will be suspended or deleted according to the control code.
+thread function:
+ 
+16/18
+The privilege escalation operation decrypts the download address data. The decrypted content is:
+ 
+Pause or delete the service according to the control code:
+ 
+Then run in three ways: (DLL loading, parent process injection, directly creating EXE to run)
+ 
+2.7 Create malicious accounts
+17/18
+Downloaded here is an EXE, the main function is to create an administrator account.
+ 
+screenshot:
+ 
+▌ 0x03 Conclusion
+Shadow Trojans can parasitize in various versions of BIOS including UEFI motherboards, infect
+the BIOS boot module in a very precise and targeted manner, and implement remote control by
+killing the entire Windows platform, showing a high-risk, high-complexity and high-tech " Three
+high" features.
+In order to prevent spyware Trojans, 360 Security Center recommends that netizens : try to
+choose official channels to buy computer accessories, and enable real-time protection of security
+software. If you encounter suspicious situations such as slow computer startup and login interface,
+unfamiliar accounts in the system, and repeated virus reporting by security software, it is best to
+seek help from security vendors to prevent Trojan horse viruses from causing damage to personal
+data and property
+18/18

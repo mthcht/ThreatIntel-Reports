@@ -1,0 +1,1 @@
+[Link to the article](https://arcticwolf.com/resources/blog/lost-in-the-fog-a-new-ransomware-threat/)

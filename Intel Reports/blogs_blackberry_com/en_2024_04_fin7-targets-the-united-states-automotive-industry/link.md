@@ -1,0 +1,1 @@
+[Link to the article](https://blogs.blackberry.com/en/2024/04/fin7-targets-the-united-states-automotive-industry)

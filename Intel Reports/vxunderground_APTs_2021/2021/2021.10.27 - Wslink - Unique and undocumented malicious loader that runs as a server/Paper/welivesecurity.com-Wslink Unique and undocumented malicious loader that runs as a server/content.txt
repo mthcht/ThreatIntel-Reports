@@ -1,0 +1,141 @@
+1/8
+October 27, 2021
+Wslink: Unique and undocumented malicious loader that
+runs as a server
+welivesecurity.com/2021/10/27/wslink-unique-undocumented-malicious-loader-runs-server
+ESET researchers have discovered a unique and previously undescribed loader for Windows
+binaries that, unlike other such loaders, runs as a server and executes received modules in
+memory. We have named this new malware Wslink after one of its DLLs.
+We have seen only a few hits in our telemetry in the past two years, with detections in
+Central Europe, North America, and the Middle East. The initial compromise vector is not
+known; most of the samples are packed with MPRESS and some parts of the code are
+virtualized. Unfortunately, so far we have been unable to obtain any of the modules it is
+supposed to receive. There are no code, functionality or operational similarities that suggest
+this is likely to be a tool from a known threat actor group.
+The following sections contain analysis of the loader and our own implementation of its
+client, which was initially made to experiment with detection methods. This client’s source
+code might be of interest to beginners in malware analysis – it shows how one can reuse and
+interact with existing functions of previously analyzed malware. The very analysis could also
+serve as an informative resource documenting this threat for blue teamers.
+Technical analysis
+Wslink runs as a service and listens on all network interfaces on the port specified in the
+ServicePort registry value of the service’s Parameters key. The preceding component that
+registers the Wslink service is not known. Figure 1 depicts the code accepting incoming
+connections to that port.
+2/8
+Figure 1. Hex-Rays decompilation of the loop accepting incoming connections
+Accepting a connection is followed by an RSA handshake with a hardcoded 2048-bit public
+key to securely exchange both the key and IV to be used for 256-bit AES in CBC mode (see
+Figure 2). The encrypted module is subsequently received with a unique identifier –
+signature – and an additional key for its decryption.
+Interestingly, the most recently received encrypted module with its signature is stored
+globally, making it available to all clients. One can save traffic this way – transmit only the
+key if the signature of the module to be loaded matches the previous one.
+3/8
+Figure 2. Hex-Rays decompilation of receiving the module and its signature
+As seen in Figure 3, the decrypted module, which is a regular PE file, is loaded into memory
+using the MemoryModule library and its first export is finally executed. The functions for
+communication, socket, key and IV are passed in a parameter to the export, enabling the
+module to exchange messages over the already established connection.
+4/8
+Figure 3. Hex-Rays decompilation of code executing the received module in memory
+Implementation of the client
+Our own implementation of a Wslink client, described below, simply establishes a
+connection with a modified Wslink server and sends a module that is then decrypted and
+executed. As our client cannot know the private key matching the public key in any given
+Wslink server instance, we produced our own key pair and modified the server executable
+with the public key from that pair and used the private key in our Wslink client
+implementation.
+This client enabled us to reproduce Wslink’s communication and search for unique
+patterns; it additionally confirmed our findings, because we could mimic its behavior.
+Initially some functions for sending/receiving messages are obtained from the original
+sample (see Figure 4) – we can use them right away and do not have to reimplement them
+later.
+Figure 4. The code for loading functions from a Wslink’s sample
+5/8
+Subsequently, our client reads the private RSA key to be used from a file and a connection to
+the specified IP and port is established. It is expected that an instance of Wslink already
+listens on the supplied address and port. Naturally, its embedded public key must also be
+replaced with one whose private key is known.
+Our client and the Wslink server continue by performing the handshake that exchanges the
+key and IV to be used for AES encryption. This consists of three steps, as seen in Figure 5:
+sending a client hello, receiving the symmetric key with IV, and sending them back to verify
+successful decryption. From reversing the Wslink binary we learned that the only constraint
+of the hello message, apart from size 240 bytes, is that the second byte must be zero, so we
+just set it to all zeroes.
+Figure 5. Our client’s code for the RSA handshake
+The final part is sending the module. As one can see in Figure 6, it consists of a few simple
+steps:
+receiving the signature of the previously loaded module – we decided not to do
+anything with it in our implementation, as it was not important for us
+sending a hardcoded signature of the module
+reading the module from a file, encrypting it (see Figure 7) and sending it
+sending the encryption key of the module
+6/8
+Figure 6. Our client’s code for sending the module
+Figure 7. Our client’s code for loading and encrypting the module
+The full source code for our client is available in our WslinkClient GitHub repository. Note
+that the code still requires a significant amount of work to be usable for malicious purposes
+and creating another loader from scratch would be easier.
+7/8
+Conclusion
+Wslink is a simple yet remarkable loader that, unlike those we usually see, runs as a server
+and executes received modules in memory.
+Interestingly, the modules reuse the loader’s functions for communication, keys and
+sockets; hence they do not have to initiate new outbound connections. Wslink additionally
+features a well-developed cryptographic protocol to protect the exchanged data.
+IoCs
+Samples
+SHA-1
+ESET detection name
+01257C3669179F754489F92947FBE0B57AEAE573
+Win64/TrojanDownloader.Wslink
+E6F36C66729A151F4F60F54012F242736BA24862
+39C4DE564352D7B6390BFD50B28AA9461C93FB32
+MITRE ATT&CK techniques
+This table was built using version 9 of the ATT&CK framework.
+Tactic
+ID
+Name
+Description
+Enterprise
+T1587.001
+Develop Capabilities:
+Malware
+Wslink is a custom PE loader.
+Execution
+T1129
+Shared Modules
+Wslink loads and executes
+DLLs in memory.
+T1569.002
+System Services:
+Service Execution
+Wslink runs as a service.
+Obfuscated
+Files or
+Information
+T1027.002
+Obfuscated Files or
+Information: Software
+Packing
+Wslink is packed with
+MPRESS and its code might
+be virtualized.
+Command and
+Control
+T1573.001
+Encrypted Channel:
+Symmetric
+Cryptography
+Wslink encrypts traffic with
+AES.
+T1573.002
+Encrypted Channel:
+Asymmetric
+Cryptography
+Wslink exchanges a symmetric
+key with RSA.
+8/8
+ 
+ 

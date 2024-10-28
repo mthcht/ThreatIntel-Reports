@@ -1,0 +1,1 @@
+[Link to the article](https://www.trendmicro.com/en_us/research/23/i/revisiting-16shop-phishing-kit-trend-interpol-partnership.html)
