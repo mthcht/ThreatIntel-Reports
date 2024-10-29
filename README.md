@@ -8,4 +8,4 @@ A repository of extracted content from thousands of threat intelligence reports,
 
  ![17301644842372447845239574900293](https://github.com/user-attachments/assets/9aedcd91-ec03-4df6-b167-eab53ad0e153)
 
-  - **Search by Keyword in CLI**: clone the repo and execute `python search_keyword.py`  - the script will prompt you to enter one keyword or multiple keywords separated by commas.
+  - **Search by Keyword in CLI**: clone the repo and execute `python search_keyword.py`  - the script will prompt you to enter one or multiple keywords separated by commas and will save the results in a JSON file that can be integrated into the site if desired (to be searchable on the UI)
