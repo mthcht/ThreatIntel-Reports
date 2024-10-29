@@ -436,6 +436,7 @@ def scrape_mcafee_rss(feed_url, file, retries=3, delay=5):
 
 file_name = "latest_reports_links.txt"
 imported_links_file = "..\\imported\\unique_links.txt"
+manually_added_links = "manually_added_to_import.txt"
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
@@ -508,14 +509,19 @@ with open(file_name, 'w') as file:
 try:
     with open(imported_links_file, 'r') as imported_file:
         imported_links = set(imported_file.read().splitlines())
-
+    with open(manually_added_links, 'r') as imported_file:
+        manually_added_links = set(imported_file.read().splitlines())
     with open(file_name, 'a+') as file:
         file.seek(0)
         existing_links = set(file.read().splitlines())
-        new_links = imported_links - existing_links
-        
-        for link in new_links:
+        new_links_imported = imported_links - existing_links
+        new_links_manually_added = manually_added_links - existing_links
+
+        for link in new_links_imported:
             print(f"Appending imported link: {link}")
+            file.write(link + '\n')
+        for link in new_links_manually_added:
+            print(f"Appending manually added link: {link}")
             file.write(link + '\n')
 except FileNotFoundError:
     print(f"The file {imported_links_file} was not found.")
