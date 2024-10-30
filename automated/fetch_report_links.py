@@ -54,7 +54,8 @@ rss_urls = [
     "https://feeds.english.ncsc.nl/news.rss",
     "https://cert.lv/en/feed/rss/all",
     "https://blogs.jpcert.or.jp/en/atom.xml",
-    "https://www.cirt.gov.bd/feed/"
+    "https://www.cirt.gov.bd/feed/",
+    "https://www.microsoft.com/en-us/security/blog/feed/"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
