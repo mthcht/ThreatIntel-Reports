@@ -1,4 +1,5 @@
-# Optimized Python script to use ripgrep (rg) for keyword search in text files with --update functionality
+# Optimized Python script to use ripgrep (rg) https://github.com/BurntSushi/ripgrep/releases for keyword search in text files with --update functionality
+# put the ripgrep binary in the same directory
 import os
 import json
 import sys
