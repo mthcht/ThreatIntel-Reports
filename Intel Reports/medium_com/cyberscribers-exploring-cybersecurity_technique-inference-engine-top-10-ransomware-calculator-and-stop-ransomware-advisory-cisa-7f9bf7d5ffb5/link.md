@@ -1,0 +1,1 @@
+[Link to the article](https://medium.com/cyberscribers-exploring-cybersecurity/technique-inference-engine-top-10-ransomware-calculator-and-stop-ransomware-advisory-cisa-7f9bf7d5ffb5?source=rss-3d60ce83d2f7------2)

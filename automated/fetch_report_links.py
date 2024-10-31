@@ -56,7 +56,8 @@ rss_urls = [
     "https://blogs.jpcert.or.jp/en/atom.xml",
     "https://www.cirt.gov.bd/feed/",
     "https://www.microsoft.com/en-us/security/blog/feed/",
-    "https://www.infostealers.com/info-stealers-reports/feed/"
+    "https://www.infostealers.com/info-stealers-reports/feed/",
+    "https://medium.com/feed/@simone.kraus"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -64,6 +65,7 @@ rss_urls = [
 # Non-RSS blog URLs
 non_rss_urls = [
     "https://www.proofpoint.com/us/blog/threat-insight#",
+    "https://www.reversinglabs.com/blog/tag/threat-research",
     "https://www.splunk.com/en_us/blog/author/secmrkt-research.html",
     "https://www.jpcert.or.jp/english/update.html",
     "https://www.forcepoint.com/blog/x-labs",
@@ -74,12 +76,28 @@ non_rss_urls = [
     #"https://www.security.com/threat-intelligence"
     #"https://www.orangecyberdefense.com/global/blog?tx_solr%5Bfilter%5D%5B0%5D=tags%3AIntelligence-led+Security"
     #"https://blogs.blackberry.com/en/home"
-    #"https://medium.com/@simone.kraus",
     #todo...
     
 ]
 
 # Scraping Functions
+
+def scrape_reversinglabs_blog(blog_url, file):
+    print(f"Scraping ReversingLabs Threat Research blog: {blog_url}")
+    try:
+        response = requests.get(blog_url, headers=headers, timeout=10)
+        response.raise_for_status()
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Locate blog article links
+        for article in soup.select('div.blog__listing-item article.blog__item h3 a'):
+            href = article['href']
+            full_url = href if href.startswith("http") else f"https://www.reversinglabs.com{href}"
+            print(f"Found link: {full_url}")
+            file.write(full_url + '\n')
+    except requests.RequestException as e:
+        print(f"Failed to scrape {blog_url}: {e}")
 
 def scrape_akamai_rss(feed_url, file):
     print(f"Parsing Akamai RSS feed: {feed_url}")
@@ -502,6 +520,8 @@ with open(file_name, 'w') as file:
         elif "threatlabz.zscaler.com/blogs" in blog_url:
             # missing research papers - check later
             scrape_zscaler_blog_graphql("https://threatlabz.zscaler.com/api/graphql/", file)
+        elif "reversinglabs.com/blog/tag/threat-research" in blog_url:
+            scrape_reversinglabs_blog(blog_url, file)
         #elif "" in blog_url:
         #    scrape_blackberry_blog("https://blogs.blackberry.com/en.model.json", file)
         #elif "www.deepinstinct.com/blog" in blog_url:
