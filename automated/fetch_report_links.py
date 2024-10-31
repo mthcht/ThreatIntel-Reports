@@ -445,7 +445,7 @@ def scrape_mcafee_rss(feed_url, file, retries=3, delay=5):
                     print(f"Found McAfee entry: {entry.link}")
                     file.write(entry.link + '\n')
             return  # Exit after a successful parse
-        except (requests.RequestException, feedparser.bozo_exception) as e:
+        except requests.RequestException as e:
             print(f"Error parsing McAfee feed on attempt {attempt + 1}: {e}")
             if attempt < retries - 1:
                 time.sleep(delay)  # Wait before retrying
