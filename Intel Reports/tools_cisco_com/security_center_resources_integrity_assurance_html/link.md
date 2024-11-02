@@ -1,1 +1,1 @@
-[Link to the article](https://tools.cisco.com/security/center/resources/integrity_assurance.html#38)
+[Link to the article](https://tools.cisco.com/security/center/resources/integrity_assurance.html#34)
