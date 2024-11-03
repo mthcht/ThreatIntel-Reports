@@ -1,0 +1,1 @@
+[Link to the article](https://blog.eclecticiq.com/polish-healthcare-industry-targeted-by-vidar-infostealer-likely-linked-to-djvu-ransomware?hsLang=en)

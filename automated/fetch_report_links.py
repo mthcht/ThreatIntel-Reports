@@ -57,7 +57,9 @@ rss_urls = [
     "https://www.cirt.gov.bd/feed/",
     "https://www.microsoft.com/en-us/security/blog/feed/",
     "https://www.infostealers.com/info-stealers-reports/feed/",
-    "https://medium.com/feed/@simone.kraus"
+    "https://medium.com/feed/@simone.kraus",
+    "https://googleprojectzero.blogspot.com/feeds/posts/default?alt=rss",
+    "https://www.securityweek.com/feed/",
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -71,7 +73,8 @@ non_rss_urls = [
     "https://www.forcepoint.com/blog/x-labs",
     "https://www.crowdstrike.com/en-us/blog/category.counter-adversary-operations/",
     "https://threatlabz.zscaler.com/blogs",
-    "https://www.deepinstinct.com/blog"
+    "https://www.deepinstinct.com/blog",
+    "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview"
     #"https://www.nccgroup.com/us/research-blog/?resource=18345&category=18146#hub"
     #"https://www.security.com/threat-intelligence"
     #"https://www.orangecyberdefense.com/global/blog?tx_solr%5Bfilter%5D%5B0%5D=tags%3AIntelligence-led+Security"
@@ -452,6 +455,45 @@ def scrape_mcafee_rss(feed_url, file, retries=3, delay=5):
             else:
                 print(f"Failed to fetch the McAfee feed after {retries} attempts.")
 
+def scrape_eclecticiq_blog(url,file):
+    """
+    Scrapes the EclecticIQ blog page for articles under the "Intelligence Research" section.
+    Extracts the publication date, title, and URL of each article.
+    
+    :param file: The file object where links will be written
+    :param url: The URL of the EclecticIQ blog page
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36'
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Raise an error if the request fails
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        articles = soup.find_all('div', class_='relative flex flex-col items-start')
+        for article in articles:
+            date = article.find('div', class_='mt-1 font-bold text-white/50')
+            title = article.find('h3', class_='faux-h6 text-xl leading-tight')
+            link = article.find('a', href=True)
+            
+            if date and title and link:
+                date_text = date.text.strip()
+                title_text = title.text.strip()
+                link_url = link['href'].strip()
+                
+                # Ensure full URL format
+                if not link_url.startswith('http'):
+                    link_url = 'https://blog.eclecticiq.com' + link_url
+
+                print(f"Found article: {title_text} ({date_text}) - {link_url}")
+                file.write(f"{link_url}\n")
+
+    except requests.RequestException as e:
+        print(f"Error scraping EclecticIQ blog: {e}")
+
+
 # Main Script
 
 file_name = "latest_reports_links.txt"
@@ -522,6 +564,8 @@ with open(file_name, 'w') as file:
             scrape_zscaler_blog_graphql("https://threatlabz.zscaler.com/api/graphql/", file)
         elif "reversinglabs.com/blog/tag/threat-research" in blog_url:
             scrape_reversinglabs_blog(blog_url, file)
+        elif "www-eclecticiq-com" in blog_url:
+            scrape_eclecticiq_blog(blog_url, file)
         #elif "" in blog_url:
         #    scrape_blackberry_blog("https://blogs.blackberry.com/en.model.json", file)
         #elif "www.deepinstinct.com/blog" in blog_url:
