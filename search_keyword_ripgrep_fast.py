@@ -106,8 +106,14 @@ def search_multiple_keywords(keywords, update_mode=False):
 
 def main():
     if '--update' in sys.argv:
-        # Update mode: use each .json filename as a keyword to re-search and overwrite files
-        keywords = [os.path.splitext(filename)[0] for filename in os.listdir(search_results_dir) if filename.endswith('.json')]
+        # Update mode: use keywords from monitor_keywords_list.txt to re-search and overwrite files
+        try:
+            with open('monitor_keywords_list.txt', 'r', encoding='utf-8') as file:
+                keywords = file.read().strip().split(',')
+                keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+        except FileNotFoundError:
+            print("monitor_keywords_list.txt not found.")
+            return
         search_multiple_keywords(keywords, update_mode=True)
     else:
         # Normal mode: search for specified keywords

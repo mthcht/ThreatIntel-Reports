@@ -60,6 +60,7 @@ rss_urls = [
     "https://medium.com/feed/@simone.kraus",
     "https://googleprojectzero.blogspot.com/feeds/posts/default?alt=rss",
     "https://www.securityweek.com/feed/",
+    "https://www.genians.co.kr/blog/threat_intelligence/rss.xml"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -74,7 +75,8 @@ non_rss_urls = [
     "https://www.crowdstrike.com/en-us/blog/category.counter-adversary-operations/",
     "https://threatlabz.zscaler.com/blogs",
     "https://www.deepinstinct.com/blog",
-    "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview"
+    "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview",
+    #"https://claroty.com/team82/research/"
     #"https://www.nccgroup.com/us/research-blog/?resource=18345&category=18146#hub"
     #"https://www.security.com/threat-intelligence"
     #"https://www.orangecyberdefense.com/global/blog?tx_solr%5Bfilter%5D%5B0%5D=tags%3AIntelligence-led+Security"
