@@ -60,7 +60,9 @@ rss_urls = [
     "https://medium.com/feed/@simone.kraus",
     "https://googleprojectzero.blogspot.com/feeds/posts/default?alt=rss",
     "https://www.securityweek.com/feed/",
-    "https://www.genians.co.kr/blog/threat_intelligence/rss.xml"
+    "https://www.genians.co.kr/blog/threat_intelligence/rss.xml",
+    "https://medium.com/feed/@gi7w0rm",
+    "https://www.intrinsec.com/feed/"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
