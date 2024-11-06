@@ -1,0 +1,1 @@
+[Link to the article](https://www.huntress.com/blog/threat-intel-accelerates-detection-and-response)

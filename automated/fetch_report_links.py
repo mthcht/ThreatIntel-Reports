@@ -62,7 +62,8 @@ rss_urls = [
     "https://www.securityweek.com/feed/",
     "https://www.genians.co.kr/blog/threat_intelligence/rss.xml",
     "https://medium.com/feed/@gi7w0rm",
-    "https://www.intrinsec.com/feed/"
+    "https://www.intrinsec.com/feed/",
+    "https://www.huntress.com/blog/rss.xml"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -78,6 +79,7 @@ non_rss_urls = [
     "https://threatlabz.zscaler.com/blogs",
     "https://www.deepinstinct.com/blog",
     "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview",
+    #https://hunt.io/blog
     #"https://claroty.com/team82/research/"
     #"https://www.nccgroup.com/us/research-blog/?resource=18345&category=18146#hub"
     #"https://www.security.com/threat-intelligence"
