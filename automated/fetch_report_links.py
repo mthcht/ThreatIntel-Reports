@@ -63,7 +63,10 @@ rss_urls = [
     "https://www.genians.co.kr/blog/threat_intelligence/rss.xml",
     "https://medium.com/feed/@gi7w0rm",
     "https://www.intrinsec.com/feed/",
-    "https://www.huntress.com/blog/rss.xml"
+    "https://www.huntress.com/blog/rss.xml",
+    "https://isc.sans.edu/rssfeed.xml",
+    "https://medium.com/feed/@bi-zone",
+    "https://www.ic3.gov/CSA/rss"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -78,13 +81,15 @@ non_rss_urls = [
     "https://www.crowdstrike.com/en-us/blog/category.counter-adversary-operations/",
     "https://threatlabz.zscaler.com/blogs",
     "https://www.deepinstinct.com/blog",
-    "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview",
+    "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview"
     #https://hunt.io/blog
     #"https://claroty.com/team82/research/"
     #"https://www.nccgroup.com/us/research-blog/?resource=18345&category=18146#hub"
     #"https://www.security.com/threat-intelligence"
     #"https://www.orangecyberdefense.com/global/blog?tx_solr%5Bfilter%5D%5B0%5D=tags%3AIntelligence-led+Security"
     #"https://blogs.blackberry.com/en/home"
+    #"https://www.seqrite.com/blog/category/technical/"
+    #"https://blog.morphisec.com/topic/threat-research"
     #todo...
     
 ]
