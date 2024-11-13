@@ -65,9 +65,10 @@ def search_keyword_with_ripgrep(keyword):
 
     return results
 
-
 def log_results(keyword, results, overwrite=False):
-    keyword_file_path = os.path.join(search_results_dir, f"{keyword}.json")
+    # Replace any backslash in the keyword with "backslash_"
+    sanitized_keyword = keyword.replace("\\", "backslash_")
+    keyword_file_path = os.path.join(search_results_dir, f"{sanitized_keyword}.json")
 
     if not overwrite:
         try:

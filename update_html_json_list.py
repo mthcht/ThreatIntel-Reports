@@ -36,11 +36,13 @@ def update_html_file():
                     for entry in data:
                         keyword = entry.get('keyword')
                         if keyword:
-                            if keyword in keyword_to_file_map:
-                                if file not in keyword_to_file_map[keyword]:
-                                    keyword_to_file_map[keyword].append(file)
+                            # Escape any backslashes in the keyword
+                            escaped_keyword = keyword.replace("\\", "\\\\")
+                            if escaped_keyword in keyword_to_file_map:
+                                if file not in keyword_to_file_map[escaped_keyword]:
+                                    keyword_to_file_map[escaped_keyword].append(file)
                             else:
-                                keyword_to_file_map[keyword] = [file]
+                                keyword_to_file_map[escaped_keyword] = [file]
             except Exception as e:
                 print(f"Error reading {file}: {e}")
 
