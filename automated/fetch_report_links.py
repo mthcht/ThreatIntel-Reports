@@ -66,7 +66,9 @@ rss_urls = [
     "https://www.huntress.com/blog/rss.xml",
     "https://isc.sans.edu/rssfeed.xml",
     "https://medium.com/feed/@bi-zone",
-    "https://www.ic3.gov/CSA/rss"
+    "https://www.ic3.gov/CSA/rss",
+    "https://any.run/cybersecurity-blog/category/malware-analysis/feed/",
+    "https://fieldeffect.com/blog/rss.xml"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
