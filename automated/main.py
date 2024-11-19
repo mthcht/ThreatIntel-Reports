@@ -21,14 +21,14 @@ def run_script(command, description, max_wait_time):
         # Start the process
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
 
-        # Capture and log the output line by line
-        for line in process.stdout:
-            log(line.strip())
-        for line in process.stderr:
-            log(line.strip())
+        # Wait for the process to complete with a timeout and capture output
+        stdout, stderr = process.communicate(timeout=max_wait_time)
 
-        # Wait for the process to complete with a timeout
-        process.wait(timeout=max_wait_time)
+        # Log both stdout and stderr output
+        if stdout:
+            log(stdout.strip())
+        if stderr:
+            log(stderr.strip())
 
         # Check for errors based on exit code
         if process.returncode != 0:
@@ -51,11 +51,11 @@ def main():
     max_wait_time = 2 * 60 * 60  # 2 hours in seconds
 
     # Execute each script and check for successful completion
-    if not run_script(['python', 'fetch_report_links.py'], "fetch_report_links.py", max_wait_time):
+    if not run_script('python fetch_report_links.py', "fetch_report_links.py", max_wait_time):
         log("Script sequence terminated due to an error.")
         return
 
-    if not run_script(['python', 'download_reports.py'], "download_reports.py", max_wait_time):
+    if not run_script('python download_reports.py', "download_reports.py", max_wait_time):
         log("Script sequence terminated due to an error.")
         return
 
@@ -63,7 +63,7 @@ def main():
     log("Changing to the previous directory...")
     os.chdir('..')
 
-    if not run_script(['python', 'search_keyword_ripgrep_fast.py', '--update'], "search_keyword_ripgrep_fast.py with --update flag", max_wait_time):
+    if not run_script('python search_keyword_ripgrep_fast.py --update', "search_keyword_ripgrep_fast.py with --update flag", max_wait_time):
         log("Script sequence terminated due to an error.")
         return
 
