@@ -1,0 +1,1 @@
+[Link to the article](https://www.reversinglabs.com/blog/differential-analysis-raises-red-flags-over-lottiefiles/lottie-player)
