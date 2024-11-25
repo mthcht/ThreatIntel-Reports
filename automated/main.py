@@ -12,16 +12,29 @@ def setup_logging():
     )
 
 def log(message):
-    logging.info(message)
-    print(message)
+    try:
+        logging.info(message)
+        print(message)
+    except UnicodeEncodeError:
+        # Handle cases where logging or printing encounters non-UTF-8 characters
+        safe_message = message.encode('utf-8', errors='replace').decode('utf-8')
+        logging.info(safe_message)
+        print(safe_message)
 
 def run_script(command, description, max_wait_time):
     log(f"Executing {description}...")
     try:
-        # Start the process
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, shell=True)
+        # Start the process with explicit UTF-8 encoding
+        process = subprocess.Popen(
+            command, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE, 
+            text=True, 
+            shell=True, 
+            encoding='utf-8'  # Ensure output uses UTF-8
+        )
 
-        # Wait for the process to complete with a timeout and capture output
+        # Wait for the process to complete with a timeout
         stdout, stderr = process.communicate(timeout=max_wait_time)
 
         # Log both stdout and stderr output
@@ -48,7 +61,7 @@ def main():
     log("Starting script sequence...")
 
     # Define a maximum wait time (timeout) for each script (e.g., 2 hours)
-    max_wait_time = 2 * 60 * 60  # 2 hours in seconds
+    max_wait_time = 3 * 60 * 60  # 3 hours in seconds
 
     # Execute each script and check for successful completion
     if not run_script('python fetch_report_links.py', "fetch_report_links.py", max_wait_time):
@@ -62,6 +75,7 @@ def main():
     # Go back to the previous directory
     log("Changing to the previous directory...")
     os.chdir('..')
+    log(f"Current working directory: {os.getcwd()}")
 
     if not run_script('python search_keyword_ripgrep_fast.py --update', "search_keyword_ripgrep_fast.py with --update flag", max_wait_time):
         log("Script sequence terminated due to an error.")
