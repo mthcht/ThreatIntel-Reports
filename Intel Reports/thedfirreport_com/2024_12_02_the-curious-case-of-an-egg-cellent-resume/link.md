@@ -1,0 +1,1 @@
+[Link to the article](https://thedfirreport.com/2024/12/02/the-curious-case-of-an-egg-cellent-resume/)
