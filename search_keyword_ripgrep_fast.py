@@ -66,8 +66,8 @@ def search_keyword_with_ripgrep(keyword):
     return results
 
 def log_results(keyword, results, overwrite=False):
-    # Replace any backslash in the keyword with "backslash_"
-    sanitized_keyword = keyword.replace("\\", "backslash_")
+    # Sanitize the keyword for use as a filename
+    sanitized_keyword = keyword.strip().replace(" ", "_").replace("\\", "backslash_")
     keyword_file_path = os.path.join(search_results_dir, f"{sanitized_keyword}.json")
 
     if not overwrite:
@@ -111,7 +111,7 @@ def main():
         try:
             with open('monitor_keywords_list.txt', 'r', encoding='utf-8') as file:
                 keywords = file.read().strip().split(',')
-                keywords = [keyword.strip() for keyword in keywords if keyword.strip()]
+                keywords = [keyword for keyword in keywords if keyword]
         except FileNotFoundError:
             print("monitor_keywords_list.txt not found.")
             return
