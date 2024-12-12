@@ -1,0 +1,1 @@
+[Link to the article](https://www.microsoft.com/en-us/security/blog/2024/12/11/microsoft-defender-xdr-demonstrates-100-detection-coverage-across-all-cyberattack-stages-in-the-2024-mitre-attck-evaluations-enterprise/)
