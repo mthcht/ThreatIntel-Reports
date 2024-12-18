@@ -1,0 +1,175 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv='Content-Type' content='text/html; charset=utf-8' />
+<link rel="stylesheet" href="/style.css">
+<link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.synthesis.to/feed.xml" />
+<title>Automation in Reverse Engineering&#058; String Decryption</title>
+</head>
+<body>
+<div class="blog">
+  <ul>
+    <span><a href="https://twitter.com/mr_phrazer">Twitter</a></span>
+    <span><a href="/training_software_deobfuscation.html">Training</a></span>
+    <span><a href="/index.html">About Me</a></span>
+  </ul>
+</div>
+<title>Automation in Reverse Engineering&#058; String Decryption</title>
+
+<h1>Automation in Reverse Engineering&#058; String Decryption</h1>
+<p>30 Jun 2021 - Tim Blazytko</p>
+
+<p>Automation plays a crucial rule in reverse engineering, no matter whether we search for vulnerabilities in software, analyze malware or remove obfuscated layers from code. Once we manually identify repeating patterns, we try to automate the process as far as possible. For automation, it often doesnât matter if you use <a href="https://binary.ninja/">Binary Ninja</a>, <a href="https://hex-rays.com/ida-pro/">IDA Pro</a> or <a href="https://ghidra-sre.org/">Ghidra</a>, as long as you have the knowledge <em>how</em> to realize it in your tool of choice. As you will see, you donât have to be an expert to automate tedious reverse engineering tasks; sometimes it just takes a few lines of code to improve your understanding a lot.</p>
+
+<p>Today, we take a closer look at this process and automate the decryption of strings for a malware sample from the <a href="https://en.wikipedia.org/wiki/Mirai_(malware)">Mirai botnet</a>. Mirai is a malware family that hijacks embedded systems such as IP cameras or home routers by scanning for devices that accept default login credentials. To impede analysis, Mirai samples store those credentials in an encoded form and decode them at runtime using a simple XOR with a constant. In the following, we first manually analyze the string obfuscation. Afterward, we use Binary Ninjaâs high-level intermediate language (HLIL) API to get all string references and decrypt them.</p>
+
+<p>If you would like to try it on your own, youâll find the code and the used <a href="https://www.virustotal.com/gui/file/c87e5db01d2c942fa6973f4578c9a72813b42f3daa8ba78f1ad035f756a55c78/detection">malware sample</a> on <a href="https://github.com/mrphrazer/mirai_string_deobfuscation">GitHub</a>. To better understand Mirai, you can also have a look at its leaked <a href="https://github.com/jgamblin/Mirai-Source-Code">source code</a>.</p>
+
+<h2 id="manual-analysis">Manual Analysis</h2>
+
+<p>In static malware analysis, one of the first things to do is to have a closer look at the identified strings, since they often reveal a lot of context. In this sample, however, we mostly see strings like <code class="language-plaintext highlighter-rouge">PMMV</code>, <code class="language-plaintext highlighter-rouge">CFOKL</code>, <code class="language-plaintext highlighter-rouge">QWRRMPV</code> and others. At first glance, they donât make much sense. However, if we have a closer look at how they are used in the code, we notice something interesting: They are repeatedly used as function parameters for the function <code class="language-plaintext highlighter-rouge">sub_10778</code>. (The corresponding function calls can be found <a href="https://github.com/jgamblin/Mirai-Source-Code/blob/master/mirai/bot/scanner.c#L123">here</a> in the leaked source code.)</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">data_1616c</span><span class="p">,</span> <span class="mh">0xa</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="s">"TKXZT"</span><span class="p">,</span> <span class="mi">9</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="s">"CFOKL"</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"CFOKL"</span><span class="p">,</span> <span class="s">"CFOKL"</span><span class="p">,</span> <span class="mi">7</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">data_16184</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="s">"ZOJFKRA"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="s">"FGDCWNV"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="mh">0x1619c</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>  <span class="p">{</span><span class="s">"HWCLVGAJ"</span><span class="p">}</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">data_161a8</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"PMMV"</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">data_161b0</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"QWRRMPV"</span><span class="p">,</span> <span class="s">"QWRRMPV"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>Based on this, we can assume that the passed strings are decoded and further processed in the called function. If we inspect the decompiled code of the function, we identify the following snippet that operates on the first function parameter <code class="language-plaintext highlighter-rouge">arg1</code>. For the second parameter <code class="language-plaintext highlighter-rouge">arg2</code>, we can find a similar snippet.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">uint32_t</span> <span class="n">r0_3</span> <span class="o">=</span> <span class="n">sub_12c90</span><span class="p">(</span><span class="n">arg1</span><span class="p">)</span>
+<span class="kt">void</span><span class="o">*</span> <span class="n">r0_5</span> <span class="o">=</span> <span class="n">sub_14100</span><span class="p">(</span><span class="n">r0_3</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<span class="n">sub_12d0c</span><span class="p">(</span><span class="n">r0_5</span><span class="p">,</span> <span class="n">arg1</span><span class="p">,</span> <span class="n">r0_3</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">r0_3</span> <span class="n">s</span><span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">char</span><span class="o">*</span> <span class="n">r2_3</span> <span class="o">=</span> <span class="n">nullptr</span>
+    <span class="k">do</span> <span class="p">{</span>
+        <span class="o">*</span><span class="p">(</span><span class="n">r2_3</span> <span class="o">+</span> <span class="n">r0_5</span><span class="p">)</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">r2_3</span> <span class="o">+</span> <span class="n">r0_5</span><span class="p">)</span> <span class="o">^</span> <span class="mh">0x22</span>
+        <span class="n">r2_3</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">r2_3</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">r0_3</span> <span class="o">!=</span> <span class="n">r2_3</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The code first performs some function calls using <code class="language-plaintext highlighter-rouge">arg1</code>, goes into a loop and increments a counter until the condition <code class="language-plaintext highlighter-rouge">r0_3 != r2_3</code> no longer holds. Within the loop, we notice an XOR operation <code class="language-plaintext highlighter-rouge">*(r2_3 + r0_5) ^ 0x22</code>, where <code class="language-plaintext highlighter-rouge">*(r2_3 + r0_5)</code> seems to be an array-like memory access that is xored with the constant <code class="language-plaintext highlighter-rouge">0x22</code>. After performing a deeper analysis, we can clean up the code by assigning some reasonable variable and function names.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">uint32_t</span> <span class="n">length</span> <span class="o">=</span> <span class="n">strlen</span><span class="p">(</span><span class="n">arg1</span><span class="p">)</span>
+<span class="kt">void</span><span class="o">*</span> <span class="n">ptr</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="n">length</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<span class="n">strcpy</span><span class="p">(</span><span class="n">ptr</span><span class="p">,</span> <span class="n">arg1</span><span class="p">,</span> <span class="n">length</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+<span class="k">if</span> <span class="p">(</span><span class="n">length</span> <span class="n">s</span><span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="kt">char</span><span class="o">*</span> <span class="n">index</span> <span class="o">=</span> <span class="n">nullptr</span>
+    <span class="k">do</span> <span class="p">{</span>
+        <span class="o">*</span><span class="p">(</span><span class="n">index</span> <span class="o">+</span> <span class="n">ptr</span><span class="p">)</span> <span class="o">=</span> <span class="o">*</span><span class="p">(</span><span class="n">index</span> <span class="o">+</span> <span class="n">ptr</span><span class="p">)</span> <span class="o">^</span> <span class="mh">0x22</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="o">&amp;</span><span class="n">index</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+    <span class="p">}</span> <span class="k">while</span> <span class="p">(</span><span class="n">length</span> <span class="o">!=</span> <span class="n">index</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Now, we have a better understanding of what the code does: It first calculates the length of the provided string, allocates memory for a new string and copies the encrypted string into the allocated buffer. Afterward, it walks over the copied string and decrypts it bytewise by xoring each byte with <code class="language-plaintext highlighter-rouge">0x22</code>. This is also in line with the <a href="https://github.com/jgamblin/Mirai-Source-Code/blob/master/mirai/bot/scanner.c#L963">decryption routine</a> of the original source code.</p>
+
+<p>In other words, strings are encoded using a bytewise XOR with the constant value <code class="language-plaintext highlighter-rouge">0x22</code>. If we want to decode the string <code class="language-plaintext highlighter-rouge">PMMV</code> in Python, we can do this with the following one-liner.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="o">&gt;&gt;&gt;</span> <span class="sh">''</span><span class="p">.</span><span class="nf">join</span><span class="p">([</span><span class="nf">chr</span><span class="p">(</span><span class="nf">ord</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="o">^</span> <span class="mh">0x22</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="sh">"</span><span class="s">PMMV</span><span class="sh">"</span><span class="p">])</span>
+<span class="sh">'</span><span class="s">root</span><span class="sh">'</span>
+</code></pre></div></div>
+
+<p>We walk over each byte of the string, get its corresponding ASCII value via <code class="language-plaintext highlighter-rouge">ord</code>, xor it with <code class="language-plaintext highlighter-rouge">0x22</code> and transform it back into a character using <code class="language-plaintext highlighter-rouge">chr</code>. In a final step, we join all characters into a single string.</p>
+
+<p>After we manually analyzed how strings can be decrypted, we will now automate this with Binary Ninja.</p>
+
+<h2 id="automated-decryption">Automated Decryption</h2>
+
+<p>To automate the decryption, we first have to find a way to identify all encoded strings. In particular, we have to know where they start and where they end; in other words, we aim to identify all encrypted bytes. In the second step, we can decrypt each byte individually.</p>
+
+<p>Beforehand, we noticed that the encoded strings are passed as the first two parameters to the function <code class="language-plaintext highlighter-rouge">sub_10778</code>. To obtain the encoded strings, we can exploit this characteristic by searching for all function calls and parse all passed parameters. Using Binary Ninjaâs high-level intermediate language (HLIL) API, we can realize this within a few lines of code.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1"># get function instance of target function
+</span><span class="n">target_function</span> <span class="o">=</span> <span class="n">bv</span><span class="p">.</span><span class="nf">get_function_at</span><span class="p">(</span><span class="mh">0x10778</span><span class="p">)</span>
+<span class="c1"># set of already decrypted bytes
+</span><span class="n">already_decrypted</span> <span class="o">=</span> <span class="nf">set</span><span class="p">()</span>
+
+<span class="c1"># 1: walk over all callers
+</span><span class="k">for</span> <span class="n">caller_function</span> <span class="ow">in</span> <span class="nf">set</span><span class="p">(</span><span class="n">target_function</span><span class="p">.</span><span class="n">callers</span><span class="p">):</span>
+    
+    <span class="c1"># 2: walk over high-level IL instructions
+</span>    <span class="k">for</span> <span class="n">instruction</span> <span class="ow">in</span> <span class="n">caller_function</span><span class="p">.</span><span class="n">hlil</span><span class="p">.</span><span class="n">instructions</span><span class="p">:</span>
+    
+        <span class="c1"># 3: if IL instruction is a call
+</span>        <span class="c1">#    and call goes to target function
+</span>        <span class="nf">if </span><span class="p">(</span><span class="n">instruction</span><span class="p">.</span><span class="n">operation</span> <span class="o">==</span> <span class="n">HighLevelILOperation</span><span class="p">.</span><span class="n">HLIL_CALL</span> <span class="ow">and</span>
+            <span class="n">instruction</span><span class="p">.</span><span class="n">dest</span><span class="p">.</span><span class="n">constant</span> <span class="o">==</span> <span class="n">target_function</span><span class="p">.</span><span class="n">start</span><span class="p">):</span>
+                
+            <span class="c1"># 4: fetch pointer to encrypted strings
+</span>            <span class="n">p1</span> <span class="o">=</span> <span class="n">instruction</span><span class="p">.</span><span class="n">params</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">p2</span> <span class="o">=</span> <span class="n">instruction</span><span class="p">.</span><span class="n">params</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            
+            <span class="c1"># 5: decrypt strings
+</span>            <span class="nf">decrypt</span><span class="p">(</span><span class="n">p1</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">value</span><span class="p">,</span> <span class="n">already_decrypted</span><span class="p">)</span>
+            <span class="nf">decrypt</span><span class="p">(</span><span class="n">p2</span><span class="p">.</span><span class="n">value</span><span class="p">.</span><span class="n">value</span><span class="p">,</span> <span class="n">already_decrypted</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>After fetching the function object of the targeted function <code class="language-plaintext highlighter-rouge">sub_10778</code>, we walk over all functions calling <code class="language-plaintext highlighter-rouge">sub_10778</code>. For each of these calling functions (referred to as <em>callers</em>), we need to identify the instruction that performs the call to <code class="language-plaintext highlighter-rouge">sub_10778</code>. In order to do this, we walk over the callerâs HLIL instructions; for each instruction, we then check if its operation is a call and if the call destination is the targeted function. If so, we access its first two parameters (the pointers to the encoded strings) and pass them to the decryption function. Since some stringsâsuch as <code class="language-plaintext highlighter-rouge">PMMV</code>âare used as parameters multiple times, we ensure that we only decrypt them once. Therefore, we collect the addresses of all bytes that we already have decrypted in a set called <code class="language-plaintext highlighter-rouge">already_decrypted</code>.</p>
+
+<p>Up until now, we identified all parameters that flow into the decryption routine. The only thing left to do is to identify all encrypted bytes and decrypt them. Since each parameter is a pointer to a string, we can consider it as the stringâs start address. Similarly, we can determine the stringâs end by scanning for terminating null bytes.</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">decrypt</span><span class="p">(</span><span class="n">address</span><span class="p">,</span> <span class="n">already_decrypted</span><span class="p">):</span>
+    <span class="c1"># walk over string bytes until termination
+</span>    <span class="k">while</span> <span class="bp">True</span><span class="p">:</span>
+        <span class="c1"># read a single byte from database
+</span>        <span class="n">encrypted_byte</span> <span class="o">=</span> <span class="n">bv</span><span class="p">.</span><span class="nf">read</span><span class="p">(</span><span class="n">address</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+
+        <span class="c1"># return if null byte or already decrypted
+</span>        <span class="k">if</span> <span class="n">encrypted_byte</span> <span class="o">==</span> <span class="sa">b</span><span class="sh">'</span><span class="se">\x00</span><span class="sh">'</span> <span class="ow">or</span> <span class="n">address</span> <span class="ow">in</span> <span class="n">already_decrypted</span><span class="p">:</span>
+            <span class="k">return</span>
+
+        <span class="c1"># decrypt byte
+</span>        <span class="n">decrypted_byte</span> <span class="o">=</span> <span class="nf">chr</span><span class="p">(</span><span class="nf">int</span><span class="p">(</span><span class="n">encrypted_byte</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span> <span class="o">^</span> <span class="mh">0x22</span><span class="p">)</span>
+        
+        <span class="c1"># write decrypted byte to database
+</span>        <span class="n">bv</span><span class="p">.</span><span class="nf">write</span><span class="p">(</span><span class="n">address</span><span class="p">,</span> <span class="n">decrypted_byte</span><span class="p">)</span>
+
+        <span class="c1"># add to set of decrypted addresses
+</span>        <span class="n">already_decrypted</span><span class="p">.</span><span class="nf">add</span><span class="p">(</span><span class="n">address</span><span class="p">)</span>
+
+        <span class="c1"># increment address
+</span>        <span class="n">address</span> <span class="o">+=</span> <span class="mi">1</span>
+</code></pre></div></div>
+
+<p>Taking the stringâs start address as input, we sequentially walk over the string until we reach a byte that terminates the string or that was already decrypted. For each byte, we then transform it into an integer, xor it with <code class="language-plaintext highlighter-rouge">0x22</code>, encode it as a character and write it back to the database. Afterward, we add the current address to the set <code class="language-plaintext highlighter-rouge">already_decrypted</code> and increment the address.</p>
+
+<p>Finally, we have all parts together: We walk over all function calls of the string decryption function, parse the parameters for each call and decrypt all the strings in Binary Ninjaâs database. If we put everything into a Python script and execute it, the decompiled code from above contains all strings in plain text.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"xc3511"</span><span class="p">,</span> <span class="mh">0xa</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"vizxv"</span><span class="p">,</span> <span class="mi">9</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"admin"</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"admin"</span><span class="p">,</span> <span class="s">"admin"</span><span class="p">,</span> <span class="mi">7</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"888888"</span><span class="p">,</span> <span class="mi">6</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"xmhdipc"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"default"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="mh">0x1619c</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>  <span class="p">{</span><span class="s">"juantech"</span><span class="p">}</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"123456"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"root"</span><span class="p">,</span> <span class="s">"54321"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+<span class="n">sub_10778</span><span class="p">(</span><span class="s">"support"</span><span class="p">,</span> <span class="s">"support"</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>As a result, the decompilation reveals much more context information. By googling <a href="https://www.google.com/search?q=xmhdipc">some</a> <a href="https://www.google.com/search?q=vizxv">of</a> <a href="https://www.google.com/search?q=juantech+password">the</a> <a href="https://www.google.com/search?q=xc3511+password">strings</a>, we learn that the parameters are username/password tuples of default login credentials.</p>
+
+<h2 id="setting-the-scene">Setting the Scene</h2>
+
+<p>Automation allows us to spend less time with tedious and repetitive reverse engineering tasks. In this post, I tried to emphasize the thought process behind automation on the example of decrypting strings in malware. Starting with manual analysis, we first pinpointed interesting behavior: encrypted strings used as function parameters. Then, we put it into context by digging into the function, and learned that the strings are decrypted inside. By noticing a recurring patternâthat the function is called several times with different parametersâwe developed an idea of how to automate the decryption. By using Binary Ninjaâs decompiler API, we walked over all relevant function calls, parsed the parameters and decrypted the strings. In the end, 20 lines of code sufficed to improve the decompilation and achieve a much better understanding of the malware sample.</p>
+
+<p>Even if you are just starting out, I encourage you to get familiar with the API that your tool of choice exposes, and to automate some of the tedious tasks you encounter during your day-to-day reversing. It is not only fun; reverse engineering also becomes so much easier.</p>
+
+<h2 id="contact">Contact</h2>
+
+<p>For questions, feel free to reach out via Twitter <a href="https://twitter.com/mr_phrazer">@mr_phrazer</a>, mail <a href="mailto:tim@blazytko.to">tim@blazytko.to</a> or various other channels.</p>
+
+
+</body>
+</html>

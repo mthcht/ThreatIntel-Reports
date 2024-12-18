@@ -1,0 +1,1 @@
+[Link to the article](https://microsoft.com/en-us/security/blog/2023/04/07/mercury-and-dev-1084-destructive-attack-on-hybrid-environment/)

@@ -1,1 +1,1 @@
-[Link to the article](https://securelist.com/greyenergys-overlap-with-zebrocy/89506/)
+[Link to the article](https://securelist.com/greyenergys-overlap-with-zebrocy/89506)

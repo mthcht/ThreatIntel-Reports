@@ -68,7 +68,16 @@ rss_urls = [
     "https://medium.com/feed/@bi-zone",
     "https://www.ic3.gov/CSA/rss",
     "https://any.run/cybersecurity-blog/category/malware-analysis/feed/",
-    "https://fieldeffect.com/blog/rss.xml"
+    "https://www.malwarebytes.com/blog/feed/index.xml",
+    "https://www.binarydefense.com/feed/",
+    "https://fieldeffect.com/blog/rss.xml",
+    "https://blog.avast.com/rss.xml",
+    "https://blog.google/threat-analysis-group/rss/",
+    "https://blog.group-ib.com/rss.xml",
+    "https://news.drweb.com/rss/get/?c=9",
+    "https://www.malwaretech.com/feed",
+    "https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/rss.xml",
+    "https://krebsonsecurity.com/feed/"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -588,9 +597,9 @@ with open(file_name, 'w') as file:
 try:
     with open(imported_links_file, 'r') as imported_file:
         imported_links = set(imported_file.read().splitlines())
-    with open(manually_added_links, 'r') as imported_file:
+    with open(manually_added_links, 'r', encoding='utf-8', errors='ignore') as imported_file:
         manually_added_links = set(imported_file.read().splitlines())
-    with open(file_name, 'a+') as file:
+    with open(file_name, 'a+', encoding='utf-8', errors='ignore') as file:
         file.seek(0)
         existing_links = set(file.read().splitlines())
         new_links_imported = imported_links - existing_links

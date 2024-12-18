@@ -1,1 +1,1 @@
-[Link to the article](https://asec.ahnlab.com/en/47455/)
+[Link to the article](https://asec.ahnlab.com/en/47455)

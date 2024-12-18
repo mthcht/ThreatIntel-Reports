@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>BLATSTING Command-and-Control protocol – Laanwj's blog – —</title>
+
+        <meta charset="utf-8" />
+    <meta content='text/html; charset=utf-8' http-equiv='Content-Type'>
+    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0, maximum-scale=1.0'>
+
+    
+    <meta name="description" content="In this installment I’m going to describe the Command-and-Control (or C&amp;C) protocol of BLATSTING. This the protocol used in the network traffic between the malware and what is used by the person controlling it. I’m also going to see whether this traffic can be detected.
+
+" />
+    <meta property="og:description" content="In this installment I’m going to describe the Command-and-Control (or C&amp;C) protocol of BLATSTING. This the protocol used in the network traffic between the malware and what is used by the person controlling it. I’m also going to see whether this traffic can be detected.
+
+" />
+    
+    <meta name="author" content="Laanwj's blog" />
+
+    
+    <meta property="og:title" content="BLATSTING Command-and-Control protocol" />
+    <meta property="twitter:title" content="BLATSTING Command-and-Control protocol" />
+    
+
+    <!--[if lt IE 9]>
+      <script src="http://html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+
+    <link rel="stylesheet" type="text/css" href="/style.css" />
+    <link rel="alternate" type="application/rss+xml" title="Laanwj's blog - —" href="/feed.xml" />
+
+    <!-- Created with Jekyll Now - http://github.com/barryclark/jekyll-now -->
+  </head>
+
+  <body>
+    <div class="wrapper-masthead">
+      <div class="container">
+        <header class="masthead clearfix">
+          <a href="/" class="site-avatar"><img src="/atari_st_bee.png" /></a>
+
+          <div class="site-info">
+            <h1 class="site-name"><a href="/">Laanwj's blog</a></h1>
+            <p class="site-description">—</p>
+          </div>
+
+          <nav>
+            <a href="/">Blog</a>
+            <a href="/about">About</a>
+          </nav>
+        </header>
+      </div>
+    </div>
+
+    <div id="main" role="main" class="container">
+      <article class="post">
+  <h1>BLATSTING Command-and-Control protocol</h1>
+
+  <div class="entry">
+    <p>In this installment I’m going to describe the Command-and-Control (or C&amp;C) protocol of BLATSTING. This the protocol used in the network traffic between the malware and what is used by the person controlling it. I’m also going to see whether this traffic can be detected.</p>
+
+<h3 id="setup">Setup</h3>
+
+<p>To figure out the details of how the communication works I’ve set up a simulation environment, which I’ve termed BEECHPONYZOO (named after BLATSTING’s probable predecessor), where BLATSTING modules running in a simulation can communicate with the Listening Post executable <code class="language-plaintext highlighter-rouge">lp</code> running in a VM, in a way isolated from the real network and bare hardware:</p>
+
+<pre>
+  BEECHPONYZOO
+
+  ╔════════════════════════════╗
+  ║ BLATSTING emulator         ║
+  ║ ╔════════════════════════╗ ║    ╔════════════════╗
+  ║ ║  Emulated modules      ║ ║    ║ Listening Post ║  emulated
+  ║ ║ ┌─────────┐ ┌────────┐ ║ ║    ║ RH50 i386 VM   ║  serial
+  ║ ║ │ cnc     &lt;┄&gt; hash   │ ║ ║    ║ ┌───────┐      ║  (control)
+  ║ ║ │         │ └────────┘ ║ ║    ║ │ lpexe │&lt;━━━━━━━━━━━━
+  ║ ║ │ [state] │ ┌────────┐ ║ ║    ║ └───────┘      ║
+  ║ ║ │         &lt;┄&gt; crypto │ ║ ║    ║      ↕         ║
+  ║ ║ └─────────┘ └────────┘ ║ ║    ║ Linux nw. stck ║
+  ║ ╚════^════^══════════════╝ ║    ╚══════^═════════╝
+  ║      ┆    ┆                ║           ┃            
+  ║      ┆    ┆                ║           ┃            
+  ║ ┌────v──┐┌v───────┐ Emu.nw.║           ┃        ═ Neutronium blast barrier        
+  ║ │ [stub]││ [stub] │&lt;┄┄┄┄┄┄┄&gt;&lt;━━━━━━━━━━┛        ─ Permeable membrane
+  ║ │ core  ││ network│ Stck   ║  Eth-over-UDP      ━ Emulated physical connection
+  ║ └───────┘└────────┘        ║                    ┄ Internal connection         
+  ╚════════════════════════════╝
+</pre>
+<p>See <a href="https://gist.github.com/laanwj/9e5e404266a8956beabde522f97c421b#file-blatsting-txt-L36">the gist</a> for the entire module hierarchy, for the sake of expediency we’re only emulating a part of it right now. But enough about my setup.</p>
+
+<h3 id="network-protocol">Network protocol</h3>
+
+<p>The implant (fancy spy word for rootkit) communicates with the Listening Post (spy for Command-and-Control program) using UDP datagrams over a IPv4 network. Those hoping to find IRC servers, bots and clients as in <a href="http://www.spiegel.de/media/media-35689.pdf">this presentation</a> h/t: <a href="https://electrospaces.blogspot.nl/2016/08/is-shadow-brokers-leak-latest-in-series.html">electrospaces.net</a>) will unfortunately be disappointed.</p>
+
+<pre>
+    ╔═══════════════════╗         ╔═══════════╗
+    ║ implant           ║         ║ lp        ║
+    ╟───────────────────╢   UDP   ╟───────────╢
+    ║ ┌──────┐  ┌─┐ ┌─┐ ║ network ║ ┌───────┐ ║
+    ║ │impmod│&lt;╌│c│╌│n│&lt;╌╌╌╌╌╌╌╌╌╌╌&gt;│ lpmod │ ║
+    ║ └──────┘  │n│ │e│ ║         ║ └───────┘ ║
+    ║ ┌──────┐  │c│ │t│ ║         ║ ┌───────┐ ║
+    ║ │impmod│&lt;╌│ │╌│ │&lt;╌╌╌╌╌╌╌╌╌╌╌&gt;│ lpmod │ ║
+    ║ └──────┘  └─┘ └─┘ ║         ║ └───────┘ ║
+    ║   ...             ║         ║    ...    ║
+    ╚═══════════════════╝         ╚═══════════╝
+</pre>
+
+<p>Interesting is that for the initial session setup, the source and destination IP address as well as ports do not matter. The only requirements for accepting the initial packets are that the size (including IP and UDP header, excluding Ethernet header) matches 68 or 72 bytes, and that a special checksum computed on the packet matches the one in the packet.  This is a custom checksum, illustrated by the following C code:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cm">/* cnc mystery packet checksum
+ * arg1: 8 bytes, arg2: 4 bytes
+ */</span>
+<span class="kt">uint32_t</span> <span class="nf">cnc_checksum</span><span class="p">(</span><span class="kt">uint8_t</span> <span class="o">*</span><span class="n">arg1</span><span class="p">,</span> <span class="kt">uint8_t</span> <span class="o">*</span><span class="n">arg2</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">i0</span> <span class="o">=</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">|</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">i1</span> <span class="o">=</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">|</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">i2</span> <span class="o">=</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="o">|</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">i3</span> <span class="o">=</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span> <span class="o">|</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">j0</span> <span class="o">=</span> <span class="n">arg2</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">|</span> <span class="p">(</span><span class="n">arg2</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">j1</span> <span class="o">=</span> <span class="n">arg2</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">|</span> <span class="p">(</span><span class="n">arg2</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">b0</span> <span class="o">=</span> <span class="p">((</span><span class="n">i3</span> <span class="o">^</span> <span class="n">j0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">i0</span> <span class="o">^</span> <span class="n">j1</span><span class="p">))</span> <span class="o">^</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="o">^</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">7</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">b1</span> <span class="o">=</span> <span class="p">((</span><span class="n">i2</span> <span class="o">^</span> <span class="n">j0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">i1</span> <span class="o">^</span> <span class="n">j1</span><span class="p">))</span> <span class="o">^</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="o">^</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">b2</span> <span class="o">=</span> <span class="p">((</span><span class="n">i1</span> <span class="o">^</span> <span class="n">j0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">i2</span> <span class="o">^</span> <span class="n">j1</span><span class="p">))</span> <span class="o">^</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">^</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">const</span> <span class="kt">uint16_t</span> <span class="n">b3</span> <span class="o">=</span> <span class="p">((</span><span class="n">i0</span> <span class="o">^</span> <span class="n">j0</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="n">i3</span> <span class="o">^</span> <span class="n">j1</span><span class="p">))</span> <span class="o">^</span> <span class="n">arg1</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">^</span> <span class="p">(</span><span class="n">arg1</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span> <span class="o">&lt;&lt;</span> <span class="mi">8</span><span class="p">);</span>
+    <span class="k">return</span> <span class="p">((</span><span class="n">b3</span> <span class="o">^</span> <span class="n">b1</span><span class="p">)</span> <span class="o">&lt;&lt;</span> <span class="mi">16</span><span class="p">)</span> <span class="o">^</span> <span class="p">((</span><span class="n">b3</span> <span class="o">*</span> <span class="n">b0</span><span class="p">)</span> <span class="o">&lt;&lt;</span> <span class="mi">5</span><span class="p">)</span> <span class="o">^</span> <span class="p">((</span><span class="n">b1</span> <span class="o">*</span> <span class="n">b2</span><span class="p">)</span> <span class="o">&lt;&lt;</span> <span class="mi">11</span><span class="p">)</span> <span class="o">^</span> <span class="n">b2</span> <span class="o">^</span> <span class="n">b0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>This checksum is checked for every C&amp;C packet, not just for session setup. <code class="language-plaintext highlighter-rouge">arg1</code> points to the IV (more on this later), of which the first 8 bytes are checked. <code class="language-plaintext highlighter-rouge">arg2</code> is a 32-bit checksum key, stored internally and not part of the packet, assumed to differ per deployment. After checking, the inner payload is decrypted using <a href="https://en.wikipedia.org/wiki/RC6">RC6</a> in <a href="https://en.wikipedia.org/wiki/Block_cipher_mode_of_operation#OFB">OFB</a> mode. The key for RC6 is either a pre-shared key, or generated from a session challenge and the pre-shared key. This key is unrelated to the one used to key the checksum. The IV for OFB mode (16 bytes) is taken from the packet.</p>
+
+<p>Packet format:</p>
+<pre>
+      ┌──────────────────┐
+0x00  │ IP hdr (20b)     │
+      ├──────────────────┤
+0x14  │ UDP hdr (8b)     │
+      ├──────────────────┤
+0x1c  │ UDP payload      │
+      │ ┌────────────────┤
+0x1c  │ │ Checksum (4b)  │
+      │ ├────────────────┤
+0x20  │ │  IV/hash (16b) │
+      │ ├────────────────┤
+0x30  │ │   Encrypted    │
+      │ │    payload     │
+      │ │      ...       │
+      │ └────────────────┤
+      └──────────────────┘
+</pre>
+
+<p>After decrypting the inner payload, it is hashed using SHA1 and the first 16 bytes of that hash are compared against the IV in the packet. If they match, the packet is accepted, otherwise it is rejected. This is “Authenticate and encrypt” and violates the <a href="https://moxie.org/blog/the-cryptographic-doom-principle/">Cryptographic Doom Principle</a> but I don’t think the attacks described there are applicable. But who knows. Using plain SHA1 of the plaintext means that theoretically some information is leaked. Also the same crypto key is used in both directions.</p>
+
+<p>The decrypted payload looks like this:</p>
+<pre>
+      ┌───────────────────┐
+0x00  │ Random (8b)       │
+      ├───────────────────┤
+0x08  │ Opcode (1b)       │
+      ├───────────────────┤
+0x09  │ Argsize (1b)      │
+      ├───────────────────┤
+0x0a  │ Datasize (2b)     │
+      ├───────────────────┤
+0x0c  │ Sequence nr. (2b) │
+      ├───────────────────┤
+0x0e  │ 1? (2b)           │
+      ├───────────────────┤
+0x10  │ Args              │
+      │ ... (argsize b)   │
+      ├───────────────────┤
+0x10  │ Data              │
++arg  │ ... (datasize b)  │
+ size └───────────────────┘
+
+</pre>
+<p>All values in this inner payload header are little-endian. Sometimes the actual args or data is big-endian, there is some inconsistency with endians at different nesting levels but this by far not the only protocol with this peculiarity.</p>
+
+<p>Commands and replies use the same protocol, and share the same namespace of message codes. These are the various opcodes, helpfully taken from <code class="language-plaintext highlighter-rouge">lpexe</code> debug output:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="text-align: left">Opcode</th>
+      <th style="text-align: right">Argsize</th>
+      <th style="text-align: right">Datasize</th>
+      <th style="text-align: left">Name</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td style="text-align: left">0x00</td>
+      <td style="text-align: right">4</td>
+      <td style="text-align: right">4</td>
+      <td style="text-align: left">HELLO</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x01</td>
+      <td style="text-align: right">4 / 8</td>
+      <td style="text-align: right">4 / 168</td>
+      <td style="text-align: left">AUTH_RESP</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x02</td>
+      <td style="text-align: right">0</td>
+      <td style="text-align: right">16</td>
+      <td style="text-align: left">CHALLENGE</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x03</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">ACK</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x04</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">ERROR</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x05</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">GOODBYE</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x06</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_READ</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x07</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_WRITE</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x08</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">MALLOC</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x09</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">FREE</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x0a</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">EXEC</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x0b</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BOX_INFO</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x0c</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_WRITE_STATUS</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x0d</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">MSG_FRAG</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x0e</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">MSG_ACK</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x0f</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_FILE_STATE</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x10</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_5i_CALL</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x11</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_5i_REPLY</td>
+    </tr>
+    <tr>
+      <td style="text-align: left">0x12</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: right">?</td>
+      <td style="text-align: left">BF_5i_REQ_FRAG_PACKET</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>In the session negotiation phase, only <code class="language-plaintext highlighter-rouge">HELLO</code> (0) and <code class="language-plaintext highlighter-rouge">AUTH_RESP</code> (1) will be accepted. After a session is established the other calls can be used.</p>
+
+<p>I haven’t looked into detail of all the specific packets here. Some of it looks like the command set for a bare-bones post-exploitation shell, where the remote can allocate, read and write memory, inject code and execute it. Not all of the commands are implemented though, and the LP side doesn’t even seem to use them. Maybe a remnant from an earlier protocol. Of note are mostly <code class="language-plaintext highlighter-rouge">BF_5i_CALL</code>, <code class="language-plaintext highlighter-rouge">BF_5i_REPLY</code>, these are used as a RPC system for communicating with loaded modules through their interfaces.</p>
+
+<h3 id="detecting-blatsting-cc-packets">Detecting BLATSTING C&amp;C packets</h3>
+
+<p>Now we get to the interesting part: can we detect BLATSTING C&amp;C packets without knowing any secret key data? Remember that the session setup packets received by the implant are always UDP packets of 68 and 72 bytes (including IPv4 header), with arbitrary source and destination ports. The packets going the other way appear to have a fixed size too.</p>
+
+<p>A session starts off like this:</p>
+<pre>
+   LP          implant
+    |------------&gt;|       72 bytes (`HELLO`)
+    |&lt;------------|       80 bytes (`CHALLENGE`)
+    |------------&gt;|       72 bytes (`AUTH_RESP`)
+    |&lt;------------|      240 bytes (`AUTH_RESP`)
+</pre>
+
+<p>That’s something that a IDS rule could be configured to look for. Another peculiarity of the outgoing packets (from the implant) is that they do not have the UDP checksum set (something that is allowed by RFC768). I don’t know how common this is, but at least the Linux network stack computes it always.</p>
+
+<p>Also remember the weird keyed checksum that we started with. It’s not exactly a secure hash function and it’s possible to check it without knowing the key. This could be done by brute-force (32-bit key space, but still that’s a lot of overhead per packet) or by solving the equations, or by using a constraint solver such as <a href="https://github.com/Z3Prover/z3">Z3</a>. I used the latter approach in <a href="/assets/2016/09/04/blatsting-command-and-control/z3_cnc_checksum.py">z3_cnc_checksum.py</a>. Given the checksum output and input it can check whether there is any possible key that will make it match the checksum.</p>
+
+<p>Unfortunately this does have a ≈4% false-positive rate. By the way: it turns out that for this hash function the coverage of the output space for the same input with different keys is really small. E.g. for the same 8 byte arg1, trying all 2^32 arg2 possibilities will result in only 65495 different outputs. Due to (nearly) XORing them together the effect of both halves of <code class="language-plaintext highlighter-rouge">arg2</code> is very closely correlated: there is effectively only a 16 bit key space.</p>
+
+<p>That’s a bit disappointing, but by looking at the sizes of the packets as well as the checksum, the false-positive rate could be brought down. Or maybe by correlating multiple packets.</p>
+
+<p>None of this helps to decrypt the packets, only detect them; as said before the key for RC6-OFB is distinct from the checksum key. The crypto key can only be extracted from the implant itself (safest way would be to dump kernel memory). Even though there are session keys, these do not offer any forward secrecy, so once this key is available all prior traffic can be decrypted.</p>
+
+  </div>
+
+  <div class="date">
+    Written on September  4, 2016
+  </div>
+  <div class="tags">
+    Tags: 
+    
+    
+      <a href="/tags/#eqgrp" class="post-tag">eqgrp</a>
+    
+      <a href="/tags/#malware" class="post-tag">malware</a>
+    
+    
+  </div>
+  <div class="categories">
+    Filed under
+    
+    
+      <a href="/categories/#reverse-engineering" class="post-category">Reverse-engineering</a>
+    
+    
+  </div>
+
+  
+</article>
+
+    </div>
+
+    <div class="wrapper-footer">
+      <div class="container">
+        <footer class="footer">
+          
+
+
+
+<a href="https://github.com/laanwj/laanwj.github.io"><i class="svg-icon github"></i></a>
+
+
+
+<a href="/feed.xml"><i class="svg-icon rss"></i></a>
+
+
+
+
+        </footer>
+      </div>
+    </div>
+
+    
+
+  </body>
+</html>

@@ -61,8 +61,9 @@ else:
 for txt_file in os.listdir(automated_directory):
     if txt_file.endswith(".txt"):
         txt_file_path = os.path.join(automated_directory, txt_file)
-        with open(txt_file_path, "r") as f:
+        with open(txt_file_path, "r", encoding="utf-8", errors="ignore") as f:
             sorted_links = [line.strip() for line in f.readlines()]
+
 
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
@@ -100,8 +101,9 @@ for txt_file in os.listdir(automated_directory):
 
             # Save the link to link.md
             link_md_path = os.path.join(link_dir, "link.md")
-            with open(link_md_path, "w") as f:
+            with open(link_md_path, "w", encoding="utf-8") as f:
                 f.write(f"[Link to the article]({link})\n")
+
             logger.info(f"Saved link to {link_md_path}")
 
             # Download the content of the link

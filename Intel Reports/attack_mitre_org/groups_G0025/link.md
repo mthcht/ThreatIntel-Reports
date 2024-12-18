@@ -1,1 +1,1 @@
-[Link to the article](https://attack.mitre.org/groups/G0025)
+[Link to the article](https://attack.mitre.org/groups/G0025/)

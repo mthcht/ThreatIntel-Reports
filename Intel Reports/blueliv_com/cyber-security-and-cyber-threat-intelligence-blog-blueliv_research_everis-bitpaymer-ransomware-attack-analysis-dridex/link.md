@@ -1,0 +1,1 @@
+[Link to the article](https://blueliv.com/cyber-security-and-cyber-threat-intelligence-blog-blueliv/research/everis-bitpaymer-ransomware-attack-analysis-dridex/)

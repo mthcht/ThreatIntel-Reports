@@ -1,0 +1,1 @@
+[Link to the article](https://securityhomework.net/articles/qakbot_ccs_prioritization_and_new_record_types/qakbot_ccs_prioritization_and_new_record_types.php)

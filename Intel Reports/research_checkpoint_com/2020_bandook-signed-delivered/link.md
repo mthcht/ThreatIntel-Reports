@@ -1,1 +1,1 @@
-[Link to the article](https://research.checkpoint.com/2020/bandook-signed-delivered/)
+[Link to the article](https://research.checkpoint.com/2020/bandook-signed-delivered)

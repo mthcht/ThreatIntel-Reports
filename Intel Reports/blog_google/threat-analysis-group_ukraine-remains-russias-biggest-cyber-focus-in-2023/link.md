@@ -1,1 +1,1 @@
-[Link to the article](https://blog.google/threat-analysis-group/ukraine-remains-russias-biggest-cyber-focus-in-2023/)
+[Link to the article](https://blog.google/threat-analysis-group/ukraine-remains-russias-biggest-cyber-focus-in-2023)

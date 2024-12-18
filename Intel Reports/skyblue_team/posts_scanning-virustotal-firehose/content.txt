@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <title>Scanning VirusTotal&#39;s firehose | Sky Blueteam</title>
+
+    <meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">    
+<meta name="viewport" content="width=device-width,minimum-scale=1">
+<meta name="description" content="We set the crazy objective to extract and push IOC in real-time for a given malware family submitted to VirusTotal. For this blog post, as an example, we will focus on Cobalt Strike.">
+<meta name="generator" content="Hugo 0.85.0" />
+
+
+  <META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW">
+
+
+<link rel="stylesheet" href="/css/style.css">
+
+
+
+<link rel="shortcut icon" href="/images/favicon.ico" type="image/x-icon" />
+
+
+
+
+
+
+
+  </head>
+
+  <body>
+    <nav class="navigation">
+	
+		<a href="/"> <span class="arrow">←</span>Home</a>
+	
+	<a href="/posts">Archive</a>
+	<a href="/tags">Tags</a>
+	<a href="/about">About</a>
+
+	
+
+	
+</nav>
+
+
+    <main class="main">
+      
+
+<section id="single">
+    <h1 class="title">Scanning VirusTotal&#39;s firehose</h1>
+
+    <div class="tip">
+        <time datetime="2021-09-21 09:22:42 &#43;0200 &#43;0200">Sep 21, 2021</time>
+        <span class="split">
+          ·
+        </span>
+        <span>
+          584 words
+        </span>
+        <span class="split">
+          ·
+        </span>
+        <span>
+          3 minute read
+        </span>
+    </div>
+
+    
+    
+
+
+    <div class="content">
+      <p>Let&rsquo;s say one of your adversaries is known for using a given malware family, custom or off-the shelf. Even if the coverage is biased and limited, samples on VirusTotal (VT) are the low-hanging fruits that keep on giving.</p>
+<p>At $WORK, we are lucky to have access to the <a href="https://developers.virustotal.com/reference#files-2" target="_blank" rel="noopener">Virus Total feeds/file API</a>. This API endpoint is the firehose of VirusTotal: it allows downloading each sample submitted to VT in pseudo-real-time. The feed is unfiltered (we are not talking about <a href="https://support.virustotal.com/hc/en-us/articles/360001315437-Livehunt" target="_blank" rel="noopener">VT&rsquo;s LiveHunt feature</a>) so the volume is HUGE.</p>
+<p>We set the crazy objective to <strong>extract and push IOC in real-time for a given malware family submitted to VirusTotal</strong>. For this blog post, as an example, we will focus on Cobalt Strike.</p>
+<p>The steps are:</p>
+<p><p class="markdown-image">
+  <img src="/images/6ba639ccc85872aaf5be9fe0b11ecd7acec0a24f.png" alt="Steps to scan VT"  />
+</p></p>
+<ol>
+<li>Download each sample submitted</li>
+<li>Apply Yara rules matching the malware families we are interested in</li>
+<li>Automatically extract C2 configuration</li>
+<li>Disseminate IOC</li>
+</ol>
+<p>Initially, we used our on-premises infrastructure with 2-3 servers. Quickly, the operational maintenance killed us:</p>
+<ul>
+<li>Our <a href="https://github.com/celery/celery/" target="_blank" rel="noopener">Celery</a> cluster was regularly KO.</li>
+<li>Everything had to be very carefully tuned (memory limits, batch size, timeout, retries), we were constantly juggling with the balance between completeness, stability, and speed.</li>
+<li>Adding an under-performing Yara rule could break the platform.</li>
+<li>It was also not a good use of our computing resources as VT&rsquo;s activity is not evenly spread across the day: our servers were under-used most of the day while overloaded during the peaks.</li>
+</ul>
+<h2 id="going-serverless">Going Serverless <a href="#going-serverless" class="anchor">🔗</a></h2><p>Taking a step back, it jumped out at us that this was a textbook example for a Serverless architecture. It was easy to refactor our on-prem code into self-contained functions and <em>glue</em> them together with <a href="https://aws.amazon.com/sqs/" target="_blank" rel="noopener">Amazon SQS</a>:</p>
+<p><p class="markdown-image">
+  <img src="/images/70118f2f83f206d1a258d162d766b5cfd165765c.png" alt="AWS Serverless Architecture for scanning VirusTotal feed"  />
+</p></p>
+<p>The platform has been running smoothly for 18 months, and from an operational point of view, we love it:</p>
+<ul>
+<li>The scalability of the platform allowed us to not mind anymore about the performance of each rule: we can add our Yara rules quite freely instead of cherry-picking and evaluating carefully each addition.</li>
+<li>SQS handles the whole retry mechanism.</li>
+<li>Adding a new dissector is as easy as plugging a new Lambda function to the <a href="https://aws.amazon.com/sns/" target="_blank" rel="noopener">Amazon Simple Notification Service (SNS)</a> topic.</li>
+<li>Everything is decoupled, it is easy to update one part without touching the rest.</li>
+<li>Each new release of libyara increases its performance and it is directly correlated to the execution duration&rsquo;s average.</li>
+<li>Everything is instrumented, we learned to love the <a href="https://aws.amazon.com/console/" target="_blank" rel="noopener">AWS Monitoring Console</a>.</li>
+</ul>
+<h2 id="performance-stats">Performance Stats <a href="#performance-stats" class="anchor">🔗</a></h2><p>For those who like numbers, here is a screenshot of the activity of the last 6 months:</p>
+<p><p class="markdown-image">
+  <img src="/images/36e700b5eb8b36a40085e88a7ba14eac19aba702.png" alt="Invocations, duration, concurrent execs, and error rate"  />
+</p></p>
+<p>On average:</p>
+<ul>
+<li>A batch of samples is scanned in less than 30s</li>
+<li>There are always 45 Lambda functions running at any given time</li>
+<li>97% of the executions are successful</li>
+<li>We send 150 samples per minute (before deduplication) to dissectors</li>
+</ul>
+<h1 id="cobaltstrike">CobaltStrike <a href="#cobaltstrike" class="anchor">🔗</a></h1><p><p class="markdown-image">
+  <img src="/images/817e356268d1e7620ee8746d77fa5aee336028bc.png" alt="Mailbox full of BEACONs"  />
+</p></p>
+<p>We are using <a href="https://github.com/Sentinel-One/CobaltStrikeParser" target="_blank" rel="noopener">CobaltStrikeParser</a> from <a href="https://www.sentinelone.com/" target="_blank" rel="noopener">Sentinel One</a> to parse the beacons, then we are sending the JSON output to our Splunk instance.</p>
+<p>There are two uses of this data:</p>
+<ul>
+<li>Threat Hunting: tracking some Threat Actors</li>
+<li>Proactive protection: adding proactively the IOC to a watchlist in our scope</li>
+</ul>
+<p>For Threat Hunting perspectives, we implement alerting for things like:</p>
+<ul>
+<li>Specific watermark identifiers</li>
+<li>Patterns in the C2 domain</li>
+<li>Non-standard values for some fields</li>
+<li>Use of some options or specific malleable profile</li>
+</ul>
+<p>Regarding proactive Defense, there is currently no automatic pipeline to push the IOC into a WatchList/DenyList for one reason: it is not uncommon to see trolling BEACONs using legitimate and &ldquo;assumed safe&rdquo; domains. To mitigate that, we plan to have a kind of Slack/Mattermost bot that will make us approve each entry seamlessly.</p>
+
+    </div>
+
+    
+    
+    
+
+</section>
+
+
+    </main>
+    
+    <footer id="footer">
+    
+        <div id="social">
+
+
+    <a class="symbol" href="https://github.com/airbus-cert" rel="me" target="_blank">
+        
+        <svg fill="#bbbbbb" width="28" height="28"  viewBox="0 0 72 72" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    
+    <title>Github</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Social-Icons---Rounded-Black" transform="translate(-264.000000, -939.000000)">
+            <g id="Github" transform="translate(264.000000, 939.000000)">
+                <path d="M8,72 L64,72 C68.418278,72 72,68.418278 72,64 L72,8 C72,3.581722 68.418278,-8.11624501e-16 64,0 L8,0 C3.581722,8.11624501e-16 -5.41083001e-16,3.581722 0,8 L0,64 C5.41083001e-16,68.418278 3.581722,72 8,72 Z" id="Rounded" fill="#bbbbbb"></path>
+                <path d="M35.9985,13 C22.746,13 12,23.7870921 12,37.096644 C12,47.7406712 18.876,56.7718301 28.4145,59.9584121 C29.6145,60.1797862 30.0525,59.4358488 30.0525,58.7973276 C30.0525,58.2250681 30.0315,56.7100863 30.0195,54.6996482 C23.343,56.1558981 21.9345,51.4693938 21.9345,51.4693938 C20.844,48.6864054 19.2705,47.9454799 19.2705,47.9454799 C17.091,46.4500754 19.4355,46.4801943 19.4355,46.4801943 C21.843,46.6503662 23.1105,48.9634994 23.1105,48.9634994 C25.2525,52.6455377 28.728,51.5823398 30.096,50.9649018 C30.3135,49.4077535 30.9345,48.3460615 31.62,47.7436831 C26.2905,47.1352808 20.688,45.0691228 20.688,35.8361671 C20.688,33.2052792 21.6225,31.0547881 23.1585,29.3696344 C22.911,28.7597262 22.0875,26.3110578 23.3925,22.9934585 C23.3925,22.9934585 25.4085,22.3459017 29.9925,25.4632101 C31.908,24.9285993 33.96,24.6620468 36.0015,24.6515052 C38.04,24.6620468 40.0935,24.9285993 42.0105,25.4632101 C46.5915,22.3459017 48.603,22.9934585 48.603,22.9934585 C49.9125,26.3110578 49.089,28.7597262 48.8415,29.3696344 C50.3805,31.0547881 51.309,33.2052792 51.309,35.8361671 C51.309,45.0917119 45.6975,47.1292571 40.3515,47.7256117 C41.2125,48.4695491 41.9805,49.9393525 41.9805,52.1877301 C41.9805,55.4089489 41.9505,58.0067059 41.9505,58.7973276 C41.9505,59.4418726 42.3825,60.1918338 43.6005,59.9554002 C53.13,56.7627944 60,47.7376593 60,37.096644 C60,23.7870921 49.254,13 35.9985,13" fill="#FFFFFF"></path>
+            </g>
+        </g>
+    </g>
+</svg>
+    </a>
+
+
+</div>
+
+    
+
+    <div class="copyright">
+    
+        
+    
+    </div>
+
+    
+      <div class="powerby">
+        Powered by <a href='http://www.gohugo.io/'>Hugo</a> Theme By <a href='https://github.com/nodejh/hugo-theme-cactus-plus'>nodejh</a>
+      </div>
+    
+</footer>
+
+
+
+  </body>
+</html>

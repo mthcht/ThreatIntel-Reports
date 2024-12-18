@@ -1,1 +1,1 @@
-[Link to the article](http://blog.morphisec.com/fin7-attacks-restaurant-industry)
+[Link to the article](https://blog.morphisec.com/fin7-attacks-restaurant-industry)

@@ -1,1 +1,1 @@
-[Link to the article](https://unit42.paloaltonetworks.com/solarstorm-supernova/)
+[Link to the article](https://unit42.paloaltonetworks.com/solarstorm-supernova)

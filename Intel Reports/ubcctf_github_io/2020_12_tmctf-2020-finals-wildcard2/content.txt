@@ -1,0 +1,316 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>[TrendMicro CTF 2020 Finals] Wildcard-2: Yara exfiltration</title>
+    <link rel="stylesheet" href="/assets/css/styles.css">
+    <meta name="image" property="og:image" content="/favicon.png">
+    <meta name="description" property="og:description" content="CTF Team at the University of British Columbia">
+    <link rel="shortcut icon" type="image/png" href="/favicon.png">
+    <link rel="alternate" type="application/atom+xml" href="/feed.xml" title="CTF @ UBC"/>
+    <link rel="me" href="https://mastodon.social/@maplebaconctf">
+    <link href="https://fonts.googleapis.com/css?family=Inconsolata:700|Overpass+Mono|Lato|Cantarell" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.15.3/dist/katex.min.css" crossorigin="anonymous">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js" crossorigin="anonymous"
+            onload='renderMathInElement(document.body, {delimiters: [
+                    {left: "$$", right: "$$", display: true},
+                    {left: "\\(", right: "\\)", display: false},
+                    {left: "\\[", right: "\\]", display: true},
+                    {left: "$", right: "$", display: false}
+            ]});'>
+    </script>
+    <!-- Global site tag (gtag.js) - Google Analytics -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=UA-180688592-1"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'UA-180688592-1');
+    </script>
+  </head>
+  <body>
+    <main>
+      <header>
+  <nav>
+    <a href="/about">About</a>
+    <a href="/getting_started">Getting Started</a>
+    <a href="/blog">Blog</a>
+    <a href="/members">Members</a>
+    <a href="/challenge">Challenges</a>
+    <!-- <a href="https://ctf.maplebacon.org" >maplectf_2023</a> -->
+  </nav>
+  <div class="logo">
+    <a href="/">
+      <img src="/assets/images/logo.svg">
+    </a>
+  </div>
+  <div class="title-container">
+    <div class="title"><a href="/teamname"><span>Maple Bacon</span></a></div>
+    <div class="subtitle">
+      <span>
+        CTF Team at the University of British Columbia
+      </span>
+    </div>
+  </div>
+</header>
+
+      <div class="content">
+        <h1>[TrendMicro CTF 2020 Finals] Wildcard-2: Yara exfiltration</h1>
+<p>
+  22 Dec 2020
+  
+  by <a href="/authors/rctcwyvrn/">Arctic</a>
+  <!-- ^^ this jekyll is all on one line so commas format properly -->
+</p>
+<div class="post">
+<p>Maple Bacon qualified and participated in the TrendMicro CTF finals and placed a solid 5th place. One of the challenges used a popular malware analysis/antivirus tool called <code class="language-plaintext highlighter-rouge">yara</code> which was quite fun, so here’s a writeup.</p>
+
+<p>Note: I almost never touch these sorts of binary problems, but I have some experience with yara so I took a stab at it. Bear with me when I explain obvious things :)</p>
+
+<h1 id="a-quick-primer-on-yara">A quick primer on yara</h1>
+<p>What is <a href="https://github.com/VirusTotal/yara">yara</a>? Yara is a tool developed by <a href="https://www.virustotal.com/gui/">VirusTotal</a>, a malware detection service which combines some custom analysis tools with many many third party antivirus tools.</p>
+
+<p>Yara is a static analysis tool that works sorta like regex, but with the goal of identifying malware in mind. So like regex, yara lets you write rules and will tell you if a file matches the given rule.</p>
+
+<p>Here’s an example rule, meant for detecting the <code class="language-plaintext highlighter-rouge">silent_banker</code> malware family</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>rule silent_banker : banker
+{
+    meta:
+        description = "This is just an example"
+        threat_level = 3
+        in_the_wild = true
+
+    strings:
+        $a = {6A 40 68 00 30 00 00 6A 14 8D 91}
+        $b = {8D 4D B0 2B C1 83 C0 27 99 6A 4E 59 F7 F9}
+        $c = "UVODFRYSIHLNWPEJXQZAKCBGMT"
+
+    condition:
+        $a or $b or $c
+}
+</code></pre></div></div>
+
+<h1 id="the-challenge">The challenge</h1>
+
+<p>The challenge is no longer accessible, so some of the details may be a bit wrong, but here are the important details</p>
+<ul>
+  <li>The challenge presents an api where we can submit a rule file. The server then generates a new binary, runs the given rule, and returns the result (hit/no hit)</li>
+  <li>There are limitations on the rule files we can send:
+    <ul>
+      <li>There can only be one rule in the file</li>
+      <li>It must be a yara text file, not a compiled one</li>
+      <li>The file must be less than 5kb</li>
+    </ul>
+  </li>
+</ul>
+
+<p>The binary generation works by filling in the following template with garbage and the gold_dust variable</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#include</span> <span class="cpf">&lt;stdio.h&gt;</span><span class="cp">
+#include</span> <span class="cpf">&lt;stdlib.h&gt;</span><span class="cp">
+</span>
+<span class="c1">// GARBAGE, Encoded FLAG and KEY</span>
+<span class="kt">char</span> <span class="n">gold_dust</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{};</span> <span class="c1">// &lt;-- gets filled before compilation</span>
+
+<span class="c1">// &lt;Garbage functions 1&gt;</span>
+
+<span class="kt">char</span> <span class="o">*</span><span class="nf">decode</span><span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="n">enc</span><span class="p">,</span> <span class="kt">int</span> <span class="n">enc_size</span><span class="p">,</span> <span class="kt">char</span> <span class="o">*</span><span class="n">key</span><span class="p">,</span> <span class="kt">int</span> <span class="n">key_size</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">dec</span><span class="p">;</span>
+
+    <span class="n">dec</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">malloc</span><span class="p">(</span><span class="n">enc_size</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">dec</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="k">return</span> <span class="nb">NULL</span><span class="p">;</span>
+    <span class="p">}</span>
+
+    <span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">enc_size</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">dec</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">=</span> <span class="n">enc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">^</span> <span class="n">key</span><span class="p">[</span><span class="n">i</span> <span class="o">%</span> <span class="n">key_size</span><span class="p">];</span>
+    <span class="p">}</span>
+    
+    <span class="n">dec</span><span class="p">[</span><span class="n">enc_size</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+    <span class="k">return</span> <span class="n">dec</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// &lt;Garbage functions 2&gt;</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">(</span><span class="kt">int</span> <span class="n">argc</span><span class="p">,</span> <span class="kt">char</span> <span class="o">**</span><span class="n">argv</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="kt">char</span> <span class="o">*</span><span class="n">flag</span><span class="p">;</span>
+
+    <span class="c1">// &lt;Garbage code&gt;</span>
+
+    <span class="n">flag</span> <span class="o">=</span> <span class="n">decode</span><span class="p">(</span><span class="n">gold_dust</span> <span class="o">+</span> <span class="o">&lt;</span><span class="n">flag</span> <span class="n">offset</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">&lt;</span><span class="n">flag</span> <span class="n">len</span><span class="o">&gt;</span><span class="p">,</span> <span class="n">gold_dust</span> <span class="o">+</span> <span class="o">&lt;</span><span class="n">key</span> <span class="n">offset</span><span class="o">&gt;</span><span class="p">,</span> <span class="o">&lt;</span><span class="n">key</span> <span class="n">len</span><span class="o">&gt;</span><span class="p">);</span>
+    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">flag</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="k">return</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+    <span class="p">}</span>
+
+    <span class="n">printf</span><span class="p">(</span><span class="s">"FLAG is TMCTF{ %s }</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">flag</span><span class="p">);</span>
+    <span class="n">free</span><span class="p">(</span><span class="n">flag</span><span class="p">);</span>
+
+    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="c1">// &lt;Garbage functions 3&gt;</span>
+</code></pre></div></div>
+
+<p>where garbage functions are generated with</p>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">generate_garbage_function</span><span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="n">count</span><span class="p">):</span>
+    <span class="n">template</span> <span class="o">=</span> <span class="s">"void garbage_func_%s_%d() { return; }"</span>
+    <span class="k">return</span> <span class="s">'</span><span class="se">\n</span><span class="s">'</span><span class="p">.</span><span class="n">join</span><span class="p">([</span><span class="n">template</span> <span class="o">%</span> <span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span> <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">count</span><span class="p">)])</span>
+</code></pre></div></div>
+
+<p>and garbage code is generated with</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">generate_garbage_code</span><span class="p">(</span><span class="n">min_size</span><span class="p">,</span> <span class="n">max_size</span><span class="p">):</span>
+    <span class="n">count</span> <span class="o">=</span> <span class="n">generate_random_num</span><span class="p">(</span><span class="n">min_size</span><span class="p">,</span> <span class="n">max_size</span><span class="p">)</span>
+    <span class="k">return</span> <span class="s">'__asm__("{}");'</span><span class="p">.</span><span class="nb">format</span><span class="p">(</span><span class="s">'nop;'</span><span class="o">*</span><span class="n">count</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>The most important part for us is the <code class="language-plaintext highlighter-rouge">gold_dust</code> buffer, where the flag will be encoded.
+It’s generated by:</p>
+<ol>
+  <li>Generating a random key, with random length</li>
+  <li>Encrypting the flag with repeating XOR</li>
+  <li>Creating a random buffer with a length between 256 and 512 kb</li>
+  <li>Putting encrypted flag and key at random offsets in the buffer</li>
+</ol>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">encode_flag</span><span class="p">(</span><span class="n">flag</span><span class="p">,</span> <span class="n">key</span><span class="p">):</span>
+    <span class="k">return</span> <span class="nb">bytes</span><span class="p">([</span><span class="n">flag</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="o">^</span> <span class="n">key</span><span class="p">[</span><span class="n">i</span><span class="o">%</span><span class="nb">len</span><span class="p">(</span><span class="n">key</span><span class="p">)]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">flag</span><span class="p">))])</span>
+</code></pre></div></div>
+
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">def</span> <span class="nf">generate_gold_dust</span><span class="p">(</span><span class="n">garbage</span><span class="p">,</span> <span class="n">flag</span><span class="p">,</span> <span class="n">flag_offset</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">key_offset</span><span class="p">):</span>
+    <span class="n">flag_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span>
+    <span class="n">key_size</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+    <span class="n">gold_dust</span> <span class="o">=</span> <span class="nb">bytearray</span><span class="p">(</span><span class="n">garbage</span><span class="p">)</span>
+    <span class="n">gold_dust</span><span class="p">[</span><span class="n">flag_offset</span><span class="p">:</span> <span class="n">flag_offset</span><span class="o">+</span><span class="n">flag_size</span><span class="p">]</span> <span class="o">=</span> <span class="n">flag</span>
+    <span class="n">gold_dust</span><span class="p">[</span><span class="n">key_offset</span><span class="p">:</span> <span class="n">key_offset</span><span class="o">+</span><span class="n">key_size</span><span class="p">]</span> <span class="o">=</span> <span class="n">key</span>
+    <span class="k">return</span> <span class="nb">bytes</span><span class="p">(</span><span class="n">gold_dust</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>Now that we have all that set up, you might be wondering ok what else? We can submit yara rules to random binaries, there has to be something else right?</p>
+
+<p>No, there’s nothing else. We need to exfiltrate the flag just from what’s been mentioned.</p>
+
+<ul>
+  <li>A flag that is only ever encrypted and cryptographically unrecognizable from the buffer that surrounds it and the key.</li>
+  <li>Exfiltrating information one bit at a time.</li>
+  <li>There’s no information kept between two rule runs, with completely new randomly generated binaries for each run.</li>
+</ul>
+
+<p>At this point it was 2am, so I went to bed thinking this challenge had to be impossible.</p>
+
+<p>Here’s one of the generated binaries (though I messed with the flag encoding a bit so don’t try to actually run the solution on it)
+<a href="/assets/code/tmctf2020-finals/wildcard2/tortoise.c">tortoise.c</a></p>
+
+<h1 id="the-solution">The solution</h1>
+
+<p>My first instinct was to try and figure out a way of guessing the flag and then generating a rule that pattern matches against the gold_dust, but the massive size, randomized data, and the fact that the flag is encrypted made that approach completely impossible.</p>
+
+<p>Here’s a better way of exfiltrating the flag, one byte at a time</p>
+<ol>
+  <li>Figure out how to read the ith byte of the plaintext flag</li>
+  <li>Generate 255 rules where it only matches if the ith byte matches chr(b)</li>
+  <li>Submit them all, and see which one hits</li>
+</ol>
+
+<p>So steps 2 and 3 are easy, step 1 is the hard part.</p>
+
+<p>How can we read the unencrypted flag? To read the first byte of the flag we need the following</p>
+<ul>
+  <li>The address of the flag in the gold_dust</li>
+  <li>The address of the key in the gold_dust</li>
+</ul>
+
+<h2 id="how-can-we-get-these-two-addresses">How can we get these two addresses?</h2>
+
+<p>In the main function we see that the generated binaries have a call to <code class="language-plaintext highlighter-rouge">decode</code>, which has the two arguments that we want. How can we find where the call to decode is?</p>
+
+<p>Well we have a very helpful set of “garbage code” right before the call to decode, so we know that the assembly in that area must be</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>90 - nop
+90 - nop
+90 - nop
+... &lt;hundreds of nops&gt;
+90 - nop
+90 - nop
+C7 44 24 0C &lt;key len&gt;    - loading the key_size arg
+C7 44 24 08 &lt;key_addr&gt;   - loading the key arg
+C7 44 24 04 &lt;flag len&gt;   - loading the flag_size arg
+C7 44 24 &lt;flag_addr&gt;     - loading the flag arg
+E8 &lt;relative addr&gt;       - call to decode
+</code></pre></div></div>
+
+<p>So we can make a yara string <code class="language-plaintext highlighter-rouge">$nops = {90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 C7 44 24 0c}</code>, which will match this pattern</p>
+
+<p>With the yara <code class="language-plaintext highlighter-rouge">@</code> and <code class="language-plaintext highlighter-rouge">[1]</code> operators we can get the address where the rule matched for the first time. Since this pattern is so distinct we can basically guarantee that this rule will only hit at the desired location. There are 16 <code class="language-plaintext highlighter-rouge">90</code>’s in the rule, so <code class="language-plaintext highlighter-rouge">@nops[1] + 16</code> will be the start of the argument loading. Using the <code class="language-plaintext highlighter-rouge">uint32</code> yara function we can read a 4 byte address from the binary at a given address. So to read the addresses we can do</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>uint32(@nops[1] + 16 + 8 + 8 + 8 + 3)
+</code></pre></div></div>
+<p>for the flag address and</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>uint32(@nops[1] + 16 + 8 + 4) 
+</code></pre></div></div>
+<p>for the key address</p>
+
+<p>Now you would think we could then call <code class="language-plaintext highlighter-rouge">uint8(uint32(@nops[1] + 16 + 8 + 8 + 8 + 3))</code> to read the first encrypted byte, but that doesn’t work because the address in the argument is a virtual address. It’s the address where <code class="language-plaintext highlighter-rouge">gold_dust</code> variable in <code class="language-plaintext highlighter-rouge">.data</code> will be loaded, not the raw address where the actual data is in the binary.</p>
+
+<p>The binary will load <code class="language-plaintext highlighter-rouge">.data</code> to the executable’s <code class="language-plaintext highlighter-rouge">image_base</code> + the relative virtual address for <code class="language-plaintext highlighter-rouge">.data</code>, so what we can do is take our virtual address for <code class="language-plaintext highlighter-rouge">flag</code> and <code class="language-plaintext highlighter-rouge">key</code>, subtract the image base and subtract the RVA, leaving just the <code class="language-plaintext highlighter-rouge">flag_offset</code> and <code class="language-plaintext highlighter-rouge">key_offset</code>. Then we can just add on the raw offset to <code class="language-plaintext highlighter-rouge">.data</code> in the binary and we get an address which we can read flag/key data from. This can be easily done with the “pe” module from module, which pulls out the <code class="language-plaintext highlighter-rouge">image_base</code>, RVA of <code class="language-plaintext highlighter-rouge">.data</code>, and the raw data offset.</p>
+
+<p>So with that we can read a single byte at those two locations, xor them, and then generate rules that check if that result is a given byte. Then all we need to do is generate all those rules for each index of the flag.</p>
+
+<p>We can exfiltrate the flag length by sending rules to check the value of <code class="language-plaintext highlighter-rouge">uint32(@nops[1] + 16 + 8 + 8 + 4)</code>, which is the <code class="language-plaintext highlighter-rouge">flag_size</code> argument for <code class="language-plaintext highlighter-rouge">decode</code>. Remember we also need to modulo cycle the key using the <code class="language-plaintext highlighter-rouge">key_size</code> variable, which we can read using <code class="language-plaintext highlighter-rouge">uint32(@nops[1] + 16 + 4)</code>.</p>
+
+<p>Here is the final rule template</p>
+<div class="language-python highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">template</span> <span class="o">=</span> <span class="s">"""import "pe"
+rule nopss {
+    strings:
+        $nops = {90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 C7 44 24 0c}
+    condition:
+        %s == 
+            uint8(
+                uint32(@nops[1] + 16 + 8 + 8 + 8 + 3) 
+                - pe.sections[1].virtual_address 
+                - pe.image_base + pe.sections[1].raw_data_offset
+                + %d
+            ) ^ 
+            uint8(
+                uint32(@nops[1] + 16 + 8 + 4) 
+                - pe.sections[1].virtual_address 
+                - pe.image_base + pe.sections[1].raw_data_offset
+                + (%d %% uint32(@nops[1] + 16 + 4))
+            )
+}"""</span>
+
+<span class="n">flag_size</span> <span class="o">=</span> <span class="mi">10</span>
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">flag_size</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">guess</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">32</span><span class="p">,</span><span class="mi">127</span><span class="p">):</span>
+        <span class="n">ch</span> <span class="o">=</span> <span class="nb">chr</span><span class="p">(</span><span class="n">guess</span><span class="p">)</span>
+        <span class="n">rule</span> <span class="o">=</span> <span class="n">template</span> <span class="o">%</span> <span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="nb">hex</span><span class="p">(</span><span class="n">guess</span><span class="p">)),</span> <span class="n">i</span><span class="p">,</span> <span class="n">i</span><span class="p">)</span>
+</code></pre></div></div>
+
+<p>And boom, flag!
+<code class="language-plaintext highlighter-rouge">TMCTF{16d1eb767f}</code></p>
+
+<p>Yara ends up being used as a simple string/hex search tool in the rare CTF challenge where it appears, but this one was definitely a lot more complicated and fun to figure out. A cool challenge for sure and one that shows off more of what yara can do.</p>
+
+</div>
+
+      </div>
+      <footer class="section">
+  <a href="https://discord.gg/keeTZsmfVA" target="_blank" rel="noopener noreferrer">discord</a>
+  &middot;
+  <a href="https://ctftime.org/team/73723" target="_blank" rel="noopener noreferrer">ctftime</a>
+  &middot;
+  <a href="https://twitter.com/maplebaconctf" target="_blank" rel="noopener noreferrer">twitter</a>
+</footer>
+
+    </main>
+  </body>
+</html>

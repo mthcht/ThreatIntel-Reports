@@ -1,1 +1,1 @@
-[Link to the article](https://securelist.com/operation-daybreak/75100/)
+[Link to the article](https://securelist.com/operation-daybreak/75100)

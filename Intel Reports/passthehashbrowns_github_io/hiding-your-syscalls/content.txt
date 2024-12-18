@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8">
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Hiding Your Syscalls | PassTheHashBrowns</title>
+<meta name="generator" content="Jekyll v3.9.3" />
+<meta property="og:title" content="Hiding Your Syscalls" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Hiding your syscalls" />
+<meta property="og:description" content="Hiding your syscalls" />
+<link rel="canonical" href="https://passthehashbrowns.github.io/hiding-your-syscalls" />
+<meta property="og:url" content="https://passthehashbrowns.github.io/hiding-your-syscalls" />
+<meta property="og:site_name" content="PassTheHashBrowns" />
+<meta property="og:type" content="article" />
+<meta property="article:published_time" content="2021-06-09T00:00:00+00:00" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Hiding Your Syscalls" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"BlogPosting","dateModified":"2021-06-09T00:00:00+00:00","datePublished":"2021-06-09T00:00:00+00:00","description":"Hiding your syscalls","headline":"Hiding Your Syscalls","mainEntityOfPage":{"@type":"WebPage","@id":"https://passthehashbrowns.github.io/hiding-your-syscalls"},"url":"https://passthehashbrowns.github.io/hiding-your-syscalls"}</script>
+<!-- End Jekyll SEO tag -->
+
+    <link rel="preconnect" href="https://fonts.gstatic.com">
+    <link rel="preload" href="https://fonts.googleapis.com/css?family=Open+Sans:400,700&display=swap" as="style" type="text/css" crossorigin>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#157878">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="stylesheet" href="/assets/css/style.css?v=01efd701702c3247b69e565d1da2e2fab7a9f249">
+    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+
+<!-- Setup Google Analytics -->
+
+  <script>
+    (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+    (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+            m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+        })(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+    ga('create', 'UA-198849713-1', 'auto');
+    ga('send', 'pageview');
+  </script>
+
+
+
+<!-- You can set your favicon here -->
+<!-- link rel="shortcut icon" type="image/x-icon" href="/favicon.ico" -->
+
+<!-- end custom head snippets -->
+
+  </head>
+  <body>
+    <a id="skip-to-content" href="#content">Skip to the content.</a>
+
+    <header class="page-header" role="banner">
+      <h1 class="project-name">Hiding Your Syscalls</h1>
+      <h2 class="project-tagline">Musings of a mediocre red teamer and worse programmer You can find me on twitter @passthehashbrwn</h2>
+      
+      
+    </header>
+
+    <main id="content" class="main-content" role="main">
+      <h1 id="hiding-your-syscalls">Hiding your syscalls</h1>
+
+<p>I’ve previously blogged about using Frida to detect direct syscalls by looking for any syscall instructions originating from outside of NTDLL. After writing some basic detections for that purpose, I was curious about how easy it would be to bypass those detections. The answer was very!</p>
+
+<p>I’d like to note up top here that in this blog I’ll just be bypassing detections that I wrote myself. To the best of my knowledge EDR vendors aren’t really alerting on direct syscalls yet.</p>
+
+<p>You can find all of the source code for this blog post <a href="https://github.com/passthehashbrowns/hiding-your-syscalls">here.</a></p>
+
+<h2 id="basic-detection-methodology">Basic detection methodology</h2>
+
+<p>I’ll briefly recap the detections that I used in the previous post to detect the use of direct syscalls. All syscalls in NTDLL follow a basic structure:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">mov</span> <span class="n">r10</span><span class="p">,</span> <span class="n">rcx</span>
+<span class="n">mov</span> <span class="n">eax</span><span class="p">,</span> <span class="o">*</span><span class="n">syscall</span> <span class="n">number</span><span class="o">*</span>
+<span class="n">syscall</span>
+<span class="n">ret</span>
+</code></pre></div></div>
+
+<p>So in the previous post I described two detections here. The first is that we could look for the “mov r10,rcx” instruction and then inspect the next instruction to determine if it was a syscall, since this allowed me to inspect the syscall number. I’ve since scrapped this idea since we can just inspect the EAX register and pull the syscall number out of there when we find a syscall. Additionally, this is an incredibly easy detection to bypass. Instead of moving the value in the R10 register into the RCX register, we could do the following instead:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">mov</span> <span class="n">r11</span><span class="p">,</span> <span class="n">r10</span>
+<span class="n">mov</span> <span class="n">rcx</span><span class="p">,</span> <span class="n">r11</span>
+</code></pre></div></div>
+
+<p>And we could expand that into an incredibly complicated series of instructions if we wanted to. The same goes for detecting based on placing a syscall number into EAX. Instead of moving the syscall into EAX, we could copy the above and just add an extra step. The OS doesn’t really care so long as there’s a syscall number in eax when it transitions to the kernel.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">mov</span> <span class="n">r11</span><span class="p">,</span> <span class="o">*</span><span class="n">syscall</span> <span class="n">number</span><span class="o">*</span>
+<span class="n">mov</span> <span class="n">eax</span><span class="p">,</span> <span class="n">r11</span>
+</code></pre></div></div>
+
+<p>I actually think this is kind of cool to bypass because it’s reminiscent of bypassing the signature based detection from days of anti-virus past.</p>
+
+<p>Since we can’t rely on this, we can instead target the one instruction that all syscalls must call by definition: syscall! We also need to look out for the <strong>int 2eh</strong> instruction which is the legacy way of invoking a syscall, but it’s the same logic.</p>
+
+<p>As I mentioned up top, we can attempt to detect this by looking for any syscall instructions that originate from outside of NTDLL’s address space. I tested this detection against two types of programs: one that reads NTDLL from disk and dynamically resolves syscalls, and one that has a syscall table embedded at compile time (a la Syswhispers). In both cases I was able to detect the use of manual system calls.</p>
+
+<h2 id="detection-on-disk">Detection on disk</h2>
+
+<p>One thing I didn’t talk about in the last blog post was trying to determine if an executable is using direct syscalls while it’s sitting on disk. At the time I was more interested in identifying this behavior in-memory, but there’s many situations where you may have a suspicious binary on disk. Whether that’s a PE/shellcode carved out of memory or an executable dropped to disk, we can take an identical approach as above to identify direct syscalls in use. We can do this just with objdump and grep in the case of a plain PE.</p>
+
+<p>I’ve got a compiled copy of Dumpert on disk to test this with.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">objdump</span> <span class="o">--</span><span class="n">disassemble</span> <span class="o">-</span><span class="n">M</span> <span class="n">intel</span> <span class="n">Outflank</span><span class="o">-</span><span class="n">Dumpert</span><span class="p">.</span><span class="n">exe</span> <span class="o">|</span> <span class="n">grep</span> <span class="s">"syscall"</span>
+</code></pre></div></div>
+
+<p>And the output.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="mi">140013438</span><span class="o">:</span>   <span class="mi">0</span><span class="n">f</span> <span class="mo">05</span>                   <span class="n">syscall</span>
+<span class="mi">140013443</span><span class="o">:</span>   <span class="mi">0</span><span class="n">f</span> <span class="mo">05</span>                   <span class="n">syscall</span>
+<span class="mi">14001344</span><span class="n">e</span><span class="o">:</span>   <span class="mi">0</span><span class="n">f</span> <span class="mo">05</span>                   <span class="n">syscall</span>
+<span class="p">[</span><span class="n">truncated</span><span class="p">]</span>
+<span class="mi">14001356</span><span class="n">c</span><span class="o">:</span>   <span class="mi">0</span><span class="n">f</span> <span class="mo">05</span>                   <span class="n">syscall</span>
+<span class="mi">140013577</span><span class="o">:</span>   <span class="mi">0</span><span class="n">f</span> <span class="mo">05</span>                   <span class="n">syscall</span>
+<span class="mi">140013582</span><span class="o">:</span>   <span class="mi">0</span><span class="n">f</span> <span class="mo">05</span>                   <span class="n">syscall</span>
+</code></pre></div></div>
+
+<p>I ran this same command against a few other binaries to check for massive false positives. I checked calc, notepad, Chrome, etc. and none of them triggered this behavior.</p>
+
+<p>I was also curious whether or not this would work on a project using stubs generated by Syswhispers so I went ahead and compiled a project using the files from the example-output folder in the Syswhispers2 repo and a main function which used the code from the <a href="https://github.com/jthuraisamy/SysWhispers2#before-and-after-example-of-classic-createremotethread-dll-injection">CreateRemoteThread</a> injection example.</p>
+
+<p><img src="../images/hiding_your_syscalls/Untitled.png" alt="../images/hiding_your_syscalls/Untitled.png" /></p>
+
+<p>And it looks good. I think that all things considered this is actually a pretty free win with some pretty boring static analysis.</p>
+
+<p>We can also detect “int 2eh” invocations in the same manner to cover all the bases.</p>
+
+<p><img src="../images/hiding_your_syscalls/Untitled%201.png" alt="../images/hiding_your_syscalls/Untitled%201.png" /></p>
+
+<h2 id="back-to-memory">Back to memory</h2>
+
+<p>Anyways back to detecting syscalls at runtime since on-disk detection does us no good with fileless malware. My methodology in the last post was to look for any syscall instructions and then check if they originated from within the bounds of NTDLL. If it didn’t originate from NTDLL then it’s very likely that it was invoked manually. I’m sure there are exceptions to this, but since you’re likely running this sort of detection against a suspected bad file we can take some liberties in this regard.</p>
+
+<h2 id="bypassing-this-detection">Bypassing this detection</h2>
+
+<p>When an EDR hooks a function, they often replace the first instruction with a JMP instruction to their own code. So if an EDR were to hook a syscall in NTDLL, it would look like this:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">jmp</span> <span class="o">*</span><span class="n">address</span> <span class="n">of</span> <span class="n">EDR</span><span class="err">'</span><span class="n">s</span> <span class="n">function</span><span class="o">*</span>
+<span class="n">mov</span> <span class="n">eax</span><span class="p">,</span> <span class="o">*</span><span class="n">syscall</span> <span class="n">number</span><span class="o">*</span>
+<span class="n">syscall</span>
+<span class="n">ret</span>
+</code></pre></div></div>
+
+<p>So if we follow this model of hooking, there’s a nice syscall instruction just sitting there within NTDLL!</p>
+
+<p>Additionally, I have yet to see an EDR that hooks every function in NTDLL. For reference, you can check out <a href="https://github.com/Mr-Un1k0d3r/EDRs">Mr-Un1k0d3r’s EDR repository</a>, which contains a list of the NTDLL functions that are hooked by several EDR vendors. There’s very little reason to hook every function, as only a subset of them are traditionally used by malware.</p>
+
+<p>So in order for there to not be a clean syscall somewhere, the EDR would have to hook every function in NTDLL AND clobber the entire function.</p>
+
+<p>My theory was that in order to bypass the detection we could simply grab an unhooked syscall stub (or just any clean syscall instruction) from NTDLL, get the address of the actual <strong>syscall</strong> instruction, and patch a jump to it into our malicious syscall so that our stub will now look as follows:</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">mov</span> <span class="n">r10</span><span class="p">,</span> <span class="n">rcx</span>
+<span class="n">mov</span> <span class="n">eax</span><span class="p">,</span> <span class="o">*</span><span class="n">syscall</span> <span class="n">number</span><span class="o">*</span>
+<span class="n">jmp</span> <span class="o">*</span><span class="n">address</span> <span class="n">of</span> <span class="n">legit</span> <span class="n">syscall</span> <span class="n">instruction</span><span class="o">*</span>
+<span class="n">ret</span>
+</code></pre></div></div>
+
+<h2 id="obfuscating-on-disk">Obfuscating on disk</h2>
+
+<p>Before I talk about implementing this I was curious whether or not this method would also help us avoid including syscall instructions in our binary. Since we’re just going to overwrite the syscall instruction anyways, we don’t need to have it in the stub. So we can just replace it with whatever to avoid having the syscall instruction show up in the disassembly.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">mov</span> <span class="n">r10</span><span class="p">,</span> <span class="n">rcx</span>
+<span class="n">mov</span> <span class="n">eax</span><span class="p">,</span> <span class="mi">55</span><span class="n">h</span>
+<span class="n">nop</span> <span class="c1">//where our syscall should be</span>
+<span class="n">ret</span>
+</code></pre></div></div>
+
+<p>The <strong>nop</strong> instruction will get replaced with a jmp at runtime so nothing will show up if we use the same objdump command as earlier.</p>
+
+<p><img src="../images/hiding_your_syscalls/Untitled%202.png" alt="../images/hiding_your_syscalls/Untitled%202.png" /></p>
+
+<p>I think if you’re dropping to disk it may actually be worth it to obfuscate your syscall instructions and reconstruct them at runtime even if you just replace the nop with a normal syscall instruction. I doubt that any EDR currently alerts on this but it seems like a free win to me.</p>
+
+<h2 id="implementation">Implementation</h2>
+
+<p>To implement this I took the Dumpert project and used that as a base. You could generate the necessary files using Syswhispers, but I used the files from Dumpert because it just has the plain syscall stubs embedded which offered slightly lower complexity. However the same thing could be done with a Syswhispers project by changing a few variables. (I ended up doing that after finishing this post, check out the section at the bottom)</p>
+
+<p>I used NtCreateFile as a proof of concept syscall since it creates a file that I can observe. To get the stub you’ll want to create a file named “Syscalls.asm” and add the following (assuming you’re on Windows 10):</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">.</span><span class="n">code</span>
+
+<span class="n">NtCreateFile10</span> <span class="n">proc</span>
+		<span class="n">mov</span> <span class="n">r10</span><span class="p">,</span> <span class="n">rcx</span>
+		<span class="n">mov</span> <span class="n">eax</span><span class="p">,</span> <span class="mi">55</span><span class="n">h</span>
+		<span class="n">syscall</span>
+		<span class="n">ret</span>
+<span class="n">NtCreateFile10</span> <span class="n">endp</span>
+
+<span class="n">end</span>
+</code></pre></div></div>
+
+<p>In order to include this file in Visual Studio you’ll want to select the project in the Solution Explorer, and then in the toolbar select Project &gt; Build Customizations and check “masm” then OK. Then in the Solution Explorer right click on Syscalls.asm and set the Item Type to “Microsoft Macro Assembler”. This should include your assembly into the build.</p>
+
+<p>The next few blocks of code are from this <a href="https://www.ired.team/offensive-security/defense-evasion/retrieving-ntdll-syscall-stubs-at-run-time?q=riv">post on ired.team</a> about resolving syscalls dynamically, with some slight modifications.</p>
+
+<p>In our header file.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="cp">#pragma once
+#include &lt;Windows.h&gt;
+#define STATUS_SUCCESS 0
+#define OBJ_CASE_INSENSITIVE 0x00000040L
+#define FILE_OVERWRITE_IF 0x00000005
+#define FILE_SYNCHRONOUS_IO_NONALERT 0x00000020
+</span><span class="k">typedef</span> <span class="n">LONG</span> <span class="n">KPRIORITY</span><span class="p">;</span>
+
+<span class="cp">#define InitializeObjectAttributes( i, o, a, r, s ) {    \
+      (i)-&gt;Length = sizeof( OBJECT_ATTRIBUTES );         \
+      (i)-&gt;RootDirectory = r;                            \
+      (i)-&gt;Attributes = a;                               \
+      (i)-&gt;ObjectName = o;                               \
+      (i)-&gt;SecurityDescriptor = s;                       \
+      (i)-&gt;SecurityQualityOfService = NULL;              \
+   }
+</span>
+<span class="k">typedef</span> <span class="k">struct</span> <span class="n">_UNICODE_STRING</span> <span class="p">{</span>
+	<span class="n">USHORT</span> <span class="n">Length</span><span class="p">;</span>
+	<span class="n">USHORT</span> <span class="n">MaximumLength</span><span class="p">;</span>
+	<span class="n">PWSTR</span>  <span class="n">Buffer</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">UNICODE_STRING</span><span class="p">,</span> <span class="o">*</span> <span class="n">PUNICODE_STRING</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="k">const</span> <span class="n">UNICODE_STRING</span><span class="o">*</span> <span class="n">PCUNICODE_STRING</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="k">struct</span> <span class="n">_OBJECT_ATTRIBUTES</span> <span class="p">{</span>
+	<span class="n">ULONG</span> <span class="n">Length</span><span class="p">;</span>
+	<span class="n">HANDLE</span> <span class="n">RootDirectory</span><span class="p">;</span>
+	<span class="n">PUNICODE_STRING</span> <span class="n">ObjectName</span><span class="p">;</span>
+	<span class="n">ULONG</span> <span class="n">Attributes</span><span class="p">;</span>
+	<span class="n">PVOID</span> <span class="n">SecurityDescriptor</span><span class="p">;</span>
+	<span class="n">PVOID</span> <span class="n">SecurityQualityOfService</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">OBJECT_ATTRIBUTES</span><span class="p">,</span> <span class="o">*</span> <span class="n">POBJECT_ATTRIBUTES</span><span class="p">;</span>
+
+<span class="k">typedef</span> <span class="k">struct</span> <span class="n">_IO_STATUS_BLOCK</span>
+<span class="p">{</span>
+	<span class="k">union</span>
+	<span class="p">{</span>
+		<span class="n">LONG</span> <span class="n">Status</span><span class="p">;</span>
+		<span class="n">PVOID</span> <span class="n">Pointer</span><span class="p">;</span>
+	<span class="p">};</span>
+	<span class="n">ULONG</span> <span class="n">Information</span><span class="p">;</span>
+<span class="p">}</span> <span class="n">IO_STATUS_BLOCK</span><span class="p">,</span> <span class="o">*</span> <span class="n">PIO_STATUS_BLOCK</span><span class="p">;</span>
+
+<span class="n">EXTERN_C</span> <span class="n">NTSTATUS</span> <span class="nf">NtCreateFile10</span><span class="p">(</span><span class="n">PHANDLE</span> <span class="n">FileHandle</span><span class="p">,</span> <span class="n">ACCESS_MASK</span> <span class="n">DesiredAccess</span><span class="p">,</span> <span class="n">POBJECT_ATTRIBUTES</span> <span class="n">ObjectAttributes</span><span class="p">,</span> <span class="n">PIO_STATUS_BLOCK</span> <span class="n">IoStatusBlock</span><span class="p">,</span> <span class="n">PLARGE_INTEGER</span> <span class="n">AllocationSize</span><span class="p">,</span> <span class="n">ULONG</span> <span class="n">FileAttributes</span><span class="p">,</span> <span class="n">ULONG</span> <span class="n">ShareAccess</span><span class="p">,</span> <span class="n">ULONG</span> <span class="n">CreateDisposition</span><span class="p">,</span> <span class="n">ULONG</span> <span class="n">CreateOptions</span><span class="p">,</span> <span class="n">PVOID</span> <span class="n">EaBuffer</span><span class="p">,</span> <span class="n">ULONG</span> <span class="n">EaLength</span><span class="p">);</span>
+
+<span class="n">NTSTATUS</span><span class="p">(</span><span class="o">*</span><span class="n">NtCreateFile</span><span class="p">)(</span>
+	<span class="n">PHANDLE</span> <span class="n">FileHandle</span><span class="p">,</span>
+	<span class="n">ACCESS_MASK</span> <span class="n">DesiredAccess</span><span class="p">,</span>
+	<span class="n">POBJECT_ATTRIBUTES</span> <span class="n">ObjectAttributes</span><span class="p">,</span>
+	<span class="n">PIO_STATUS_BLOCK</span> <span class="n">IoStatusBlock</span><span class="p">,</span>
+	<span class="n">PLARGE_INTEGER</span> <span class="n">AllocationSize</span><span class="p">,</span>
+	<span class="n">ULONG</span> <span class="n">FileAttributes</span><span class="p">,</span>
+	<span class="n">ULONG</span> <span class="n">ShareAccess</span><span class="p">,</span>
+	<span class="n">ULONG</span> <span class="n">CreateDisposition</span><span class="p">,</span>
+	<span class="n">ULONG</span> <span class="n">CreateOptions</span><span class="p">,</span>
+	<span class="n">PVOID</span> <span class="n">EaBuffer</span><span class="p">,</span>
+	<span class="n">ULONG</span> <span class="n">EaLength</span>
+	<span class="p">);</span>
+
+<span class="k">typedef</span> <span class="nf">void</span> <span class="p">(</span><span class="n">WINAPI</span><span class="o">*</span> <span class="n">_RtlInitUnicodeString</span><span class="p">)(</span>
+	<span class="n">PUNICODE_STRING</span> <span class="n">DestinationString</span><span class="p">,</span>
+	<span class="n">PCWSTR</span> <span class="n">SourceString</span>
+	<span class="p">);</span>
+</code></pre></div></div>
+
+<p>This defines some structs that we need to call NtCreateFile as well as our NtCreateFile function prototype.</p>
+
+<p>In our actual C file we’ll define a big ol’ block of variables within our main function.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">SIZE_T</span> <span class="n">bytesWritten</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">DWORD</span> <span class="n">oldProtection</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="n">HANDLE</span> <span class="n">file</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+<span class="n">DWORD</span> <span class="n">fileSize</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+<span class="n">DWORD</span> <span class="n">bytesRead</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+<span class="n">LPVOID</span> <span class="n">fileData</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+
+<span class="c1">// variables for NtCreateFile</span>
+<span class="n">OBJECT_ATTRIBUTES</span> <span class="n">oa</span><span class="p">;</span>
+<span class="n">HANDLE</span> <span class="n">fileHandle</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+<span class="n">NTSTATUS</span> <span class="n">status</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+<span class="n">UNICODE_STRING</span> <span class="n">fileName</span><span class="p">;</span>
+<span class="n">_RtlInitUnicodeString</span> <span class="n">RtlInitUnicodeString</span> <span class="o">=</span> <span class="p">(</span><span class="n">_RtlInitUnicodeString</span><span class="p">)</span>
+<span class="n">GetProcAddress</span><span class="p">(</span><span class="n">GetModuleHandle</span><span class="p">(</span><span class="s">L"ntdll.dll"</span><span class="p">),</span> <span class="s">"RtlInitUnicodeString"</span><span class="p">);</span>
+<span class="n">RtlInitUnicodeString</span><span class="p">(</span><span class="o">&amp;</span><span class="n">fileName</span><span class="p">,</span> <span class="p">(</span><span class="n">PCWSTR</span><span class="p">)</span><span class="s">L"</span><span class="se">\\</span><span class="s">??</span><span class="se">\\</span><span class="s">c:</span><span class="se">\\</span><span class="s">temp</span><span class="se">\\</span><span class="s">temp.log"</span><span class="p">);</span>
+<span class="n">IO_STATUS_BLOCK</span> <span class="n">osb</span><span class="p">;</span>
+<span class="n">ZeroMemory</span><span class="p">(</span><span class="o">&amp;</span><span class="n">osb</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">IO_STATUS_BLOCK</span><span class="p">));</span>
+<span class="n">InitializeObjectAttributes</span><span class="p">(</span><span class="o">&amp;</span><span class="n">oa</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">fileName</span><span class="p">,</span> <span class="n">OBJ_CASE_INSENSITIVE</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Then we’ll need to get the address of NTDLL and parse some information out of it. We’re going to use all this info to find the syscalls.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="c1">//Get NTDLL address</span>
+<span class="n">HANDLE</span> <span class="n">process</span> <span class="o">=</span> <span class="n">GetCurrentProcess</span><span class="p">();</span>
+<span class="n">MODULEINFO</span> <span class="n">mi</span><span class="p">;</span>
+<span class="n">HMODULE</span> <span class="n">ntdllModule</span> <span class="o">=</span> <span class="n">GetModuleHandleA</span><span class="p">(</span><span class="s">"ntdll.dll"</span><span class="p">);</span>
+<span class="n">GetModuleInformation</span><span class="p">(</span><span class="n">process</span><span class="p">,</span> <span class="n">ntdllModule</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">mi</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">mi</span><span class="p">));</span>
+<span class="n">LPVOID</span> <span class="n">ntdllBase</span> <span class="o">=</span> <span class="n">mi</span><span class="p">.</span><span class="n">lpBaseOfDll</span><span class="p">;</span>
+
+<span class="n">PIMAGE_DOS_HEADER</span> <span class="n">dosHeader</span> <span class="o">=</span> <span class="p">(</span><span class="n">PIMAGE_DOS_HEADER</span><span class="p">)</span><span class="n">ntdllBase</span><span class="p">;</span>
+<span class="n">PIMAGE_NT_HEADERS</span> <span class="n">imageNTHeaders</span> <span class="o">=</span> <span class="p">(</span><span class="n">PIMAGE_NT_HEADERS</span><span class="p">)((</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">ntdllBase</span> <span class="o">+</span> <span class="n">dosHeader</span><span class="o">-&gt;</span><span class="n">e_lfanew</span><span class="p">);</span>
+<span class="n">DWORD</span> <span class="n">exportDirRVA</span> <span class="o">=</span> <span class="n">imageNTHeaders</span><span class="o">-&gt;</span><span class="n">OptionalHeader</span><span class="p">.</span><span class="n">DataDirectory</span><span class="p">[</span><span class="n">IMAGE_DIRECTORY_ENTRY_EXPORT</span><span class="p">].</span><span class="n">VirtualAddress</span><span class="p">;</span>
+<span class="n">PIMAGE_SECTION_HEADER</span> <span class="n">section</span> <span class="o">=</span> <span class="n">IMAGE_FIRST_SECTION</span><span class="p">(</span><span class="n">imageNTHeaders</span><span class="p">);</span>
+<span class="n">PIMAGE_SECTION_HEADER</span> <span class="n">textSection</span> <span class="o">=</span> <span class="n">section</span><span class="p">;</span>
+<span class="n">PIMAGE_SECTION_HEADER</span> <span class="n">rdataSection</span> <span class="o">=</span> <span class="n">section</span><span class="p">;</span>
+<span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">imageNTHeaders</span><span class="o">-&gt;</span><span class="n">FileHeader</span><span class="p">.</span><span class="n">NumberOfSections</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+	<span class="p">{</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">strcmp</span><span class="p">((</span><span class="n">CHAR</span><span class="o">*</span><span class="p">)</span><span class="n">section</span><span class="o">-&gt;</span><span class="n">Name</span><span class="p">,</span> <span class="p">(</span><span class="n">CHAR</span><span class="o">*</span><span class="p">)</span><span class="s">".rdata"</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+			<span class="n">rdataSection</span> <span class="o">=</span> <span class="n">section</span><span class="p">;</span>
+			<span class="k">break</span><span class="p">;</span>
+		<span class="p">}</span>
+		<span class="n">section</span><span class="o">++</span><span class="p">;</span>
+	<span class="p">}</span>
+<span class="n">PIMAGE_EXPORT_DIRECTORY</span> <span class="n">exportDirectory</span> <span class="o">=</span> <span class="p">(</span><span class="n">PIMAGE_EXPORT_DIRECTORY</span><span class="p">)</span><span class="n">RVAtoRawOffset</span><span class="p">((</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">ntdllBase</span> <span class="o">+</span> <span class="n">exportDirRVA</span><span class="p">,</span> <span class="n">rdataSection</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>This will get a handle to NTDLL and grab the base address. Using that base address we can parse out all of the headers and sections. Now we can modify the function that resolves the syscall stubs to grab the first one.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">PVOID</span> <span class="nf">RVAtoRawOffset</span><span class="p">(</span><span class="n">DWORD_PTR</span> <span class="n">RVA</span><span class="p">,</span> <span class="n">PIMAGE_SECTION_HEADER</span> <span class="n">section</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="k">return</span> <span class="p">(</span><span class="n">PVOID</span><span class="p">)</span><span class="n">RVA</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">LPVOID</span> <span class="nf">GetFirstStub</span><span class="p">(</span><span class="n">PIMAGE_EXPORT_DIRECTORY</span> <span class="n">exportDirectory</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="n">fileData</span><span class="p">,</span> <span class="n">PIMAGE_SECTION_HEADER</span> <span class="n">textSection</span><span class="p">,</span> <span class="n">PIMAGE_SECTION_HEADER</span> <span class="n">rdataSection</span><span class="p">)</span>
+<span class="p">{</span>
+	<span class="n">PDWORD</span> <span class="n">addressOfNames</span> <span class="o">=</span> <span class="p">(</span><span class="n">PDWORD</span><span class="p">)</span><span class="n">RVAtoRawOffset</span><span class="p">((</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">fileData</span> <span class="o">+</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">exportDirectory</span><span class="o">-&gt;</span><span class="n">AddressOfNames</span><span class="p">),</span> <span class="n">rdataSection</span><span class="p">);</span>
+	<span class="n">PDWORD</span> <span class="n">addressOfFunctions</span> <span class="o">=</span> <span class="p">(</span><span class="n">PDWORD</span><span class="p">)</span><span class="n">RVAtoRawOffset</span><span class="p">((</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">fileData</span> <span class="o">+</span> <span class="o">*</span><span class="p">(</span><span class="o">&amp;</span><span class="n">exportDirectory</span><span class="o">-&gt;</span><span class="n">AddressOfFunctions</span><span class="p">),</span> <span class="n">rdataSection</span><span class="p">);</span>
+	<span class="k">for</span> <span class="p">(</span><span class="kt">int</span> <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">exportDirectory</span><span class="o">-&gt;</span><span class="n">NumberOfNames</span><span class="p">;</span> <span class="n">i</span><span class="o">++</span><span class="p">)</span>
+	<span class="p">{</span>
+
+		<span class="n">DWORD_PTR</span> <span class="n">functionNameVA</span> <span class="o">=</span> <span class="p">(</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">RVAtoRawOffset</span><span class="p">((</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">fileData</span> <span class="o">+</span> <span class="n">addressOfNames</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">rdataSection</span><span class="p">);</span>
+		<span class="n">DWORD_PTR</span> <span class="n">functionVA</span> <span class="o">=</span> <span class="p">(</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">RVAtoRawOffset</span><span class="p">((</span><span class="n">DWORD_PTR</span><span class="p">)</span><span class="n">fileData</span> <span class="o">+</span> <span class="n">addressOfFunctions</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">],</span> <span class="n">textSection</span><span class="p">);</span>
+		<span class="n">LPCSTR</span> <span class="n">functionNameResolved</span> <span class="o">=</span> <span class="p">(</span><span class="n">LPCSTR</span><span class="p">)</span><span class="n">functionNameVA</span><span class="p">;</span>
+		<span class="k">if</span> <span class="p">(</span><span class="n">functionNameResolved</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="sc">'N'</span> <span class="o">&amp;&amp;</span> <span class="n">functionNameResolved</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="sc">'t'</span><span class="p">)</span>
+		<span class="p">{</span>
+			<span class="k">return</span> <span class="p">(</span><span class="n">LPVOID</span><span class="p">)</span><span class="n">functionVA</span><span class="p">;</span>
+		<span class="p">}</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="p">(</span><span class="n">LPVOID</span><span class="p">)</span><span class="nb">NULL</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The original code would parse NTDLL for a given function, copy it into a buffer, and then return true. However in this case we don’t need the whole stub, we just need the address of it. The above code will just grab the first Nt function, but it could easily be adjusted to grab a given function that we know won’t be hooked or just a random NTDLL function.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">LPVOID</span> <span class="n">ntdllSyscallPointer</span> <span class="o">=</span> <span class="n">GetFirstStub</span><span class="p">(</span><span class="n">exportDirectory</span><span class="p">,</span> <span class="n">ntdllBase</span><span class="p">,</span> <span class="n">textSection</span><span class="p">,</span> <span class="n">rdataSection</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Now that we have a pointer to a legit syscall we can write a function to patch our syscall with a jump to the legit syscall.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">char</span><span class="o">*</span> <span class="nf">createObfuscatedSyscall</span><span class="p">(</span><span class="n">LPVOID</span> <span class="n">SyscallFunction</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="n">ntdllSyscallPointer</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">//Get the address of the syscall instruction</span>
+	<span class="n">LPVOID</span> <span class="n">syscallAddress</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="n">ntdllSyscallPointer</span> <span class="o">+</span> <span class="mi">18</span><span class="p">;</span>
+
+	<span class="c1">//construct a trampoline</span>
+	<span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">jumpPrelude</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="mh">0x00</span><span class="p">,</span> <span class="mh">0x49</span><span class="p">,</span> <span class="mh">0xBB</span> <span class="p">};</span> <span class="c1">//mov r11</span>
+	<span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">jumpAddress</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="mh">0xDE</span><span class="p">,</span> <span class="mh">0xAD</span><span class="p">,</span> <span class="mh">0xBE</span><span class="p">,</span> <span class="mh">0xEF</span><span class="p">,</span> <span class="mh">0xDE</span><span class="p">,</span> <span class="mh">0xAD</span><span class="p">,</span> <span class="mh">0xBE</span><span class="p">,</span> <span class="mh">0xEF</span> <span class="p">};</span> <span class="c1">//placeholder where the address goes</span>
+	<span class="o">*</span><span class="p">(</span><span class="kt">void</span><span class="o">**</span><span class="p">)(</span><span class="n">jumpAddress</span><span class="p">)</span> <span class="o">=</span> <span class="n">syscallAddress</span><span class="p">;</span> <span class="c1">//replace the address</span>
+	<span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">jumpEpilogue</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="mh">0x41</span><span class="p">,</span> <span class="mh">0xFF</span><span class="p">,</span> <span class="mh">0xE3</span> <span class="p">,</span> <span class="mh">0xC3</span> <span class="p">};</span> <span class="c1">//jmp r11</span>
+
+	<span class="c1">//Copy it all into a final buffer</span>
+	<span class="kt">char</span> <span class="n">finalSyscall</span><span class="p">[</span><span class="mi">30</span><span class="p">];</span>
+	<span class="n">memcpy</span><span class="p">(</span><span class="n">finalSyscall</span><span class="p">,</span> <span class="n">SyscallFunction</span><span class="p">,</span> <span class="mi">7</span><span class="p">);</span>
+	<span class="n">memcpy</span><span class="p">(</span><span class="n">finalSyscall</span> <span class="o">+</span> <span class="mi">7</span><span class="p">,</span> <span class="n">jumpPrelude</span><span class="p">,</span> <span class="mi">3</span><span class="p">);</span>
+	<span class="n">memcpy</span><span class="p">(</span><span class="n">finalSyscall</span> <span class="o">+</span> <span class="mi">7</span> <span class="o">+</span> <span class="mi">3</span><span class="p">,</span> <span class="n">jumpAddress</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">jumpAddress</span><span class="p">));</span>
+	<span class="n">memcpy</span><span class="p">(</span><span class="n">finalSyscall</span> <span class="o">+</span> <span class="mi">7</span> <span class="o">+</span> <span class="mi">3</span> <span class="o">+</span> <span class="mi">8</span><span class="p">,</span> <span class="n">jumpEpilogue</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span>
+
+	<span class="c1">//Make sure that we can execute</span>
+	<span class="n">DWORD</span> <span class="n">oldProtect</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+	<span class="n">VirtualProtectEx</span><span class="p">(</span><span class="n">GetCurrentProcess</span><span class="p">(),</span> <span class="o">&amp;</span><span class="n">finalSyscall</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">finalSyscall</span><span class="p">),</span> <span class="n">PAGE_EXECUTE_READWRITE</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">oldProtect</span><span class="p">);</span>
+
+	<span class="k">return</span> <span class="o">&amp;</span><span class="n">finalSyscall</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>This looks a little convoluted but the underlying principle is:</p>
+
+<ul>
+  <li>Construct some assembly bytes which will store our syscall address into the R11 register and then JMP to it</li>
+  <li>Insert the address of the syscall in NTDLL into the jmp</li>
+  <li>Copy all of that into a buffer</li>
+  <li>Give that buffer executable permissions and return it to the user</li>
+</ul>
+
+<p>Then we can call the function providing the NtCreateFile10 assembly stub and a pointer to the legit NTDLL syscall.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">NtCreateFile</span> <span class="o">=</span> <span class="n">createObfuscatedSyscall</span><span class="p">(</span><span class="o">&amp;</span><span class="n">NtCreateFile10</span><span class="p">,</span> <span class="n">ntdllSyscallPointer</span><span class="p">);</span>
+</code></pre></div></div>
+
+<p>Assuming this works, we can then call NtCreateFile normally.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">status</span> <span class="o">=</span> <span class="n">NtCreateFile</span><span class="p">(</span><span class="o">&amp;</span><span class="n">fileHandle</span><span class="p">,</span> <span class="n">FILE_GENERIC_WRITE</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">oa</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">osb</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">FILE_ATTRIBUTE_NORMAL</span><span class="p">,</span> <span class="n">FILE_SHARE_WRITE</span><span class="p">,</span> <span class="n">FILE_OVERWRITE_IF</span><span class="p">,</span> <span class="n">FILE_SYNCHRONOUS_IO_NONALERT</span><span class="p">,</span> <span class="nb">NULL</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+	<span class="k">if</span> <span class="p">(</span><span class="n">status</span> <span class="o">!=</span> <span class="n">STATUS_SUCCESS</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"Syscall failed...</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+	<span class="p">}</span>
+	<span class="k">else</span> <span class="p">{</span>
+		<span class="n">printf</span><span class="p">(</span><span class="s">"Syscall succeeded!</span><span class="se">\n</span><span class="s">"</span><span class="p">);</span>
+	<span class="p">}</span>
+
+	<span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>And there you have it! All of the code necessary in order to:</p>
+
+<ul>
+  <li>Parse NTDLL for an arbitrary syscall stub</li>
+  <li>Get the address of the legit syscall instruction</li>
+  <li>Patch our malicious syscall stub with a JMP to the legit syscall</li>
+  <li>Call our function which will jmp to NTDLL for the syscall</li>
+</ul>
+
+<p><strong>Note:</strong> One very important thing that I spent forever figuring out is that you need to DISABLE Incremental Linking. If you do not then VS will construct a jump table which will ruin any attempts to access the embedded NtCreateFile stub. You can do this by right clicking the project, selecting Linker &gt; General and setting Enable Incremental Linking to No. There’s probably a way around this but I have not found it.</p>
+
+<h2 id="testing">Testing</h2>
+
+<p>So, moment of truth! Does this bypass actually work?</p>
+
+<p>We’ll need a Frida script to verify if this bypasses our detection.</p>
+
+<div class="language-jsx highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kd">var</span> <span class="nx">modules</span> <span class="o">=</span> <span class="nx">Process</span><span class="p">.</span><span class="nx">enumerateModules</span><span class="p">()</span>
+<span class="kd">var</span> <span class="nx">ntdll</span> <span class="o">=</span> <span class="nx">modules</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+
+<span class="kd">var</span> <span class="nx">ntdllBase</span> <span class="o">=</span> <span class="nx">ntdll</span><span class="p">.</span><span class="nx">base</span>
+<span class="nx">send</span><span class="p">(</span><span class="dl">"</span><span class="s2">[*] Ntdll base: </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">ntdllBase</span><span class="p">)</span>
+<span class="kd">var</span> <span class="nx">ntdllOffset</span> <span class="o">=</span> <span class="nx">ntdllBase</span><span class="p">.</span><span class="nx">add</span><span class="p">(</span><span class="nx">ntdll</span><span class="p">.</span><span class="nx">size</span><span class="p">)</span>
+<span class="nx">send</span><span class="p">(</span><span class="dl">"</span><span class="s2">[*] Ntdll end: </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">ntdllOffset</span><span class="p">)</span>
+
+<span class="kd">var</span> <span class="nx">pNtAcceptConnectPort</span> <span class="o">=</span> <span class="nx">Module</span><span class="p">.</span><span class="nx">findExportByName</span><span class="p">(</span><span class="dl">'</span><span class="s1">ntdll.dll</span><span class="dl">'</span><span class="p">,</span> <span class="dl">'</span><span class="s1">NtAcceptConnectPort</span><span class="dl">'</span><span class="p">);</span>
+<span class="nx">Interceptor</span><span class="p">.</span><span class="nx">attach</span><span class="p">(</span><span class="nx">pNtAcceptConnectPort</span><span class="p">,</span> <span class="p">{</span>
+    <span class="na">onEnter</span><span class="p">:</span> <span class="kd">function</span> <span class="p">(</span><span class="nx">args</span><span class="p">){}</span>
+<span class="p">})</span>
+<span class="kd">const</span> <span class="nx">mainThread</span> <span class="o">=</span> <span class="nx">Process</span><span class="p">.</span><span class="nx">enumerateThreads</span><span class="p">()[</span><span class="mi">0</span><span class="p">];</span>
+<span class="nx">Process</span><span class="p">.</span><span class="nx">enumerateThreads</span><span class="p">().</span><span class="nx">map</span><span class="p">(</span><span class="nx">t</span> <span class="o">=&gt;</span> <span class="p">{</span>
+<span class="nx">Stalker</span><span class="p">.</span><span class="nx">follow</span><span class="p">(</span><span class="nx">t</span><span class="p">.</span><span class="nx">id</span><span class="p">,</span> <span class="p">{</span>
+  <span class="na">events</span><span class="p">:</span> <span class="p">{</span>
+    <span class="na">call</span><span class="p">:</span> <span class="kc">false</span><span class="p">,</span> <span class="c1">// CALL instructions: yes please</span>
+    <span class="c1">// Other events:</span>
+    <span class="na">ret</span><span class="p">:</span> <span class="kc">false</span><span class="p">,</span> <span class="c1">// RET instructions</span>
+    <span class="na">exec</span><span class="p">:</span> <span class="kc">false</span><span class="p">,</span> <span class="c1">// all instructions: not recommended as it's</span>
+                 <span class="c1">//                   a lot of data</span>
+    <span class="na">block</span><span class="p">:</span> <span class="kc">false</span><span class="p">,</span> <span class="c1">// block executed: coarse execution trace</span>
+    <span class="na">compile</span><span class="p">:</span> <span class="kc">false</span> <span class="c1">// block compiled: useful for coverage</span>
+  <span class="p">},</span>
+  <span class="nx">onReceive</span><span class="p">(</span><span class="nx">events</span><span class="p">)</span> <span class="p">{</span>  
+  <span class="p">},</span>
+
+  <span class="nx">transform</span><span class="p">(</span><span class="nx">iterator</span><span class="p">){</span>
+      <span class="kd">let</span> <span class="nx">instruction</span> <span class="o">=</span> <span class="nx">iterator</span><span class="p">.</span><span class="nx">next</span><span class="p">()</span>
+      <span class="k">do</span><span class="p">{</span>
+        <span class="k">if</span><span class="p">(</span><span class="nx">instruction</span><span class="p">.</span><span class="nx">mnemonic</span> <span class="o">==</span> <span class="dl">"</span><span class="s2">syscall</span><span class="dl">"</span><span class="p">){</span>
+            <span class="kd">var</span> <span class="nx">addrInt</span> <span class="o">=</span> <span class="nx">instruction</span><span class="p">.</span><span class="nx">address</span><span class="p">.</span><span class="nx">toInt32</span><span class="p">()</span>
+            <span class="c1">//If the syscall is coming from somewhere outside the bounds of NTDLL</span>
+            <span class="c1">//then it may be malicious</span>
+            <span class="k">if</span><span class="p">(</span><span class="nx">addrInt</span> <span class="o">&lt;</span> <span class="nx">ntdllBase</span><span class="p">.</span><span class="nx">toInt32</span><span class="p">()</span> <span class="o">||</span> <span class="nx">addrInt</span> <span class="o">&gt;</span> <span class="nx">ntdllOffset</span><span class="p">.</span><span class="nx">toInt32</span><span class="p">()){</span>
+                <span class="nx">send</span><span class="p">(</span><span class="dl">"</span><span class="s2">[+] Found a potentially malicious syscall</span><span class="dl">"</span><span class="p">)</span>
+                <span class="nx">iterator</span><span class="p">.</span><span class="nx">putCallout</span><span class="p">(</span><span class="nx">onMatch</span><span class="p">)</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+      <span class="nx">iterator</span><span class="p">.</span><span class="nx">keep</span><span class="p">()</span>
+      <span class="p">}</span> <span class="k">while</span> <span class="p">((</span><span class="nx">instruction</span> <span class="o">=</span> <span class="nx">iterator</span><span class="p">.</span><span class="nx">next</span><span class="p">())</span> <span class="o">!==</span> <span class="kc">null</span><span class="p">)</span>
+  <span class="p">}</span>
+<span class="p">})</span>
+<span class="p">})</span>
+
+<span class="kd">function</span> <span class="nx">onMatch</span><span class="p">(</span><span class="nx">context</span><span class="p">){</span>
+    <span class="nx">send</span><span class="p">(</span><span class="dl">"</span><span class="s2">[+] Syscall number: </span><span class="dl">"</span> <span class="o">+</span> <span class="nx">context</span><span class="p">.</span><span class="nx">rax</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>The above script will:</p>
+
+<ul>
+  <li>Resolve the bounds of NTDLL</li>
+  <li>Place a hook on NtAcceptConnectPort. This is the first Nt function and will help us verify that even if there is a hook placed on the function then the syscall should be intact.</li>
+  <li>Add a Stalker to every thread which will check every instruction to see if it is a syscall. If it is, then we’ll check if it’s within the bounds of NTDLL. If it’s outside of NTDLL, then we will attach a callout to it which will look at the EAX register and tell us what the syscall number is. Then we’ll inform the user of the malicious syscall.</li>
+</ul>
+
+<p>If instead of calling our createObfuscatedSyscall function we just call the syscall normally:</p>
+
+<div class="language-jsx highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="nx">NtCreateFile</span> <span class="o">=</span> <span class="o">&amp;</span><span class="nx">NtCreateFile10</span><span class="p">;</span>
+<span class="nx">NtCreateFile</span><span class="p">(...)</span>
+</code></pre></div></div>
+
+<p>Then it should be detected.</p>
+
+<div class="language-jsx highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">[?]</span> <span class="nx">Attempting</span> <span class="nx">process</span> <span class="nx">start</span><span class="p">..</span>
+<span class="p">[</span><span class="o">+</span><span class="p">]</span> <span class="nx">Injecting</span> <span class="o">=&gt;</span> <span class="nx">PID</span><span class="p">:</span> <span class="mi">16308</span><span class="p">,</span> <span class="nx">Name</span><span class="p">:</span> <span class="nx">C</span><span class="p">:</span><span class="err">\</span><span class="nx">Users</span><span class="err">\</span><span class="nx">pcuser</span><span class="err">\</span><span class="nx">source</span><span class="err">\</span><span class="nx">repos</span><span class="err">\</span><span class="nx">suspendedunhook</span><span class="err">\</span><span class="nx">x64</span><span class="err">\</span><span class="nx">Debug</span><span class="err">\</span><span class="nx">find_syscall_address</span><span class="p">.</span><span class="nx">exe</span>
+<span class="p">[</span><span class="o">+</span><span class="p">]</span> <span class="nx">Process</span> <span class="nx">start</span> <span class="nx">success</span>
+<span class="p">[</span><span class="o">*</span><span class="p">]</span> <span class="nx">Ntdll</span> <span class="nx">base</span><span class="p">:</span> <span class="mh">0x7ffd31970000</span>
+<span class="p">[</span><span class="o">*</span><span class="p">]</span> <span class="nx">Ntdll</span> <span class="nx">end</span><span class="p">:</span> <span class="mh">0x7ffd31b65000</span>
+<span class="p">[</span><span class="o">+</span><span class="p">]</span> <span class="nx">Found</span> <span class="nx">a</span> <span class="nx">potentially</span> <span class="nx">malicious</span> <span class="nx">syscall</span>
+<span class="p">[</span><span class="o">+</span><span class="p">]</span> <span class="nx">Syscall</span> <span class="nx">number</span><span class="p">:</span> <span class="mh">0x55</span>
+</code></pre></div></div>
+
+<p>However if we do call createObfuscatedSyscall:</p>
+
+<div class="language-jsx highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">[?]</span> <span class="nx">Attempting</span> <span class="nx">process</span> <span class="nx">start</span><span class="p">..</span>
+<span class="p">[</span><span class="o">+</span><span class="p">]</span> <span class="nx">Injecting</span> <span class="o">=&gt;</span> <span class="nx">PID</span><span class="p">:</span> <span class="mi">5320</span><span class="p">,</span> <span class="nx">Name</span><span class="p">:</span> <span class="nx">C</span><span class="p">:</span><span class="err">\</span><span class="nx">Users</span><span class="err">\</span><span class="nx">pcuser</span><span class="err">\</span><span class="nx">source</span><span class="err">\</span><span class="nx">repos</span><span class="err">\</span><span class="nx">suspendedunhook</span><span class="err">\</span><span class="nx">x64</span><span class="err">\</span><span class="nx">Debug</span><span class="err">\</span><span class="nx">find_syscall_address</span><span class="p">.</span><span class="nx">exe</span>
+<span class="p">[</span><span class="o">+</span><span class="p">]</span> <span class="nx">Process</span> <span class="nx">start</span> <span class="nx">success</span>
+<span class="p">[</span><span class="o">*</span><span class="p">]</span> <span class="nx">Ntdll</span> <span class="nx">base</span><span class="p">:</span> <span class="mh">0x7ffd31970000</span>
+<span class="p">[</span><span class="o">*</span><span class="p">]</span> <span class="nx">Ntdll</span> <span class="nx">end</span><span class="p">:</span> <span class="mh">0x7ffd31b65000</span>
+</code></pre></div></div>
+
+<p>Then we get a clean bill of health! It appears as though we’ve successfully bypassed any detection that looks for syscall instructions originating outside of NTDLL.</p>
+
+<h2 id="integrating-with-syswhispers">Integrating with Syswhispers</h2>
+
+<p>I originally was just using the syscall stubs from the Dumpert project, but after I got that working I figured I should probably also make this work with Syswhispers since that’s the predominant method for including syscall stubs into a VS project. In fact we only have to make one modification to the stubs generated by Syswhispers, which is to add a bunch of nops to the end of each stub to make room for the extra instructions that we need to add. They don’t have to be nops necessarily, so long as we have an extra 11 bytes.</p>
+
+<p>Also instead of creating a new buffer and returning that, we’ll need to directly modify the Syswhispers stub. So createObfuscatedSyscall will now look like this.</p>
+
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">createObfuscatedSyscall</span><span class="p">(</span><span class="n">LPVOID</span> <span class="n">SyscallFunction</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="n">ntdllSyscallPointer</span><span class="p">)</span> <span class="p">{</span>
+	<span class="c1">//Get the address of the syscall instruction</span>
+	<span class="n">LPVOID</span> <span class="n">syscallAddress</span> <span class="o">=</span> <span class="p">(</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="n">ntdllSyscallPointer</span> <span class="o">+</span> <span class="mi">18</span><span class="p">;</span>
+
+	<span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">jumpPrelude</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="mh">0x49</span><span class="p">,</span> <span class="mh">0xBB</span> <span class="p">};</span> <span class="c1">//mov r11</span>
+	<span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">jumpAddress</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="mh">0xDE</span><span class="p">,</span> <span class="mh">0xAD</span><span class="p">,</span> <span class="mh">0xBE</span><span class="p">,</span> <span class="mh">0xEF</span><span class="p">,</span> <span class="mh">0xDE</span><span class="p">,</span> <span class="mh">0xAD</span><span class="p">,</span> <span class="mh">0xBE</span><span class="p">,</span> <span class="mh">0xEF</span> <span class="p">};</span> <span class="c1">//placeholder where the address goes</span>
+	<span class="o">*</span><span class="p">(</span><span class="kt">void</span><span class="o">**</span><span class="p">)(</span><span class="n">jumpAddress</span><span class="p">)</span> <span class="o">=</span> <span class="n">syscallAddress</span><span class="p">;</span> <span class="c1">//replace the address</span>
+	<span class="kt">unsigned</span> <span class="kt">char</span> <span class="n">jumpEpilogue</span><span class="p">[]</span> <span class="o">=</span> <span class="p">{</span> <span class="mh">0x41</span><span class="p">,</span> <span class="mh">0xFF</span><span class="p">,</span> <span class="mh">0xE3</span> <span class="p">,</span> <span class="mh">0xC3</span> <span class="p">};</span> <span class="c1">//jmp r11</span>
+
+	<span class="n">DWORD</span> <span class="n">oldProtect</span> <span class="o">=</span> <span class="nb">NULL</span><span class="p">;</span>
+	<span class="n">VirtualProtectEx</span><span class="p">(</span><span class="n">GetCurrentProcess</span><span class="p">(),</span> <span class="n">SyscallFunction</span><span class="p">,</span> <span class="mi">61</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">+</span> <span class="mi">8</span> <span class="o">+</span> <span class="mi">4</span><span class="p">,</span> <span class="n">PAGE_READWRITE</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">oldProtect</span><span class="p">);</span>
+	<span class="n">memcpy</span><span class="p">((</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="n">SyscallFunction</span> <span class="o">+</span> <span class="mi">61</span><span class="p">,</span> <span class="n">jumpPrelude</span><span class="p">,</span> <span class="mi">2</span><span class="p">);</span>
+	<span class="n">memcpy</span><span class="p">((</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="n">SyscallFunction</span> <span class="o">+</span> <span class="mi">61</span> <span class="o">+</span> <span class="mi">2</span><span class="p">,</span> <span class="n">jumpAddress</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">jumpAddress</span><span class="p">));</span>
+	<span class="n">memcpy</span><span class="p">((</span><span class="kt">char</span><span class="o">*</span><span class="p">)</span><span class="n">SyscallFunction</span> <span class="o">+</span> <span class="mi">61</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">+</span> <span class="mi">8</span><span class="p">,</span> <span class="n">jumpEpilogue</span><span class="p">,</span> <span class="mi">4</span><span class="p">);</span>
+	<span class="n">VirtualProtectEx</span><span class="p">(</span><span class="n">GetCurrentProcess</span><span class="p">(),</span> <span class="n">SyscallFunction</span><span class="p">,</span> <span class="mi">61</span> <span class="o">+</span> <span class="mi">2</span> <span class="o">+</span> <span class="mi">8</span> <span class="o">+</span> <span class="mi">4</span><span class="p">,</span> <span class="n">oldProtect</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">oldProtect</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>There’s probably a more elegant solution to this but I was happy with a quick proof of concept.</p>
+
+<h2 id="conclusion">Conclusion</h2>
+
+<p>There is a compelling argument to be made that this is a solution for a non-existent problem. To the best of my knowledge, EDR vendors have not really begun picking up on direct syscalls. They may get finicky when it comes to reading NTDLL from disk, but for syscalls included at compile time I have not heard about any sort of detections. However I think that it is a good exercise to dig into our tooling in this manner. Personally, I’ve learned a LOT about syscalls and upped my assembly skills a bit from hacking on this.</p>
+
+<h2 id="references">References</h2>
+
+<p><a href="https://github.com/jthuraisamy/SysWhispers2">Syswhispers2 - JacksonT</a></p>
+
+<p><a href="https://github.com/outflanknl/Dumpert">Dumpert - OutflankNL</a></p>
+
+<p><a href="https://www.ired.team/offensive-security/defense-evasion/retrieving-ntdll-syscall-stubs-at-run-time?q=riv">Retrieving NTDLL Syscall Stubs from Disk at Run-time - spotheplanet</a></p>
+
+<p><a href="https://github.com/Mr-Un1k0d3r/EDRs">Mr-Un1k0d3r - EDRs</a></p>
+
+
+      <footer class="site-footer">
+        
+        <span class="site-footer-credits">This page was generated by <a href="https://pages.github.com">GitHub Pages</a>.</span>
+      </footer>
+    </main>
+  </body>
+</html>

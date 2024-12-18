@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <title>Recovering some files encrypted by LockBit 2.0 | Sky Blueteam</title>
+
+    <meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">    
+<meta name="viewport" content="width=device-width,minimum-scale=1">
+<meta name="description" content="The LockBit 2.0 ransomware is pretty aggressive with the extensions it encrypts: you can say goodbye to your user hives and event log. Or do you?">
+<meta name="generator" content="Hugo 0.85.0" />
+
+
+  <META NAME="ROBOTS" CONTENT="NOINDEX, NOFOLLOW">
+
+
+<link rel="stylesheet" href="/css/style.css">
+
+
+
+<link rel="shortcut icon" href="/images/favicon.ico" type="image/x-icon" />
+
+
+
+
+
+
+
+  </head>
+
+  <body>
+    <nav class="navigation">
+	
+		<a href="/"> <span class="arrow">←</span>Home</a>
+	
+	<a href="/posts">Archive</a>
+	<a href="/tags">Tags</a>
+	<a href="/about">About</a>
+
+	
+
+	
+</nav>
+
+
+    <main class="main">
+      
+
+<section id="single">
+    <h1 class="title">Recovering some files encrypted by LockBit 2.0</h1>
+
+    <div class="tip">
+        <time datetime="2021-10-15 10:12:00 &#43;0200 &#43;0200">Oct 15, 2021</time>
+        <span class="split">
+          ·
+        </span>
+        <span>
+          1066 words
+        </span>
+        <span class="split">
+          ·
+        </span>
+        <span>
+          6 minute read
+        </span>
+    </div>
+
+    
+    
+
+
+    <div class="content">
+      <p>The <a href="https://www.trendmicro.com/en_us/research/21/h/lockbit-resurfaces-with-version-2-0-ransomware-detections-in-chi.html" target="_blank" rel="noopener">LockBit 2.0 ransomware</a> has been incredibly &ldquo;productive&rdquo; these last few months: their technique is well automated, and the list of compromised companies keeps growing every day.</p>
+<p>In order to reduce the destructiveness of their payload, most ransomware operators do not encrypt every single file on a system; instead, they set out a set of rules, for example:</p>
+<ul>
+<li>Only encrypt files with specific extensions: <code>.docx</code>, <code>.cpp</code>, <code>.db</code>, <code>.log</code></li>
+<li>Don&rsquo;t encrypt files in <code>C:\Windows\System32</code>, in order to keep a semi-working machine (otherwise how would the users read the ransom note?)</li>
+</ul>
+<p>LockBit 2.0 has a pretty interesting quirk though: as an optimization, only the first 4KiB (4096 bytes) of each file are encrypted. This is usually enough to lock away important data and make file recovery a pain. It also speeds up the encryption process.</p>
+<p>We have also observed that the LockBit 2.0 ransomware is pretty generous in the extension list it encrypts: even user hive files (<code>NTUSER.DAT</code>) are encrypted, which is a pain if we want to <a href="https://github.com/airbus-cert/regrippy/" target="_blank" rel="noopener">extract useful data from it</a>. But registry hives can be pretty big, could we maybe recover some data anyway?</p>
+<h2 id="registry-hive-structure">Registry hive structure <a href="#registry-hive-structure" class="anchor">🔗</a></h2><p>In order to understand how we can recover the hives, we must first have a look at how registry hives are stored on-disk. Willi Ballenthin&rsquo;s <a href="https://github.com/williballenthin/python-registry" target="_blank" rel="noopener"><code>python-registry</code></a> has some good explanations, including <a href="https://github.com/williballenthin/python-registry/blob/master/documentation/WinReg.txt" target="_blank" rel="noopener">a text file from a certain B.D.</a> which goes over the structure of hives for both Windows 95 and NT. This document tells us that NT optimized hive loading by making the header the typical size of a page, <em>4KiB</em>.</p>
+<p><p class="markdown-image">
+  <img src="/images/3fe33cb9e6ffde03fd4c42c52d1ce3bd.png" alt="Registry structure"  />
+</p></p>
+<p>This means that LockBit only encrypts the header, and doesn&rsquo;t touch the actual data of the hive. Is it possible to restore the header? To answer this question, we must list everything the header contains:</p>
+<ul>
+<li>A magic number (<code>regf</code>)</li>
+<li>Sequence numbers (used for inconsistency detection)</li>
+<li>Modification timestamp</li>
+<li>Version numbers</li>
+<li>Hive name</li>
+<li>Hive flags</li>
+<li>Header checksum</li>
+</ul>
+<p>Basically, we can see that the header is mostly self-contained: there&rsquo;s no reference to <code>hbin</code> offset, or a global hive checksum. There should be no problem restoring the header by copying it from another hive of the same type 😊</p>
+<h2 id="restoring-the-hive">Restoring the hive <a href="#restoring-the-hive" class="anchor">🔗</a></h2><p>Simply by copying over the first 4096 bytes from another, clear <code>NTUSER.DAT</code>, we were able to entirely recover all our user hives!</p>
+<p><p class="markdown-image">
+  <img src="/images/7014d1d2ca74bae74e7e9f8aba4ee064.png" alt="Restoring the hive header"  />
+</p></p>
+<pre><code>$ regrip.py --ntuser ./ntuser_recovered.dat userassist | wc -l
+84
+</code></pre><p>It works! RegRippy will be confused when trying to give you the user names when extracting data from <code>NTUSER.DAT</code>, because it guesses them based on the hive name, which has been copied over from a clean hive. Other than that, everything works as expected, and all data is accessible.</p>
+<p>If you ever encounter this issue, here&rsquo;s a script which can restore an encrypted <code>NTUSER.DAT</code> hive: it&rsquo;s basically rebuilding the header and replacing it to create a clean hive.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/env python3</span>
+
+<span style="color:#f92672">import</span> argparse
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">main</span>():
+    parser <span style="color:#f92672">=</span> argparse<span style="color:#f92672">.</span>ArgumentParser(description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Fix encrypted hives by repairing the header (only for NTUSER.DAT)&#34;</span>)
+
+    parser<span style="color:#f92672">.</span>add_argument(<span style="color:#e6db74">&#34;--user&#34;</span>, type<span style="color:#f92672">=</span>str, help<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;The user name to store in the header (default: JohnDoe)&#34;</span>, default<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;JohnDoe&#34;</span>)
+    parser<span style="color:#f92672">.</span>add_argument(<span style="color:#e6db74">&#34;hive_path&#34;</span>, type<span style="color:#f92672">=</span>str, help<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Encrypted hive path&#34;</span>)
+    parser<span style="color:#f92672">.</span>add_argument(<span style="color:#e6db74">&#34;output&#34;</span>, type<span style="color:#f92672">=</span>str, help<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Where to output the fixed hive&#34;</span>)
+
+    args <span style="color:#f92672">=</span> parser<span style="color:#f92672">.</span>parse_args()
+
+    hive_name <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;??</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">C:</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">Users</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">&#34;</span> <span style="color:#f92672">+</span> args<span style="color:#f92672">.</span>user <span style="color:#f92672">+</span> <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\\</span><span style="color:#e6db74">ntuser.dat&#34;</span>
+    encoded_hive_name <span style="color:#f92672">=</span> hive_name<span style="color:#f92672">.</span>encode(<span style="color:#e6db74">&#34;utf-16-le&#34;</span>)
+    <span style="color:#66d9ef">if</span> len(encoded_hive_name) <span style="color:#f92672">&gt;</span> <span style="color:#ae81ff">64</span>:
+        encoded_hive_name <span style="color:#f92672">=</span> encoded_hive_name[:<span style="color:#ae81ff">64</span>]
+    <span style="color:#66d9ef">else</span>:
+        encoded_hive_name <span style="color:#f92672">+=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span> <span style="color:#f92672">*</span> (<span style="color:#ae81ff">64</span> <span style="color:#f92672">-</span> len(encoded_hive_name))
+
+    header <span style="color:#f92672">=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;regfH</span><span style="color:#ae81ff">\x1E\x00\x00\x48\x1E\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x05\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x20\x00\x00\x00\x00\x80\x0E\x00\x01\x00\x00\x00</span><span style="color:#e6db74">&#34;</span>
+    header <span style="color:#f92672">+=</span> encoded_hive_name
+    header <span style="color:#f92672">+=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x43\xBE\x11\x44\xFF\x07\xE8\x11\x92\x75\xEA\x28\xA0\xD0\x3E\x60\x43\xBE\x11\x44\xFF\x07\xE8\x11\x92\x75\xEA\x28\xA0\xD0\x3E\x60\x00\x00\x00\x00\x44\xBE\x11\x44\xFF\x07\xE8\x11\x92\x75\xEA\x28\xA0\xD0\x3E\x60\x72\x6D\x74\x6D\xBE\x82\x8C\x05\xB7\xB9\xD7\x01\x4F\x66\x52\x67\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00</span><span style="color:#e6db74">&#34;</span>
+    header <span style="color:#f92672">+=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span><span style="color:#f92672">*</span><span style="color:#ae81ff">316</span>
+    header <span style="color:#f92672">+=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\xD8\xC9\x70\x75</span><span style="color:#e6db74">&#34;</span>
+    header <span style="color:#f92672">+=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span><span style="color:#f92672">*</span><span style="color:#ae81ff">3584</span>
+
+    <span style="color:#66d9ef">with</span> open(args<span style="color:#f92672">.</span>hive_path, <span style="color:#e6db74">&#34;rb&#34;</span>) <span style="color:#66d9ef">as</span> h1:
+        <span style="color:#66d9ef">with</span> open(args<span style="color:#f92672">.</span>output, <span style="color:#e6db74">&#34;wb&#34;</span>) <span style="color:#66d9ef">as</span> h2:
+            data <span style="color:#f92672">=</span> h1<span style="color:#f92672">.</span>read()
+            without_header <span style="color:#f92672">=</span> data[<span style="color:#ae81ff">4096</span>:]
+            h2<span style="color:#f92672">.</span>write(header)
+            h2<span style="color:#f92672">.</span>write(without_header)
+
+    print(<span style="color:#e6db74">&#34;Done! Hive written to&#34;</span>, args<span style="color:#f92672">.</span>output)
+
+
+<span style="color:#66d9ef">if</span> __name__ <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;__main__&#34;</span>:
+    main()
+</code></pre></div><h2 id="update-extending-the-technique-to-other-file-types">(Update) Extending the technique to other file types <a href="#update-extending-the-technique-to-other-file-types" class="anchor">🔗</a></h2><p>In passing, <a href="https://twitter.com/citronneur" target="_blank" rel="noopener">@citronneur</a> mentioned that EVTX files also had a 4 KiB header. Maybe they could be reconstructed as well?</p>
+<p>When investigating Windows file formats, it&rsquo;s always a good idea to check Joachim Metz&rsquo;s <a href="https://github.com/libyal" target="_blank" rel="noopener"><code>libyal</code></a> repositories. In that case, bingo! <a href="https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20%28EVTX%29.asciidoc" target="_blank" rel="noopener"><code>libevtx</code></a> exists, with some very detailed documentation.</p>
+<p><p class="markdown-image">
+  <img src="/images/9b7f0d652f174673c2ba36ea501d9ffd.png" alt="EVTX header structure"  />
+</p></p>
+<p>Basically, an EVTX file is composed of several chunks, and each chunk contains a number of records. Each record has an ID, which is unique across all chunks.</p>
+<p>We assume the first chunk number is always 0. To get the last chunk number, we will search for the signature <code>&quot;ElfChnk\x00&quot;</code> and count its occurrences. We assume chunks are numbered in increasing order, starting from zero.</p>
+<p>To get the last record ID, we first get the last chunk (easy, because each chunk has a fixed size), and parse the offset to the last record from its header. We then parse the record at this offset to extract its ID.</p>
+<p>The checksum is a simple CRC32 of the first 120 bytes of the file header. With this, we are able to recreate all the data from the encrypted file header and read the events!</p>
+<p>And here is a Python script which does just that:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/env python3</span>
+
+<span style="color:#f92672">import</span> argparse
+<span style="color:#f92672">import</span> binascii
+<span style="color:#f92672">import</span> sys
+
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">get_number_of_chunks</span>(data):
+    count <span style="color:#f92672">=</span> <span style="color:#ae81ff">0</span>
+    needle <span style="color:#f92672">=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;ElfChnk</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span>
+    <span style="color:#66d9ef">for</span> offset <span style="color:#f92672">in</span> range(len(data) <span style="color:#f92672">-</span> len(needle)):
+        <span style="color:#66d9ef">if</span> data[offset : offset <span style="color:#f92672">+</span> len(needle)] <span style="color:#f92672">==</span> needle:
+            count <span style="color:#f92672">+=</span> <span style="color:#ae81ff">1</span>
+
+    <span style="color:#66d9ef">return</span> count
+
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">get_chunk</span>(data, n):
+    data <span style="color:#f92672">=</span> data[<span style="color:#ae81ff">4096</span>:]  <span style="color:#75715e"># get rid of header</span>
+    print(<span style="color:#e6db74">&#34;[+] Getting chunk&#34;</span>, n)
+    chunk <span style="color:#f92672">=</span> data[n <span style="color:#f92672">*</span> <span style="color:#ae81ff">65536</span> : (n <span style="color:#f92672">+</span> <span style="color:#ae81ff">1</span>) <span style="color:#f92672">*</span> <span style="color:#ae81ff">65536</span>]
+    <span style="color:#66d9ef">assert</span> chunk[:<span style="color:#ae81ff">8</span>] <span style="color:#f92672">==</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;ElfChnk</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span>
+    <span style="color:#66d9ef">return</span> chunk
+
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">get_last_record</span>(chunk):
+    offset <span style="color:#f92672">=</span> int<span style="color:#f92672">.</span>from_bytes(chunk[<span style="color:#ae81ff">44</span>:<span style="color:#ae81ff">48</span>], byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;[+] Last record offset: </span><span style="color:#e6db74">{</span>offset<span style="color:#e6db74">}</span><span style="color:#e6db74"> (0x</span><span style="color:#e6db74">{</span>offset<span style="color:#e6db74">:</span><span style="color:#e6db74">x</span><span style="color:#e6db74">}</span><span style="color:#e6db74">)&#34;</span>)
+    <span style="color:#66d9ef">if</span> offset <span style="color:#f92672">==</span> <span style="color:#ae81ff">0</span>:
+        print(<span style="color:#e6db74">&#34;[!] Error: this EVTX file probably has no events&#34;</span>)
+        sys<span style="color:#f92672">.</span>exit(<span style="color:#ae81ff">1</span>)
+    record <span style="color:#f92672">=</span> chunk[offset:]
+    <span style="color:#66d9ef">assert</span> record[:<span style="color:#ae81ff">4</span>] <span style="color:#f92672">==</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x2a\x2a\x00\x00</span><span style="color:#e6db74">&#34;</span>
+    <span style="color:#66d9ef">return</span> record
+
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">get_record_id</span>(record):
+    i <span style="color:#f92672">=</span> int<span style="color:#f92672">.</span>from_bytes(record[<span style="color:#ae81ff">8</span>:<span style="color:#ae81ff">16</span>], byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    print(<span style="color:#e6db74">&#34;[+] Record id:&#34;</span>, i)
+    <span style="color:#66d9ef">return</span> i
+
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">main</span>():
+    parser <span style="color:#f92672">=</span> argparse<span style="color:#f92672">.</span>ArgumentParser(description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Fix LockBit2.0 EVTX file&#34;</span>)
+
+    parser<span style="color:#f92672">.</span>add_argument(<span style="color:#e6db74">&#34;file&#34;</span>, type<span style="color:#f92672">=</span>str, help<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Path to evtx file&#34;</span>)
+    parser<span style="color:#f92672">.</span>add_argument(<span style="color:#e6db74">&#34;output&#34;</span>, type<span style="color:#f92672">=</span>str, help<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Where to store the resulting file&#34;</span>)
+
+    args <span style="color:#f92672">=</span> parser<span style="color:#f92672">.</span>parse_args()
+
+    data <span style="color:#f92672">=</span> <span style="color:#66d9ef">None</span>
+    <span style="color:#66d9ef">with</span> open(args<span style="color:#f92672">.</span>file, <span style="color:#e6db74">&#34;rb&#34;</span>) <span style="color:#66d9ef">as</span> f:
+        data <span style="color:#f92672">=</span> f<span style="color:#f92672">.</span>read()
+
+    print(<span style="color:#e6db74">&#34;[+] Loaded&#34;</span>, args<span style="color:#f92672">.</span>file)
+
+    chunks <span style="color:#f92672">=</span> get_number_of_chunks(data)
+    print(<span style="color:#e6db74">&#34;[+] Number of chunks:&#34;</span>, chunks)
+
+    signature <span style="color:#f92672">=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;ElfFile</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span>
+    first_chunk_number <span style="color:#f92672">=</span> (<span style="color:#ae81ff">0</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">8</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    last_chunk_number <span style="color:#f92672">=</span> (chunks <span style="color:#f92672">-</span> <span style="color:#ae81ff">1</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">8</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+
+    next_record_id <span style="color:#f92672">=</span> get_record_id(get_last_record(get_chunk(data, chunks <span style="color:#f92672">-</span> <span style="color:#ae81ff">1</span>))) <span style="color:#f92672">+</span> <span style="color:#ae81ff">1</span>
+    next_record_id <span style="color:#f92672">=</span> next_record_id<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">8</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    header_size <span style="color:#f92672">=</span> (<span style="color:#ae81ff">128</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">4</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    minor_version <span style="color:#f92672">=</span> (<span style="color:#ae81ff">1</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">2</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    major_version <span style="color:#f92672">=</span> (<span style="color:#ae81ff">3</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">2</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    header_block_size <span style="color:#f92672">=</span> (<span style="color:#ae81ff">4096</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">2</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    number_of_chunks <span style="color:#f92672">=</span> chunks<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">2</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    unk1 <span style="color:#f92672">=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">76</span>
+    file_flags <span style="color:#f92672">=</span> (<span style="color:#ae81ff">0</span>)<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">4</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    crc32 <span style="color:#f92672">=</span> <span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>
+    unk2 <span style="color:#f92672">=</span> <span style="color:#e6db74">b</span><span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x00</span><span style="color:#e6db74">&#34;</span> <span style="color:#f92672">*</span> <span style="color:#ae81ff">3968</span>
+
+    header <span style="color:#f92672">=</span> (
+        signature
+        <span style="color:#f92672">+</span> first_chunk_number
+        <span style="color:#f92672">+</span> last_chunk_number
+        <span style="color:#f92672">+</span> next_record_id
+        <span style="color:#f92672">+</span> header_size
+        <span style="color:#f92672">+</span> minor_version
+        <span style="color:#f92672">+</span> major_version
+        <span style="color:#f92672">+</span> header_block_size
+        <span style="color:#f92672">+</span> number_of_chunks
+        <span style="color:#f92672">+</span> unk1
+        <span style="color:#f92672">+</span> file_flags
+    )
+    crc32 <span style="color:#f92672">=</span> binascii<span style="color:#f92672">.</span>crc32(header[:<span style="color:#ae81ff">120</span>]) <span style="color:#f92672">&amp;</span> <span style="color:#ae81ff">0xFFFFFFFF</span>
+    header <span style="color:#f92672">+=</span> crc32<span style="color:#f92672">.</span>to_bytes(<span style="color:#ae81ff">4</span>, byteorder<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;little&#34;</span>)
+    header <span style="color:#f92672">+=</span> unk2
+
+    <span style="color:#66d9ef">assert</span> (len(header)) <span style="color:#f92672">==</span> <span style="color:#ae81ff">4096</span>
+
+    <span style="color:#66d9ef">with</span> open(args<span style="color:#f92672">.</span>output, <span style="color:#e6db74">&#34;wb&#34;</span>) <span style="color:#66d9ef">as</span> f:
+        f<span style="color:#f92672">.</span>write(header)
+        f<span style="color:#f92672">.</span>write(data[<span style="color:#ae81ff">4096</span>:])
+
+
+<span style="color:#66d9ef">if</span> __name__ <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;__main__&#34;</span>:
+    main()
+</code></pre></div>
+    </div>
+
+    
+    
+    
+
+</section>
+
+
+    </main>
+    
+    <footer id="footer">
+    
+        <div id="social">
+
+
+    <a class="symbol" href="https://github.com/airbus-cert" rel="me" target="_blank">
+        
+        <svg fill="#bbbbbb" width="28" height="28"  viewBox="0 0 72 72" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    
+    <title>Github</title>
+    <desc>Created with Sketch.</desc>
+    <defs></defs>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Social-Icons---Rounded-Black" transform="translate(-264.000000, -939.000000)">
+            <g id="Github" transform="translate(264.000000, 939.000000)">
+                <path d="M8,72 L64,72 C68.418278,72 72,68.418278 72,64 L72,8 C72,3.581722 68.418278,-8.11624501e-16 64,0 L8,0 C3.581722,8.11624501e-16 -5.41083001e-16,3.581722 0,8 L0,64 C5.41083001e-16,68.418278 3.581722,72 8,72 Z" id="Rounded" fill="#bbbbbb"></path>
+                <path d="M35.9985,13 C22.746,13 12,23.7870921 12,37.096644 C12,47.7406712 18.876,56.7718301 28.4145,59.9584121 C29.6145,60.1797862 30.0525,59.4358488 30.0525,58.7973276 C30.0525,58.2250681 30.0315,56.7100863 30.0195,54.6996482 C23.343,56.1558981 21.9345,51.4693938 21.9345,51.4693938 C20.844,48.6864054 19.2705,47.9454799 19.2705,47.9454799 C17.091,46.4500754 19.4355,46.4801943 19.4355,46.4801943 C21.843,46.6503662 23.1105,48.9634994 23.1105,48.9634994 C25.2525,52.6455377 28.728,51.5823398 30.096,50.9649018 C30.3135,49.4077535 30.9345,48.3460615 31.62,47.7436831 C26.2905,47.1352808 20.688,45.0691228 20.688,35.8361671 C20.688,33.2052792 21.6225,31.0547881 23.1585,29.3696344 C22.911,28.7597262 22.0875,26.3110578 23.3925,22.9934585 C23.3925,22.9934585 25.4085,22.3459017 29.9925,25.4632101 C31.908,24.9285993 33.96,24.6620468 36.0015,24.6515052 C38.04,24.6620468 40.0935,24.9285993 42.0105,25.4632101 C46.5915,22.3459017 48.603,22.9934585 48.603,22.9934585 C49.9125,26.3110578 49.089,28.7597262 48.8415,29.3696344 C50.3805,31.0547881 51.309,33.2052792 51.309,35.8361671 C51.309,45.0917119 45.6975,47.1292571 40.3515,47.7256117 C41.2125,48.4695491 41.9805,49.9393525 41.9805,52.1877301 C41.9805,55.4089489 41.9505,58.0067059 41.9505,58.7973276 C41.9505,59.4418726 42.3825,60.1918338 43.6005,59.9554002 C53.13,56.7627944 60,47.7376593 60,37.096644 C60,23.7870921 49.254,13 35.9985,13" fill="#FFFFFF"></path>
+            </g>
+        </g>
+    </g>
+</svg>
+    </a>
+
+
+</div>
+
+    
+
+    <div class="copyright">
+    
+        
+    
+    </div>
+
+    
+      <div class="powerby">
+        Powered by <a href='http://www.gohugo.io/'>Hugo</a> Theme By <a href='https://github.com/nodejh/hugo-theme-cactus-plus'>nodejh</a>
+      </div>
+    
+</footer>
+
+
+
+  </body>
+</html>

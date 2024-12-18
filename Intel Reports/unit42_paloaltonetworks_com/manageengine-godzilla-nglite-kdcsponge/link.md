@@ -1,1 +1,1 @@
-[Link to the article](https://unit42.paloaltonetworks.com/manageengine-godzilla-nglite-kdcsponge/)
+[Link to the article](https://unit42.paloaltonetworks.com/manageengine-godzilla-nglite-kdcsponge)
