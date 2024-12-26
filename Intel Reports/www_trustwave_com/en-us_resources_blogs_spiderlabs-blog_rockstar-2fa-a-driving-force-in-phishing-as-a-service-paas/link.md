@@ -1,0 +1,1 @@
+[Link to the article](https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/rockstar-2fa-a-driving-force-in-phishing-as-a-service-paas/)

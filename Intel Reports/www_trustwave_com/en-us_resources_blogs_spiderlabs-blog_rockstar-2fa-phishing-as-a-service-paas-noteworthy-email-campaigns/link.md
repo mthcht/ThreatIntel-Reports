@@ -1,0 +1,1 @@
+[Link to the article](https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/rockstar-2fa-phishing-as-a-service-paas-noteworthy-email-campaigns/)

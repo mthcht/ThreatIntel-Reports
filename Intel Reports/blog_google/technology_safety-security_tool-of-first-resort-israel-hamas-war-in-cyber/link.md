@@ -1,0 +1,1 @@
+[Link to the article](https://blog.google/technology/safety-security/tool-of-first-resort-israel-hamas-war-in-cyber/)

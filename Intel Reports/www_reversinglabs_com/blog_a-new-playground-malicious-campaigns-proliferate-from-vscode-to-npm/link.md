@@ -1,0 +1,1 @@
+[Link to the article](https://www.reversinglabs.com/blog/a-new-playground-malicious-campaigns-proliferate-from-vscode-to-npm)

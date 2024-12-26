@@ -1,0 +1,1 @@
+[Link to the article](https://krebsonsecurity.com/2024/11/hacker-in-snowflake-extortions-may-be-a-u-s-soldier/)

