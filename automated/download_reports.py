@@ -44,9 +44,9 @@ except requests.RequestException as e:
     logger.error(f"Failed to retrieve public IP address: {e}")
     public_ip = "___UNKNOWN_IP___"
 
-# Define the automated folder
-automated_directory = os.path.join(os.getcwd())
-output_directory = os.path.join(os.getcwd(), "..", "Intel Reports")
+# Define the directories
+automated_directory = os.path.abspath(os.getcwd())
+output_directory = os.path.abspath(os.path.join(automated_directory, "..", "Intel Reports"))
 os.makedirs(output_directory, exist_ok=True)
 
 # Load or create the tracking file
@@ -64,7 +64,6 @@ for txt_file in os.listdir(automated_directory):
         with open(txt_file_path, "r", encoding="utf-8", errors="ignore") as f:
             sorted_links = [line.strip() for line in f.readlines()]
 
-
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
@@ -79,8 +78,6 @@ for txt_file in os.listdir(automated_directory):
             "Cache-Control": "max-age=0",
         }
 
-        
-
         # Create directories and download content
         for link in sorted_links:
             if link in tracked_links and tracked_links[link].get("status") == "processed":
@@ -93,10 +90,10 @@ for txt_file in os.listdir(automated_directory):
             if not path:
                 path = "root"
 
-            # Create directories with limited character length for the domain and link
-            domain_dir = os.path.join(output_directory, domain[:245])  # Limit domain to 245 characters
+            # Create full directories for domain and path without character limits
+            domain_dir = os.path.join(output_directory, domain)
             os.makedirs(domain_dir, exist_ok=True)
-            link_dir = os.path.join(domain_dir, path[:245])  # Limit path to 245 characters
+            link_dir = os.path.join(domain_dir, path)
             os.makedirs(link_dir, exist_ok=True)
 
             # Save the link to link.md
