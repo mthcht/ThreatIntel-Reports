@@ -171,29 +171,29 @@ offers, and more!
 </div>
 <div>
 <p>A CPU is interrupted from completing its current task only when it receives an interrupt that is above the current IRQL value. The current running thread is responsible for handling these interrupts, which saves the current CPU state and then processes the <em>Interrupt Service Routine</em> (ISR) mapped to the incoming IRQL. Each interrupt routine is mapped inside the <em>Interrupt Description Table</em> (IDT), whose pointer is stored inside the <em>idtr</em> register. From the debugger, the IDT can be inspected through the <strong>!idt</strong> command, which automatically resolves pointers symbols and other details.</p>
-<pre>kd&gt; !idt
-
-Dumping IDT: fffff8015e262000 
-
-00:	fffff8015b81fb00 nt!KiDivideErrorFault
-01:	fffff8015b81fe40 nt!KiDebugTrapOrFault	Stack = 0xFFFFF8015E2A0000
-02:	fffff8015b820340 nt!KiNmiInterrupt	Stack = 0xFFFFF8015E292000
-03:	fffff8015b820800 nt!KiBreakpointTrap
-04:	fffff8015b820b40 nt!KiOverflowTrap
-05:	fffff8015b820e80 nt!KiBoundFault
-06:	fffff8015b8213c0 nt!KiInvalidOpcodeFault
-07:	fffff8015b8218c0 nt!KiNpxNotAvailableFault
-08:	fffff8015b821bc0 nt!KiDoubleFaultAbort	Stack = 0xFFFFF8015E28B000
-09:	fffff8015b821ec0 nt!KiNpxSegmentOverrunAbort
-0a:	fffff8015b8221c0 nt!KiInvalidTssFault
-...
-d1:	fffff8015b817f18 nt!HalpTimerClockInterrupt (KINTERRUPT fffff8015c1119a0)
+<pre>kd&gt; !idt
+
+Dumping IDT: fffff8015e262000 
+
+00:	fffff8015b81fb00 nt!KiDivideErrorFault
+01:	fffff8015b81fe40 nt!KiDebugTrapOrFault	Stack = 0xFFFFF8015E2A0000
+02:	fffff8015b820340 nt!KiNmiInterrupt	Stack = 0xFFFFF8015E292000
+03:	fffff8015b820800 nt!KiBreakpointTrap
+04:	fffff8015b820b40 nt!KiOverflowTrap
+05:	fffff8015b820e80 nt!KiBoundFault
+06:	fffff8015b8213c0 nt!KiInvalidOpcodeFault
+07:	fffff8015b8218c0 nt!KiNpxNotAvailableFault
+08:	fffff8015b821bc0 nt!KiDoubleFaultAbort	Stack = 0xFFFFF8015E28B000
+09:	fffff8015b821ec0 nt!KiNpxSegmentOverrunAbort
+0a:	fffff8015b8221c0 nt!KiInvalidTssFault
+...
+d1:	fffff8015b817f18 nt!HalpTimerClockInterrupt (KINTERRUPT fffff8015c1119a0)
 </pre>
 <p id="irqls_windbg1" class="listing">Retrieving IRQL entries</p>
 <p>Notice that the interrupt at index <em>d1</em> is mapped to the CPU clock. We can verify if its IRQL indeed corresponds to the 13th value from the table above. To do so, we dump the CPU clock&#8217;s <em>KINTERRUPT</em> structure that we found earlier in the IDT.</p>
-<pre>kd&gt; dt _KINTERRUPT fffff8015c1119a0 Irql
-nt!_KINTERRUPT
-   +0x05c Irql : 0xd ''
+<pre>kd&gt; dt _KINTERRUPT fffff8015c1119a0 Irql
+nt!_KINTERRUPT
+   +0x05c Irql : 0xd ''
 </pre>
 <p>The KINTERRUPT is a crucial structure that stores information related to interrupt dispatching.</p>
 <p>Now that we&#8217;ve briefly discussed IRQLs, let&#8217;s explore their role and<br>
@@ -220,49 +220,49 @@ duties as kernel synchronization mechanisms.</p>
 <p>This way, we are able to safely access the shared resource by forcing the remaining CPUs to do nothing and just sit on their metaphorical hands. We&#8217;re now going to dissect the relevant code portion for each of these steps, and finally verify our assumptions with the debugger.</p>
 <h2>Inspecting the Code</h2>
 <p>From a high-level perspective, we already know <em>what</em> to do, so let&#8217;s investigate <em>how</em>. We can start by inspecting the <em>DriverEntry</em> routine.</p>
-<pre>C
-NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObject, IN PUNICODE_STRING regPath)
-{
-	NTSTATUS ntStatus;
-	KIRQL irql;
-	PKDPC dpcPtr;
-	DBG_TRACE("Driver Entry", "Establishing other DriverObject function pointers");
-	(*pDriverObject).DriverUnload = Unload;
-
-	DBG_TRACE("Driver Entry", "Raising IRQL");
-	irql = RaiseIRQL();
-
-	DBG_TRACE("Driver Entry", "Acquiring Lock");
-	dpcPtr = AcquireLock();
-
-	AccessResource();
-	
-	DBG_TRACE("Driver Entry", "Releasing Lock");
-	ReleaseLock(dpcPtr);
-
-	DBG_TRACE("Driver Entry", "Lowering IRQL");
-	LowerIRQL(irql);
-	return (STATUS_SUCCESS);
-
-}
+<pre>C
+NTSTATUS DriverEntry(IN PDRIVER_OBJECT pDriverObject, IN PUNICODE_STRING regPath)
+{
+	NTSTATUS ntStatus;
+	KIRQL irql;
+	PKDPC dpcPtr;
+	DBG_TRACE("Driver Entry", "Establishing other DriverObject function pointers");
+	(*pDriverObject).DriverUnload = Unload;
+
+	DBG_TRACE("Driver Entry", "Raising IRQL");
+	irql = RaiseIRQL();
+
+	DBG_TRACE("Driver Entry", "Acquiring Lock");
+	dpcPtr = AcquireLock();
+
+	AccessResource();
+	
+	DBG_TRACE("Driver Entry", "Releasing Lock");
+	ReleaseLock(dpcPtr);
+
+	DBG_TRACE("Driver Entry", "Lowering IRQL");
+	LowerIRQL(irql);
+	return (STATUS_SUCCESS);
+
+}
 </pre>
 <p id="irqls_driver1" class="listing">Inspecting DriverEntry code</p>
 <p>In the first step of our routine, we increase the current process IRQL through the <em>RaiseIRQL</em> function.</p>
-<pre>C
-KIRQL RaiseIRQL()
-{
-	KIRQL curr;
-	KIRQL prev;
-	/* Get the current interrupt irql level */
-	curr = KeGetCurrentIrql();
-	prev = curr;
-
-	if (curr &lt; DISPATCH_LEVEL)
-	{
-		KeRaiseIrql(DISPATCH_LEVEL, &amp;prev);
-	}
-	return (prev);
-}
+<pre>C
+KIRQL RaiseIRQL()
+{
+	KIRQL curr;
+	KIRQL prev;
+	/* Get the current interrupt irql level */
+	curr = KeGetCurrentIrql();
+	prev = curr;
+
+	if (curr &lt; DISPATCH_LEVEL)
+	{
+		KeRaiseIrql(DISPATCH_LEVEL, &amp;prev);
+	}
+	return (prev);
+}
 </pre>
 <p>We first retrieve the current CPU&#8217;s IRQL level through the <em>KeGetCurrentIrql</em> function and, interestingly enough, this <em>ntoskrnl</em> routine comprises only two instructions.</p>
 <p class="text-center"><img decoding="async" id="ida-01" src="https://www.offsec.com/app/uploads/2022/03/ida1.png" alt="Inspecting KeGetCurrentIrql in IDA Pro"></p>
@@ -275,43 +275,43 @@ KIRQL RaiseIRQL()
 <p class="h3" style="font-weight:400;font-size:1.5rem;text-transform:initial">As there is no explicit check in the function, if we were to pass a value higher than 0xf to <em>KeRaiseIrql</em>, we could incur a SYSTEM_THREAD_EXCEPTION_NOT_HANDLED bug-check due to a <em>privileged instruction</em> exception.</p>
 </blockquote>
 <p>Having raised the current CPU&#8217;s IRQL, it is now time to perform the same operation for the other remaining CPUs. This is accomplished with the help of the <em>AcquireLock</em> function and through the use of DPCs. Let&#8217;s analyze this routine by decoupling it by functionality.</p>
-<pre>C
-PKDPC AcquireLock()
-{
-...
-	InterlockedAnd(&amp;LockAcquired, 0);
-	InterlockedAnd(&amp;nCPUsLocked, 0);
-
-	DBG_PRINT2("[AcquiredLock]: nCPUs=%un", KeNumberProcessors);
-
-	dpcArray = (PKDPC)ExAllocatePoolWithTag(NonPagedPool,KeNumberProcessors * sizeof(KDPC), 0x0F11);
-	if (dpcArray == NULL) { return(NULL); }
-
-	cpuID = KeGetCurrentProcessorNumber();
-	
-	for (i = 0; i &lt; KeNumberProcessors; i++)
-	{
-		PKDPC dpcPtr = &amp;(dpcArray[i]);
-	
-		if (i != cpuID)
-		{
-			KeInitializeDpc(dpcPtr, lockRoutine, NULL);
-			KeSetTargetProcessorDpc(dpcPtr, i);
-			KeInsertQueueDpc(dpcPtr, NULL, NULL);
-		}
-	}
-
-	nOtherCPUs = KeNumberProcessors - 1;
-	InterlockedCompareExchange64(&amp;nCPUsLocked, nOtherCPUs, nOtherCPUs);
-
-	while (nCPUsLocked != nOtherCPUs)
-	{
-		NOP_FUNC();
-		InterlockedCompareExchange64(&amp;nCPUsLocked, nOtherCPUs, nOtherCPUs);
-	}
-
-	return (dpcArray);
-}
+<pre>C
+PKDPC AcquireLock()
+{
+...
+	InterlockedAnd(&amp;LockAcquired, 0);
+	InterlockedAnd(&amp;nCPUsLocked, 0);
+
+	DBG_PRINT2("[AcquiredLock]: nCPUs=%un", KeNumberProcessors);
+
+	dpcArray = (PKDPC)ExAllocatePoolWithTag(NonPagedPool,KeNumberProcessors * sizeof(KDPC), 0x0F11);
+	if (dpcArray == NULL) { return(NULL); }
+
+	cpuID = KeGetCurrentProcessorNumber();
+	
+	for (i = 0; i &lt; KeNumberProcessors; i++)
+	{
+		PKDPC dpcPtr = &amp;(dpcArray[i]);
+	
+		if (i != cpuID)
+		{
+			KeInitializeDpc(dpcPtr, lockRoutine, NULL);
+			KeSetTargetProcessorDpc(dpcPtr, i);
+			KeInsertQueueDpc(dpcPtr, NULL, NULL);
+		}
+	}
+
+	nOtherCPUs = KeNumberProcessors - 1;
+	InterlockedCompareExchange64(&amp;nCPUsLocked, nOtherCPUs, nOtherCPUs);
+
+	while (nCPUsLocked != nOtherCPUs)
+	{
+		NOP_FUNC();
+		InterlockedCompareExchange64(&amp;nCPUsLocked, nOtherCPUs, nOtherCPUs);
+	}
+
+	return (dpcArray);
+}
 </pre>
 <p id="irqls_driver3" class="listing">The AcquireLock function</p>
 <p>Before dealing with anything related to DPCs, we first need some sort of synchronization mechanism that tells us that all the CPU are running at DISPATCH_LEVEL along with a method to signal the other CPUs when to exit the infinite NOP loop.</p>
@@ -324,22 +324,22 @@ PKDPC AcquireLock()
 <p>As a next step, we can now take care of DPCs creation. We first need to allocate a kernel pool via <em>ExAllocatePoolWithTag</em> of the size of a KDPC multiplied by the number of the running CPUs.</p>
 <p>We then run a for-loop where we initialize on every other CPU the DPC via the <em>KeInitializeDpc</em> function, providing the respective KDPC and the <em>lockRoutine</em> as a function to be executed by the scheduled DPC. Next, we tell which CPU has to run the DPC with a call to <em>KeSetTargetProcessorDpc</em> and we finally enqueue it with <em>KeInsertQueueDpc</em>.</p>
 <p>Once the DPC is running on the given CPU, it will execute the <em>lockRoutine</em> function that we have passed as an argument during DPC initialization, which has the following structure.</p>
-<pre>C
-void lockRoutine
-...
-{
-	// Atomically increase the value of nCPUsLocked, which means that another CPU enters the nop cycle */
-	InterlockedIncrement64(&amp;nCPUsLocked);
-
-	// spin NOP until LockAcquired flag is set ( i.e., by ReleaseLockO))
-	while (InterlockedCompareExchange64(&amp;LockAcquired, 1, 1) == 0)
-	{
-		NOP_FUNC();
-	}
-	// Exit the NOP loop 
-	InterlockedDecrement64(&amp;nCPUsLocked);
-	return;
-}
+<pre>C
+void lockRoutine
+...
+{
+	// Atomically increase the value of nCPUsLocked, which means that another CPU enters the nop cycle */
+	InterlockedIncrement64(&amp;nCPUsLocked);
+
+	// spin NOP until LockAcquired flag is set ( i.e., by ReleaseLockO))
+	while (InterlockedCompareExchange64(&amp;LockAcquired, 1, 1) == 0)
+	{
+		NOP_FUNC();
+	}
+	// Exit the NOP loop 
+	InterlockedDecrement64(&amp;nCPUsLocked);
+	return;
+}
 </pre>
 <p id="irqls_driver4" class="listing">The lockRoutine function</p>
 <p>First, <em>InterlockedIncrement64</em> is called, so that the <em>nCPUsLocked</em> variable that was previously set to zero is now incremented to one. Since this routine will be executed by every other CPU, the variable will be incremented by each one and ultimately reach the &#8220;total CPU-1&#8221; value, which will force the while-loop in the <em>AcquireLock</em> function to exit.</p>
@@ -347,143 +347,143 @@ void lockRoutine
 <p>The purpose of this routine is to run on each other CPU that has been already raised at DISPATCH_LEVEL so that will prevent the execution of any thread that might undermine our operations.</p>
 <p>Having all the other CPUs but ours stuck on an infinite loop allows us to safely access the shared resource with the current IRQL value of DISPATCH_LEVEL.</p>
 <p>Normally, the shared resource that a rootkit wants to modify would be some kind of kernel table or structure like the EPROCESS <em>ActiveProcessLinks</em>. For the sake of this blog post, we are just going to demonstrate it with the following routine.</p>
-<pre>C
-void AccessResource()
-{
-	int i = 0;
-    int max = 1 * 1000000000;
-	DBG_TRACE("Accessing Shared Resource");
-	for (i = 0; i &lt; max ; i++)
-	{
-		SHARED_FUNC();
-	}
-	return;
-}
+<pre>C
+void AccessResource()
+{
+	int i = 0;
+    int max = 1 * 1000000000;
+	DBG_TRACE("Accessing Shared Resource");
+	for (i = 0; i &lt; max ; i++)
+	{
+		SHARED_FUNC();
+	}
+	return;
+}
 </pre>
 <p id="irqls_driver5" class="listing">The AccessResource function</p>
 <p><em>AccessResource</em> will in turn execute the following purposely pointless <em>SHARED_FUNC</em> routine one million times.</p>
-<pre>SHARED_FUNC PROC
-    xchg rax, rbx
-    xchg rbx, rax
-    ret
-SHARED_FUNC ENDP
-END
+<pre>SHARED_FUNC PROC
+    xchg rax, rbx
+    xchg rbx, rax
+    ret
+SHARED_FUNC ENDP
+END
 </pre>
 <p id="irqls_driver6" class="listing">Simulating access to the shared resource</p>
 <p>Running the above instructions in this very large for-loop will effectively render the system unusable for a few seconds thus, as a moral of the story, the rootkit should be swift when accessing a shared resource in the kernel.</p>
 <h2>Debugging the Rootkit</h2>
 <p>In the debugger, we can now verify what we took for granted in the above code listings. If we place a breakpoint at the <em>AcquireLock</em> routine, we can inspect the KDPC as it gets initialized by <em>KeInitializeDpc</em>.</p>
-<pre>Breakpoint 1 hit
-IRQL!AcquireLock:
-fffff806`1d6a1080 4883ec58        sub     rsp,58h
-...
-2: kd&gt; pct
-IRQL!AcquireLock+0x127:
-fffff806`1d6a11a7 ff156b0e0000    call    qword ptr [IRQL!_imp_KeInitializeDpc (fffff806`1d6a2018)]
-2: kd&gt; u fffff8061d6a1470
+<pre>Breakpoint 1 hit
+IRQL!AcquireLock:
+fffff806`1d6a1080 4883ec58        sub     rsp,58h
+...
+2: kd&gt; pct
+IRQL!AcquireLock+0x127:
+fffff806`1d6a11a7 ff156b0e0000    call    qword ptr [IRQL!_imp_KeInitializeDpc (fffff806`1d6a2018)]
+2: kd&gt; u fffff8061d6a1470
 </pre>
 <p>The first parameter passed to the function is the empty KDPC structure.</p>
-<pre>1: kd&gt; dt _KDPC ffffb289db9035b0
-nt!_KDPC
-   +0x000 TargetInfoAsUlong : 0
-   +0x000 Type             : 0 ''
-   +0x001 Importance       : 0 ''
-   +0x002 Number           : 0
-   +0x008 DpcListEntry     : _SINGLE_LIST_ENTRY
-   +0x010 ProcessorHistory : 0
-   +0x018 DeferredRoutine  : (null) 
-   +0x020 DeferredContext  : (null) 
-   +0x028 SystemArgument1  : (null) 
-   +0x030 SystemArgument2  : (null) 
-   +0x038 DpcData          : (null) 
+<pre>1: kd&gt; dt _KDPC ffffb289db9035b0
+nt!_KDPC
+   +0x000 TargetInfoAsUlong : 0
+   +0x000 Type             : 0 ''
+   +0x001 Importance       : 0 ''
+   +0x002 Number           : 0
+   +0x008 DpcListEntry     : _SINGLE_LIST_ENTRY
+   +0x010 ProcessorHistory : 0
+   +0x018 DeferredRoutine  : (null) 
+   +0x020 DeferredContext  : (null) 
+   +0x028 SystemArgument1  : (null) 
+   +0x030 SystemArgument2  : (null) 
+   +0x038 DpcData          : (null) 
 </pre>
 <p>The structure gets populated once the function returns,</p>
-<pre>1: kd&gt; t
-nt!KeInitializeDpc:
-fffff806`160e3ac0 33c0            xor     eax,eax
-
-1: kd&gt; pt
-nt!KeInitializeDpc+0x18:
-fffff806`160e3ad8 c3              ret
-
-1: kd&gt; dt _KDPC ffffb289db9035b0
-nt!_KDPC
-   +0x000 TargetInfoAsUlong : 0x113
-   +0x000 Type             : 0x13 ''
-   +0x001 Importance       : 0x1 ''
-   +0x002 Number           : 0
-   +0x008 DpcListEntry     : _SINGLE_LIST_ENTRY
-   +0x010 ProcessorHistory : 0
-   +0x018 DeferredRoutine  : 0xfffff806`1d6b1470     void  IRQL!lockRoutine+0
-   +0x020 DeferredContext  : (null) 
-   +0x028 SystemArgument1  : (null) 
-   +0x030 SystemArgument2  : (null) 
-   +0x038 DpcData          : (null) 
+<pre>1: kd&gt; t
+nt!KeInitializeDpc:
+fffff806`160e3ac0 33c0            xor     eax,eax
+
+1: kd&gt; pt
+nt!KeInitializeDpc+0x18:
+fffff806`160e3ad8 c3              ret
+
+1: kd&gt; dt _KDPC ffffb289db9035b0
+nt!_KDPC
+   +0x000 TargetInfoAsUlong : 0x113
+   +0x000 Type             : 0x13 ''
+   +0x001 Importance       : 0x1 ''
+   +0x002 Number           : 0
+   +0x008 DpcListEntry     : _SINGLE_LIST_ENTRY
+   +0x010 ProcessorHistory : 0
+   +0x018 DeferredRoutine  : 0xfffff806`1d6b1470     void  IRQL!lockRoutine+0
+   +0x020 DeferredContext  : (null) 
+   +0x028 SystemArgument1  : (null) 
+   +0x030 SystemArgument2  : (null) 
+   +0x038 DpcData          : (null) 
 </pre>
 <p>The <em>DeferredRoutine</em> is our defined DPC routine, while the <em>Number</em> value refers to the target CPU where it is going to be executed, which gets populated once <em>KeSetTargetProcessorDpc</em> returns.</p>
-<pre>1: kd&gt; dt _KDPC ffffb289db9038b0
-nt!_KDPC
-   +0x000 TargetInfoAsUlong : 0x5030113
-   +0x000 Type             : 0x13 ''
-   +0x001 Importance       : 0x1 ''
-   +0x002 Number           : 0x503
-   +0x008 DpcListEntry     : _SINGLE_LIST_ENTRY
-   +0x010 ProcessorHistory : 0
-   +0x018 DeferredRoutine  : 0xfffff806`1d6d1470     void  IRQL!lockRoutine+0
-   +0x020 DeferredContext  : (null) 
-   +0x028 SystemArgument1  : (null) 
-   +0x030 SystemArgument2  : (null) 
-   +0x038 DpcData          : (null)
+<pre>1: kd&gt; dt _KDPC ffffb289db9038b0
+nt!_KDPC
+   +0x000 TargetInfoAsUlong : 0x5030113
+   +0x000 Type             : 0x13 ''
+   +0x001 Importance       : 0x1 ''
+   +0x002 Number           : 0x503
+   +0x008 DpcListEntry     : _SINGLE_LIST_ENTRY
+   +0x010 ProcessorHistory : 0
+   +0x018 DeferredRoutine  : 0xfffff806`1d6d1470     void  IRQL!lockRoutine+0
+   +0x020 DeferredContext  : (null) 
+   +0x028 SystemArgument1  : (null) 
+   +0x030 SystemArgument2  : (null) 
+   +0x038 DpcData          : (null)
 </pre>
 <p>The resulting value is the result of the constant 0x500 plus the CPU index.</p>
 <blockquote style="margin:50px auto 60px;max-width:700px">
 <p class="h3" style="font-weight:400;font-size:1.5rem;text-transform:initial">If the 0x500 value is added to the CPU index, <em>KeInsertQueueDpc</em> can infer that the user called <em>KeSetTargetProcessorDpc</em> to set the target CPU</p>
 </blockquote>
 <p>We can also verify the enqueued DPCs through the <strong>!dpcs</strong> command.</p>
-<pre>2: kd&gt; !dpcs
-CPU Type      KDPC       Function
- 0: Normal  : 0xffffb289db903b50 0xfffff8061d701470 IRQL!lockRoutine
-
- 1: Normal  : 0xffffb289db903b90 0xfffff8061d701470 IRQL!lockRoutine
+<pre>2: kd&gt; !dpcs
+CPU Type      KDPC       Function
+ 0: Normal  : 0xffffb289db903b50 0xfffff8061d701470 IRQL!lockRoutine
+
+ 1: Normal  : 0xffffb289db903b90 0xfffff8061d701470 IRQL!lockRoutine
 </pre>
 <blockquote style="margin:50px auto 60px;max-width:700px">
 <p class="h3" style="font-weight:400;font-size:1.5rem;text-transform:initial">Note that since DPCs are processed quite fast, it&#8217;s not always trivial to catch them enqueued on all the CPUs.</p>
 </blockquote>
 <p>Nice, then we can now enable a breakpoint on <em>IRQL!NOP_FUNC</em> and continue execution.</p>
-<pre>2: kd&gt; g
-Breakpoint 7 hit
-IRQL!NOP_FUNC:
-fffff806`1d691000 90              nop
-
-1: kd&gt; g
-Breakpoint 7 hit
-IRQL!NOP_FUNC:
-fffff806`1d691000 90              nop
-
-3: kd&gt; t
-Breakpoint 7 hit
-IRQL!NOP_FUNC:
-fffff806`1d691000 90              nop
+<pre>2: kd&gt; g
+Breakpoint 7 hit
+IRQL!NOP_FUNC:
+fffff806`1d691000 90              nop
+
+1: kd&gt; g
+Breakpoint 7 hit
+IRQL!NOP_FUNC:
+fffff806`1d691000 90              nop
+
+3: kd&gt; t
+Breakpoint 7 hit
+IRQL!NOP_FUNC:
+fffff806`1d691000 90              nop
 </pre>
 <p>And we have proven that the NOP function is running on every other CPU, as intended.</p>
 <p>As a final check, we can now verify that all the other CPUs are executing the NOP routine while we are accessing the share resource. Let&#8217;s break on <em>IRQL!AccessResource</em> and verify the IRQL level for all the CPUs.</p>
-<pre>Breakpoint 6 hit
-IRQL!AccessResource:
-fffff806`1d691020 4883ec38        sub     rsp,38h
-0: kd&gt; t
-IRQL!AccessResource+0x4:
-fffff806`1d691024 c744242000000000 mov     dword ptr [rsp+20h],0
-
-0: kd&gt; !irql 0
-Debugger saved IRQL for processor 0x0 -- 2 (DISPATCH_LEVEL)
-
-0: kd&gt; !irql 1
-Debugger saved IRQL for processor 0x1 -- 2 (DISPATCH_LEVEL)
-
-0: kd&gt; !irql 2
-Debugger saved IRQL for processor 0x2 -- 2 (DISPATCH_LEVEL)
-
-0: kd&gt; !irql 3
+<pre>Breakpoint 6 hit
+IRQL!AccessResource:
+fffff806`1d691020 4883ec38        sub     rsp,38h
+0: kd&gt; t
+IRQL!AccessResource+0x4:
+fffff806`1d691024 c744242000000000 mov     dword ptr [rsp+20h],0
+
+0: kd&gt; !irql 0
+Debugger saved IRQL for processor 0x0 -- 2 (DISPATCH_LEVEL)
+
+0: kd&gt; !irql 1
+Debugger saved IRQL for processor 0x1 -- 2 (DISPATCH_LEVEL)
+
+0: kd&gt; !irql 2
+Debugger saved IRQL for processor 0x2 -- 2 (DISPATCH_LEVEL)
+
+0: kd&gt; !irql 3
 Debugger saved IRQL for processor 0x3 -- 2 (DISPATCH_LEVEL)</pre>
 <p>Interested in delving into vulnerability research, exploit development, reverse engineering, and operating system internals?Â  Explore the following Learning Paths and courses: <a href="https://www.offsec.com/learning/paths/exploit-development-essentials/" target="_blank" rel="noopener">Exploit Development Essentials</a>, <a href="https://www.offsec.com/courses/exp-301/" target="_blank" rel="noopener">EXP-301</a>, <a href="https://www.offsec.com/courses/exp-312/" target="_blank" rel="noopener">EXP-312</a>, and <a href="https://www.offsec.com/courses/exp-401/" target="_blank" rel="noopener">EXP-401</a>.</p>
 </div>
