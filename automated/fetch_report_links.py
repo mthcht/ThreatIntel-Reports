@@ -77,7 +77,8 @@ rss_urls = [
     "https://news.drweb.com/rss/get/?c=9",
     "https://www.malwaretech.com/feed",
     "https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/rss.xml",
-    "https://krebsonsecurity.com/feed/"
+    "https://krebsonsecurity.com/feed/",
+    "https://www.gov.il/he/api/PublicationApi/rss/4bcc13f5-fed6-4b8c-b8ee-7bf4a6bc81c8"
     #"https://www.cert.ssi.gouv.fr/feed/"
 
 ]
@@ -93,7 +94,7 @@ non_rss_urls = [
     "https://threatlabz.zscaler.com/blogs",
     "https://www.deepinstinct.com/blog",
     "https://www-eclecticiq-com.sandbox.hs-sites.com/blog?type=intelligence-research#overview"
-    #https://hunt.io/blog
+    # https://hunt.io/blog
     #"https://claroty.com/team82/research/"
     #"https://www.nccgroup.com/us/research-blog/?resource=18345&category=18146#hub"
     #"https://www.security.com/threat-intelligence"
