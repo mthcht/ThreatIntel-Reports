@@ -23,6 +23,8 @@ rss_urls = [
     "https://cert.gov.ua/api/articles/rss",
     "https://www.nist.gov/blogs/cybersecurity-insights/rss.xml",
     "https://threatpost.com/feed/",
+    "https://dmpdump.github.io/feed.xml",
+    "https://threat.boutique/feed/rss",
     "https://www.bitdefender.com/nuxt/api/en-us/rss/labs/",
     "https://research.checkpoint.com/feed/",
     "https://feeds.feedburner.com/feedburner/Talos",
