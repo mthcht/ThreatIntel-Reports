@@ -1,0 +1,1 @@
+[Link to the article](https://cloud.google.com/blog/topics/threat-intelligence/windows-rogue-remote-desktop-protocol/)
