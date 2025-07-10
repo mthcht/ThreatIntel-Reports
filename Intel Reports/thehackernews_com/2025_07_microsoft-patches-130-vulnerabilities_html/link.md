@@ -1,0 +1,1 @@
+[Link to the article](https://thehackernews.com/2025/07/microsoft-patches-130-vulnerabilities.html)
