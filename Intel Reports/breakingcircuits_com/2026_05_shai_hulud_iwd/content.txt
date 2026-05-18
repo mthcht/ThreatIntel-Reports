@@ -1,0 +1,198 @@
+Source: https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report
+Title: Shai-Hulud / Carnage APT — Incident Worm Disclosure (IWD)
+Author: breakingcircuit / Breaking Circuits LLC (breakingcircuits.com)
+Date: 2026-05-13
+Threat Actor: TeamPCP / Carnage APT
+CVE: CVE-2026-45321 (TanStack), additional pending
+TLP: WHITE
+
+── SUMMARY ──────────────────────────────────────────────────
+
+Shai-Hulud is a self-propagating supply chain worm targeting developer
+workstations and CI/CD runners. Operated by TeamPCP (Carnage APT), the
+worm steals NPM tokens, GitHub PATs, AWS credentials across 17 regions,
+Kubernetes service account tokens, and cloud provider secrets. Stolen
+data is exfiltrated via dynamically created attacker-controlled GitHub
+repositories. The worm poisons the NPM supply chain by publishing
+malicious tarballs with forged Sigstore provenance using stolen tokens.
+
+A destructive persistence mechanism (deadman switch) wipes the victim
+host if a stolen GitHub token is revoked during incident response.
+
+── INITIAL DISCOVERY ────────────────────────────────────────
+
+Worm sample received 2026-05-13 04:20 UTC. Persistence mechanism
+identified at 04:45 UTC. Full campaign reversal complete 10:35 UTC.
+Total active analysis window: 6 hours 15 minutes.
+
+The campaign predates this disclosure — Shai-Hulud Wave 1 was first
+identified September 2025. Wave 2 emerged November 2025. The May 2026
+wave (Mini Shai-Hulud) expanded to 172 npm and PyPI packages including
+TanStack, Mistral AI, UiPath, OpenSearch, and Guardrails AI ecosystems.
+
+── PROPAGATION METHOD ───────────────────────────────────────
+
+Three dropper variants (bash, Python, Node/config.mjs) download and
+install the Bun JavaScript runtime from oven-sh/bun or the attacker
+C2 domain git-tanstack.com. Entry points: ai_init.js, router_runtime.js,
+setup.mjs, config.mjs.
+
+The worm installs via npm preinstall hooks in poisoned packages. In CI/CD
+environments, the May 2026 wave used a pull_request_target workflow
+misconfiguration to poison GitHub Actions cache, then extracted OIDC
+tokens directly from runner process memory (/proc/<pid>/mem) to publish
+malicious package versions without stealing npm credentials directly.
+
+Sigstore provenance bundles are forged (application/vnd.dev.sigstore.bundle.v0.3+json)
+to make malicious releases appear to have valid SLSA provenance.
+
+Stolen data is committed to attacker-created GitHub repositories using
+the beacon string IfYouRevokeThisTokenItWillWipeTheComputerOfTheOwner
+embedded in file contents, enabling the attacker to locate their own
+exfiltration repos via GitHub code search.
+
+── PERSISTENCE MECHANISM ────────────────────────────────────
+
+The worm installs a background daemon named gh-token-monitor on both
+macOS and Linux.
+
+Files dropped:
+  ~/.local/bin/gh-token-monitor.sh
+  ~/.config/gh-token-monitor/token    (stolen GitHub PAT)
+  ~/.config/gh-token-monitor/handler  (destructive payload)
+
+macOS persistence:
+  ~/Library/LaunchAgents/com.user.gh-token-monitor.plist
+
+Linux persistence:
+  ~/.config/systemd/user/gh-token-monitor.service
+
+VSCode persistence:
+  .vscode/tasks.json with runOn: folderOpen triggers setup.mjs
+
+Claude Code persistence (distinct finding):
+  .claude/settings.json SessionStart hook executes setup.mjs
+  on every AI agent session start. This is separate from
+  ~/.claude.json token scraping documented in other reports.
+
+── DEADMAN SWITCH ───────────────────────────────────────────
+
+gh-token-monitor polls https://api.github.com/user every 60 seconds
+using the stolen GitHub PAT. If the token is revoked (HTTP 4xx response),
+the daemon executes the handler payload: rm -rf ~/
+
+This destroys the victim home directory if standard incident response
+(immediate token rotation) is performed before the persistence mechanism
+is defused. This is a deliberate counter-IR measure, not a bug.
+
+Trigger conditions: 401 Unauthorized, 403 Forbidden, 404 Not Found
+
+CRITICAL REMEDIATION ORDER: Defuse persistence before revoking tokens.
+Vaccine script: https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/shaihuld-remediate.sh
+
+── AFFECTED ECOSYSTEM ───────────────────────────────────────
+
+npm packages (May 2026 wave): 373 malicious versions / 169 package names
+PyPI packages: included in May 2026 wave
+Registries affected: npm, PyPI
+CI/CD systems: GitHub Actions (OIDC token extraction from runner memory)
+Cumulative download exposure: 518+ million
+Attacker exfil repos created: 400+
+
+Affected namespaces include:
+@tanstack (42 packages, 84 versions — CVE-2026-45321, CVSS 9.6)
+@uipath (66 packages)
+@mistralai
+@opensearch-project
+@guardrails-ai
+@squawk
+@tallyui
+
+── DETECTION ARTIFACTS ──────────────────────────────────────
+
+YARA rules (16 rules):
+https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/teampcp_shai_hulud.yar
+
+Rules cover: gh-token-monitor script, deadman switch installer,
+npm malicious UA, Bun dropper (bash/python/node variants),
+Runner.Worker memory dump utility, GitHub Actions secrets exfil workflow,
+VSCode tasks persistence, Claude Code SessionStart hook,
+GitHub exfil results naming, Sigstore provenance forgery,
+C2 domain reference, OpenSearch targeting, lock file, beacon string.
+
+SIEM detection patterns:
+- File creation: ~/.local/bin/gh-token-monitor.sh
+- File creation: ~/Library/LaunchAgents/com.user.gh-token-monitor.plist
+- File creation: ~/.config/systemd/user/gh-token-monitor.service
+- Network: repeated polling of api.github.com/user at ~60s intervals from bash
+- Network: npm publish to registry.npmjs.org with UA npm/11.13.1 node/v24.10.0
+- GitHub audit: token creating repos at high frequency with randomized names
+- GitHub audit: commits containing IfYouRevokeThisTokenItWillWipeTheComputerOfTheOwner
+- AWS CloudTrail: secretsmanager.ListSecrets rapid cross-region execution
+
+Beacon string GitHub search:
+https://api.github.com/search/code?q=IfYouRevokeThisTokenItWillWipeTheComputerOfTheOwner
+
+── MITIGATION / VACCINE ─────────────────────────────────────
+
+Vaccine script (detect, defuse, immunize, optional safe-revocation signal):
+https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/shaihuld-remediate.sh
+
+Remediation sequence:
+1. Run vaccine script BEFORE revoking any tokens
+2. Confirm THREAT NEUTRALIZED or No active threat found
+3. Revoke GitHub tokens: https://github.com/settings/tokens
+4. Rotate npm tokens, AWS credentials (all 17 regions), CI/CD secrets
+5. Set npm config set ignore-scripts true globally
+6. Audit GitHub Actions workflows for pull_request_target triggers
+7. Rotate Kubernetes service account tokens if exposed
+
+── THREAT ACTOR ─────────────────────────────────────────────
+
+Group designation: TeamPCP / TeamPCP_OSS / Carnage APT
+Attribution confidence: Medium-High
+
+Operational signatures:
+- Commit author: TeamPCP_OSS
+- Commit timestamp: 2099-01-01T01:01:01Z (forensic timeline obfuscation)
+- Commit message: "Shai-Hulud: A Gift From TeamPCP"
+- OPSEC tool: git-identity-manager (rotates commit identities across forks)
+- Anti-AI marker: Anthropic Magic String embedded in attacker profiles
+  prevents Claude Code from analyzing repository contents
+- Naming theme: Dune universe (Shai-Hulud, sietch, sardaukar, atreides)
+- Cover theme: cat-themed repositories on affiliated accounts
+
+Affiliated accounts (assessed):
+  agwagwagwa — false-flag FreeBSD/OpenBSD PRs, cat theme, Anthropic Magic String
+  headdirt
+  tmechen
+
+Host accounts (confirmed):
+  g00dfe11ow/Shai-Hulud-Open-Source (primary, 80 stars / 68 forks at disclosure)
+  PedroTortoriello/Shai-Hulud-Open-Source (secondary)
+
+Prior confirmed TeamPCP operations:
+  2026-03-23  Checkmarx KICS GitHub Action compromise
+  2026-03-23  Trivy GitHub Action compromise
+  2026-03-24  LiteLLM PyPI packages compromise
+  2026-03    Bitwarden, Lightning, Intercom, ast-github-action compromises
+  2025-11/12  Shai-Hulud Wave 2 (updated wiper functionality)
+  2025-09     Shai-Hulud Wave 1 (initial npm campaign)
+
+── FORK NETWORK ─────────────────────────────────────────────
+
+63 forked accounts documented with commit-level attribution.
+All forks share identical commit: author=TeamPCP_OSS, timestamp=2099-01-01T01:01:01Z
+68 total forks on g00dfe11ow repo at disclosure; only 2 visible in active fork list.
+Remaining forks deleted or set to private post-clone (operational security).
+Full fork forensics: https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/forks.txt
+
+── REFERENCES ───────────────────────────────────────────────
+
+Disclosure repo:  https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report
+IOCs:             https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/iocs.md
+YARA:             https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/teampcp_shai_hulud.yar
+Vaccine:          https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/shaihuld-remediate.sh
+Fork forensics:   https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/forks.txt
+Infected repos:   https://github.com/breakingcircuits1337/Shai-Hulud-Carnage-APT-Report/blob/main/infected-repos.txt
+Contact:          security@breakingcircuits.com
